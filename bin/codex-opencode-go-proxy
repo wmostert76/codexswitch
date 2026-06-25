@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
 import json
 import os
-import re
-import shutil
-import subprocess
+import sys
 import time
 import tomllib
 import urllib.error
@@ -12,16 +10,30 @@ from urllib.parse import urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codexswitch_common import (
+    user_home,
+    parse_opencode_catalog,
+    opencode_catalog_from_binary,
+    opencode_catalog_from_cache,
+)
 
-HOME = Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+
+HOME = user_home()
 AUTH_PATH = HOME / ".local/share/opencode/auth.json"
 CONFIG_PATH = HOME / ".config/opencode/opencode.json"
 MODELS_CACHE_PATH = HOME / ".cache/opencode/models.json"
 CODEX_CONFIG_PATH = HOME / ".codex/config.toml"
-OPENCODE_BIN_FALLBACK = HOME / ".local/share/npm-global/bin/opencode"
 UPSTREAM = "https://opencode.ai/zen/go/v1"
 HOST = os.environ.get("CODEX_OPENCODE_PROXY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CODEX_OPENCODE_PROXY_PORT", "14555"))
+# Optional bearer token for proxy authentication. When set, clients must
+# send "Authorization: Bearer <token>". Unset = no auth (loopback only).
+PROXY_TOKEN = os.environ.get("CODEX_OPENCODE_PROXY_TOKEN", "")
+# Tool names that were "custom" type in the Responses API request.
+# Their arguments must be unwrapped from {"input": "..."} back to the
+# raw string when converting upstream chat tool_calls back to Responses format.
+_CUSTOM_TOOLS: set[str] = set()
 
 
 def opencode_key() -> str:
@@ -33,45 +45,10 @@ def opencode_key() -> str:
 
 
 def opencode_catalog() -> dict[str, dict]:
-    binary = shutil.which("opencode")
-    if not binary and OPENCODE_BIN_FALLBACK.exists():
-        binary = str(OPENCODE_BIN_FALLBACK)
-    if binary:
-        try:
-            proc = subprocess.run(
-                [binary, "models", "opencode-go", "--verbose"],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=15,
-                check=False,
-            )
-            catalog = {}
-            decoder = json.JSONDecoder()
-            pattern = re.compile(r"^opencode-go/([^\n]+)\n", re.MULTILINE)
-            for match in pattern.finditer(proc.stdout):
-                try:
-                    metadata, _ = decoder.raw_decode(proc.stdout, match.end())
-                except json.JSONDecodeError:
-                    continue
-                if isinstance(metadata, dict) and metadata.get("status", "active") != "deprecated":
-                    catalog[match.group(1)] = metadata
-            if catalog:
-                return catalog
-        except Exception:
-            pass
-
-    try:
-        data = json.loads(MODELS_CACHE_PATH.read_text())
-        models = data.get("opencode-go", {}).get("models", {})
-    except Exception:
-        data = json.loads(CONFIG_PATH.read_text())
-        models = data.get("provider", {}).get("opencode-go", {}).get("models", {})
-    return {
-        model_id: meta
-        for model_id, meta in models.items()
-        if not isinstance(meta, dict) or meta.get("status") != "deprecated"
-    }
+    catalog = opencode_catalog_from_binary()
+    if catalog:
+        return catalog
+    return opencode_catalog_from_cache(MODELS_CACHE_PATH)
 
 
 def model_reasoning(model_id: str, meta: dict) -> tuple[str, list[dict], dict[str, dict]]:
@@ -161,13 +138,34 @@ def content_to_text(content) -> str:
     return str(content)
 
 
+def _wrap_tool_arguments(name: str, arguments: str) -> str:
+    """Wrap raw string arguments as {"input": "..."} for custom tools.
+
+    The upstream chat completions API requires function arguments to be valid
+    JSON.  Custom tools (like apply_patch) use a plain string as their input,
+    so we must wrap it in a JSON object before sending it upstream.
+    """
+    if name not in _CUSTOM_TOOLS:
+        return arguments
+    # If already a JSON object, pass through unchanged.
+    try:
+        parsed = json.loads(arguments)
+        if isinstance(parsed, dict):
+            return arguments
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return json.dumps({"input": arguments})
+
+
 def append_tool_call(messages: list[dict], item: dict) -> None:
+    name = item.get("name", "")
+    raw_args = item.get("arguments") or item.get("input") or ""
     tool_call = {
         "id": item.get("call_id") or item.get("id"),
         "type": "function",
         "function": {
-            "name": item.get("name", ""),
-            "arguments": item.get("arguments") or item.get("input") or "",
+            "name": name,
+            "arguments": _wrap_tool_arguments(name, raw_args),
         },
     }
     if messages and messages[-1].get("role") == "assistant" and messages[-1].get("tool_calls"):
@@ -228,6 +226,7 @@ def responses_tools_to_chat(body: dict) -> list[dict]:
                 function["strict"] = tool["strict"]
             tools.append({"type": "function", "function": function})
         elif tool.get("type") == "custom" and tool.get("name"):
+            _CUSTOM_TOOLS.add(tool["name"])
             tools.append(
                 {
                     "type": "function",
@@ -246,18 +245,33 @@ def responses_tools_to_chat(body: dict) -> list[dict]:
     return tools
 
 
+def _unwrap_tool_arguments(name: str, arguments: str) -> str:
+    """For custom tools, unwrap {"input": "..."} back to the raw string."""
+    if name not in _CUSTOM_TOOLS:
+        return arguments
+    try:
+        parsed = json.loads(arguments)
+        if isinstance(parsed, dict) and "input" in parsed:
+            return str(parsed["input"])
+    except (json.JSONDecodeError, TypeError):
+        pass
+    return arguments
+
+
 def chat_tool_calls(message: dict) -> list[dict]:
     output = []
     for index, tool_call in enumerate(message.get("tool_calls") or []):
         function = tool_call.get("function") or {}
         call_id = tool_call.get("id") or f"call_{index}"
+        name = function.get("name", "")
+        is_custom = name in _CUSTOM_TOOLS
         output.append(
             {
                 "id": f"fc_{call_id}",
-                "type": "function_call",
+                "type": "custom_tool_call" if is_custom else "function_call",
                 "call_id": call_id,
-                "name": function.get("name", ""),
-                "arguments": function.get("arguments", ""),
+                "name": name,
+                "arguments": _unwrap_tool_arguments(name, function.get("arguments", "")),
             }
         )
     return output
@@ -318,12 +332,14 @@ class ThinkFilter:
 
 def upstream_chat(body: dict):
     reasoning = body.get("reasoning")
+    # Process tools first so _CUSTOM_TOOLS is populated before
+    # responses_input_to_messages needs it to wrap custom tool arguments.
+    tools = responses_tools_to_chat(body)
     payload = {
         "model": body.get("model"),
         "messages": responses_input_to_messages(body),
         "stream": bool(body.get("stream", True)),
     }
-    tools = responses_tools_to_chat(body)
     if tools:
         payload["tools"] = tools
         payload["tool_choice"] = body.get("tool_choice", "auto")
@@ -344,18 +360,34 @@ def upstream_chat(body: dict):
     if effort:
         print(f"upstream model={body.get('model')} reasoning={effort}", flush=True)
 
-    req = urllib.request.Request(
-        f"{UPSTREAM}/chat/completions",
-        data=json.dumps(payload).encode(),
-        headers={
-            "authorization": f"Bearer {opencode_key()}",
-            "content-type": "application/json",
-            "accept": "text/event-stream" if payload["stream"] else "application/json",
-            "user-agent": "opencode/1.17.9",
-        },
-        method="POST",
-    )
-    return urllib.request.urlopen(req, timeout=300)
+    headers = {
+        "authorization": f"Bearer {opencode_key()}",
+        "content-type": "application/json",
+        "accept": "text/event-stream" if payload["stream"] else "application/json",
+        "user-agent": "opencode/1.17.9",
+    }
+    data = json.dumps(payload).encode()
+    url = f"{UPSTREAM}/chat/completions"
+
+    # Retry transient upstream errors (5xx, connection resets) with backoff.
+    max_retries = 3
+    for attempt in range(max_retries):
+        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+        try:
+            return urllib.request.urlopen(req, timeout=300)
+        except urllib.error.HTTPError as exc:
+            # 4xx errors are not transient — don't retry.
+            if exc.code < 500 or attempt == max_retries - 1:
+                raise
+            wait = 0.5 * (2 ** attempt)
+            print(f"upstream {exc.code}, retry {attempt + 1}/{max_retries} after {wait}s", flush=True)
+            time.sleep(wait)
+        except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+            if attempt == max_retries - 1:
+                raise
+            wait = 0.5 * (2 ** attempt)
+            print(f"upstream connection error, retry {attempt + 1}/{max_retries} after {wait}s: {exc}", flush=True)
+            time.sleep(wait)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -363,6 +395,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, fmt, *args):
         print(f"{self.address_string()} - {fmt % args}", flush=True)
+
+    def _check_auth(self) -> bool:
+        """Return True if the request is authorised (or auth is disabled)."""
+        if not PROXY_TOKEN:
+            return True
+        auth = self.headers.get("authorization", "")
+        return auth == f"Bearer {PROXY_TOKEN}"
 
     def send_json(self, status: int, payload: dict):
         body = json.dumps(payload).encode()
@@ -373,6 +412,9 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def do_GET(self):
+        if not self._check_auth():
+            self.send_json(401, {"error": "unauthorized"})
+            return
         path = urlparse(self.path).path
         if path in {"/health", "/v1/health"}:
             self.send_json(200, {"ok": True})
@@ -383,6 +425,9 @@ class Handler(BaseHTTPRequestHandler):
         self.send_json(404, {"error": f"not found: {self.path}"})
 
     def do_POST(self):
+        if not self._check_auth():
+            self.send_json(401, {"error": "unauthorized"})
+            return
         path = urlparse(self.path).path
         if path not in {"/responses", "/v1/responses"}:
             self.send_json(404, {"error": f"not found: {self.path}"})
@@ -505,6 +550,7 @@ class Handler(BaseHTTPRequestHandler):
                             state["started"] = True
                             state["output_index"] = len(output)
                             output.append(None)
+                            is_custom = state["name"] in _CUSTOM_TOOLS
                             self.sse(
                                 "response.output_item.added",
                                 {
@@ -512,7 +558,7 @@ class Handler(BaseHTTPRequestHandler):
                                     "output_index": state["output_index"],
                                     "item": {
                                         "id": f"fc_{state['call_id']}",
-                                        "type": "function_call",
+                                        "type": "custom_tool_call" if is_custom else "function_call",
                                         "call_id": state["call_id"],
                                         "name": state["name"],
                                         "arguments": "",
@@ -554,10 +600,11 @@ class Handler(BaseHTTPRequestHandler):
             for state in tool_calls.values():
                 if not state["started"]:
                     continue
-                arguments = "".join(state["arguments"])
+                arguments = _unwrap_tool_arguments(state["name"], "".join(state["arguments"]))
+                is_custom = state["name"] in _CUSTOM_TOOLS
                 item = {
                     "id": f"fc_{state['call_id']}",
-                    "type": "function_call",
+                    "type": "custom_tool_call" if is_custom else "function_call",
                     "call_id": state["call_id"],
                     "name": state["name"],
                     "arguments": arguments,

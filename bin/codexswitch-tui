@@ -248,7 +248,10 @@ class CodexSwitchApp(App):
     def capture(self, function, *args):
         output = io.StringIO()
         with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-            result = function(*args)
+            try:
+                result = function(*args)
+            except SystemExit as exc:
+                return exc, output.getvalue().strip()
         return result, output.getvalue().strip()
 
     def set_status(self, message: str, error: bool = False) -> None:
@@ -462,13 +465,16 @@ class CodexSwitchApp(App):
 
     def action_refresh(self) -> None:
         self.set_status("Refreshing OpenCode Go catalog...")
-        try:
-            _, output = self.capture(BACKEND["refresh_opencode_models"])
-            self.catalog = BACKEND["opencode_model_catalog"]()
-            self.load_models()
-            self.set_status(output.splitlines()[-1] if output else "Catalog refreshed")
-        except SystemExit:
-            self.set_status("Model refresh failed; existing cache retained", error=True)
+        result, output = self.capture(BACKEND["refresh_opencode_models"])
+        if isinstance(result, SystemExit):
+            self.set_status(
+                output or "Model refresh failed; existing cache retained",
+                error=True,
+            )
+            return
+        self.catalog = BACKEND["opencode_model_catalog"]()
+        self.load_models()
+        self.set_status(output.splitlines()[-1] if output else "Catalog refreshed")
 
     def action_apply(self) -> None:
         if not self.model:
@@ -477,13 +483,32 @@ class CodexSwitchApp(App):
         try:
             output = []
             if self.provider == "openai" and self.account:
-                _, text = self.capture(BACKEND["use_openai_account"], self.account)
+                result, text = self.capture(
+                    BACKEND["use_openai_account"], self.account
+                )
+                if isinstance(result, SystemExit):
+                    self.set_status(
+                        text or "Could not activate account", error=True
+                    )
+                    return
                 output.append(text)
-            BACKEND["validate_provider_model"](self.provider, self.model)
+            result, text = self.capture(
+                BACKEND["validate_provider_model"], self.provider, self.model
+            )
+            if isinstance(result, SystemExit):
+                self.set_status(
+                    text or "Invalid provider or model", error=True
+                )
+                return
             effort = self.selected_reasoning()
-            _, text = self.capture(
+            result, text = self.capture(
                 BACKEND["update_codex_config"], self.provider, self.model, effort
             )
+            if isinstance(result, SystemExit):
+                self.set_status(
+                    text or "Could not activate selection", error=True
+                )
+                return
             output.append(text)
             self.load_state()
             self.load_sources()
@@ -492,7 +517,7 @@ class CodexSwitchApp(App):
                 f"Active: {self.provider} / {self.model}"
                 + (f" / {effort}" if effort else "")
             )
-        except (SystemExit, Exception) as exc:
+        except Exception as exc:
             self.set_status(str(exc) or "Could not activate selection", error=True)
 
     def action_auth(self) -> None:
@@ -519,7 +544,30 @@ class CodexSwitchApp(App):
             + (f" / {self.account}" if self.provider == "openai" and self.account else "")
         )
 
+    def selection_is_dirty(self) -> bool:
+        """Check if current selection differs from the active config."""
+        state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
+        if self.provider != state.get("provider"):
+            return True
+        if self.model and self.model != state.get("model"):
+            return True
+        if self.provider == "openai" and self.account:
+            auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
+            active_account = BACKEND["openai_auth_email"](auth)
+            if self.account != active_account:
+                return True
+        effort = self.selected_reasoning()
+        if effort and effort != state.get("reasoning_effort"):
+            return True
+        return False
+
     def action_codex(self) -> None:
+        if self.selection_is_dirty():
+            self.set_status("Applying selection...")
+            self.action_apply()
+            if self.selection_is_dirty():
+                self.set_status("Could not apply selection; press F6 to retry", error=True)
+                return
         self.launch_codex = True
         self.exit()
 

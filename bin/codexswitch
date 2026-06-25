@@ -9,7 +9,14 @@ import tempfile
 import time
 import base64
 from pathlib import Path
-import pwd
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codexswitch_common import (
+    user_home as _common_user_home,
+    parse_opencode_catalog as _common_parse_opencode_catalog,
+    opencode_catalog_from_binary as _common_catalog_from_binary,
+    opencode_bin as _common_opencode_bin,
+)
 
 
 OPENAI_FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
@@ -17,6 +24,7 @@ DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_PROXY_URL = "http://127.0.0.1:14555/v1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MAX_CONFIG_BACKUPS = 5
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
 PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
 TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
@@ -24,13 +32,7 @@ TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
 
 
 def user_home() -> Path:
-    sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and sudo_user != "root":
-        try:
-            return Path(pwd.getpwnam(sudo_user).pw_dir)
-        except KeyError:
-            pass
-    return Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+    return _common_user_home()
 
 
 HOME = user_home()
@@ -225,11 +227,9 @@ def codex_bin() -> str:
 
 
 def opencode_bin() -> str:
-    found = shutil.which("opencode")
+    found = _common_opencode_bin()
     if found:
         return found
-    if OPENCODE_BIN_FALLBACK.exists():
-        return str(OPENCODE_BIN_FALLBACK)
     die("opencode niet gevonden in PATH of ~/.local/share/npm-global/bin/opencode")
 
 
@@ -371,21 +371,7 @@ def opencode_model_catalog() -> dict[str, dict]:
     global _OPENCODE_CATALOG_CACHE
     if _OPENCODE_CATALOG_CACHE is not None:
         return _OPENCODE_CATALOG_CACHE
-    try:
-        proc = subprocess.run(
-            [opencode_bin(), "models", "opencode-go", "--verbose"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=15,
-            check=False,
-        )
-    except Exception:
-        return {}
-    if proc.returncode != 0:
-        return {}
-
-    _OPENCODE_CATALOG_CACHE = parse_opencode_catalog(proc.stdout)
+    _OPENCODE_CATALOG_CACHE = _common_catalog_from_binary()
     return _OPENCODE_CATALOG_CACHE
 
 
@@ -467,6 +453,29 @@ def set_top_level(lines: list[str], key: str, value: str) -> list[str]:
     return output
 
 
+def remove_top_level(lines: list[str], key: str) -> list[str]:
+    """Remove a top-level key=value line from a TOML file."""
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    any_section_re = re.compile(r"^\s*\[.+\]\s*$")
+    output: list[str] = []
+    in_top = True
+    for line in lines:
+        if any_section_re.match(line):
+            in_top = False
+        if in_top and key_re.match(line):
+            continue
+        output.append(line)
+    return output
+
+
+def cleanup_config_backups() -> None:
+    """Keep only the most recent MAX_CONFIG_BACKUPS backup files."""
+    pattern = "config.toml.bak-*"
+    backups = sorted(CODEX_HOME.glob(pattern), key=lambda p: p.name, reverse=True)
+    for old in backups[MAX_CONFIG_BACKUPS:]:
+        old.unlink(missing_ok=True)
+
+
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
     if provider == "opencode-go":
         ensure_proxy()
@@ -476,6 +485,7 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
     backup = CODEX_CONFIG.with_suffix(f".toml.bak-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}")
     if CODEX_CONFIG.exists():
         shutil.copy2(CODEX_CONFIG, backup)
+    cleanup_config_backups()
 
     lines = remove_block(lines, "model_providers.opencode-go.auth")
     lines = remove_block(lines, "model_providers.opencode-go")
@@ -500,6 +510,8 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 f"kies uit {', '.join(label for label, _ in choices)}"
             )
         lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+    elif provider == "openai":
+        lines = remove_top_level(lines, "model_reasoning_effort")
 
     if provider == "opencode-go":
         if not Path(TOKEN_HELPER).exists():
@@ -593,9 +605,22 @@ def interactive() -> None:
     while True:
         action = choose(
             "codexswitch",
-            ["provider/model kiezen", "modellen verversen", "auth", "status", "modellen tonen", "stop"],
+            ["provider/model kiezen", "OpenAI-accounts", "modellen verversen", "auth", "status", "modellen tonen", "stop"],
         )
-        if action == "provider/model kiezen":
+        if action == "OpenAI-accounts":
+            accounts = openai_accounts()
+            if not accounts:
+                print("Geen opgeslagen OpenAI-accounts. Gebruik \"codexswitch auth openai\" om in te loggen.")
+                continue
+            sub = choose(
+                "OpenAI-accounts",
+                ["account activeren", "huidige login opslaan", "terug"],
+            )
+            if sub == "account activeren":
+                use_openai_account(choose("OpenAI-account", accounts))
+            elif sub == "huidige login opslaan":
+                save_openai_account()
+        elif action == "provider/model kiezen":
             provider = choose("Provider", ["openai", "opencode-go"])
             if provider == "openai":
                 accounts = openai_accounts()
@@ -632,6 +657,7 @@ def interactive() -> None:
 def usage() -> None:
     print("""Gebruik:
   codexswitch                 Commander TUI
+  codexswitch --version       toon versie
   codexswitch classic         klassiek tekstmenu
   codexswitch list            toon modellen
   codexswitch refresh         ververs OpenCode Go-modellen
@@ -654,6 +680,9 @@ def main(argv: list[str]) -> int:
     cmd = argv[0]
     if cmd in {"-h", "--help", "help"}:
         usage()
+        return 0
+    if cmd in {"-v", "--version"}:
+        print("codexswitch 1.1.0")
         return 0
     if cmd == "classic":
         interactive()

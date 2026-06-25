@@ -4,3 +4,5 @@ __pycache__/
 *.log
 *.bak
 .DS_Store
+config.toml.bak-*
+*.toml.bak-*

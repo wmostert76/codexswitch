@@ -64,6 +64,9 @@ service running under the account that invoked the installer.
 
 ## CLI
 
+The classic menu (`codexswitch classic`) also offers OpenAI account
+management (activate saved account, save current login).
+
 ```bash
 codexswitch classic
 codexswitch list
@@ -78,7 +81,8 @@ codexswitch use openai gpt-5.5
 codexswitch use opencode-go deepseek-v4-pro max
 codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
-codexswitch run
+codexswitch run [PROMPT...]
+codexswitch --version
 ```
 
 ## Authentication
@@ -90,6 +94,22 @@ CodexSwitch does not invent a second authentication format:
 - OpenCode Go auth: `~/.local/share/opencode/auth.json`, managed by OpenCode
 
 No credentials are stored in this repository.
+
+## Proxy Authentication
+
+The compatibility proxy listens on `127.0.0.1:14555`. By default it
+accepts any local connection. To require a bearer token, set the
+`CODEX_OPENCODE_PROXY_TOKEN` environment variable before starting
+the service:
+
+```bash
+sudo systemctl edit codex-opencode-go-proxy.service
+# Add: Environment=CODEX_OPENCODE_PROXY_TOKEN=your-secret
+sudo systemctl restart codex-opencode-go-proxy.service
+```
+
+The proxy retries transient upstream errors (5xx, connection resets) up
+to three times with exponential backoff.
 
 ## Uninstall
 

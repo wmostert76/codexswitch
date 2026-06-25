@@ -47,9 +47,10 @@ configuration logic in the TUI.
 Run before committing:
 
 ```bash
-python3 -m py_compile bin/codexswitch bin/codex-opencode-go-proxy bin/opencode-go-token
+python3 -m py_compile bin/codexswitch bin/codex-opencode-go-proxy bin/opencode-go-token bin/codexswitch_common.py
 .venv/bin/python -m py_compile bin/codexswitch-tui
 bash -n install.sh uninstall.sh
+.venv/bin/python -m pytest tests/ -v
 codexswitch list
 codexswitch status
 ```
@@ -72,3 +73,17 @@ For provider integration tests:
 - Update the README when commands, keys, installation or auth behavior changes.
 - Do not weaken the root-owned installed command files merely to simplify local
   development; edit the repository and reinstall or retain symlinks.
+
+## Known Issues
+
+- **apply_patch tool via OpenCode Go proxy**: The proxy correctly converts
+  custom tool calls (type `custom_tool_call`) to and from the upstream chat
+  completions format, and unwraps/re-wraps the `{"input": "..."}` envelope.
+  However, Codex CLI still rejects apply_patch payloads with
+  "incompatible payload" when using OpenCode Go models (GLM-5.2, DeepSeek V4).
+  This appears to be a Codex-side issue with how it validates custom tool call
+  responses from non-OpenAI providers. The `exec_command` and `write_stdin`
+  tools work correctly. This needs further investigation — check whether a
+  newer Codex version fixes it, or whether the SSE event sequence for custom
+  tool calls needs adjustment (e.g. `response.custom_tool_call.output_text.delta`
+  instead of `response.function_call_arguments.delta`).
