@@ -80,6 +80,10 @@ class CodexSwitchApp(App):
         background: #000087;
     }
 
+    .pane:focus-within, #reason-box:focus-within {
+        border: heavy #ffff00;
+    }
+
     #model-pane {
         width: 1fr;
     }
@@ -94,6 +98,12 @@ class CodexSwitchApp(App):
         color: #000087;
         text-align: center;
         text-style: bold;
+    }
+
+    .pane:focus-within > .pane-title,
+    #reason-box:focus-within > .lower-title {
+        background: #ffff00;
+        color: #000000;
     }
 
     OptionList {
