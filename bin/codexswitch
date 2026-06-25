@@ -175,11 +175,24 @@ def save_openai_account(expected_email: str | None = None) -> str:
     return email
 
 
+def sync_active_openai_account() -> str | None:
+    auth_path = CODEX_HOME / "auth.json"
+    ensure_home_owner(auth_path)
+    data = read_json(auth_path, {})
+    email = openai_auth_email(data)
+    if not email:
+        return None
+    destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
+    write_secret_json(destination, data)
+    return email
+
+
 def use_openai_account(email: str) -> None:
     normalized = email.strip().lower()
     source = OPENAI_ACCOUNTS_DIR / account_filename(normalized)
     if not source.exists():
         die(f"geen opgeslagen OpenAI-account voor {normalized}")
+    sync_active_openai_account()
     data = read_json(source, {})
     actual_email = openai_auth_email(data)
     if actual_email != normalized:

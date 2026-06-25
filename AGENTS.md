@@ -22,6 +22,8 @@ The repository contains:
 - Preserve permissions `0700` for account directories and `0600` for account
   files.
 - Do not delete or overwrite saved accounts unless explicitly requested.
+- Before replacing `~/.codex/auth.json`, sync the active account back to the
+  account store. OpenAI refresh tokens rotate during normal Codex usage.
 - Avoid placing user-specific paths, account names or email addresses in code,
   documentation, screenshots or fixtures.
 

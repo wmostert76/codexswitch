@@ -18,6 +18,7 @@ unchanged after a selection is applied.
 - Live OpenCode Go model refresh
 - Function-key workflow and mouse support
 - Secure account storage with `0700` directories and `0600` files
+- Automatic synchronization of rotated OpenAI refresh tokens when switching
 - Classic numbered fallback menu for minimal terminals
 
 ## Requirements
