@@ -1,0 +1,13 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+sudo systemctl disable --now codex-opencode-go-proxy.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/codex-opencode-go-proxy.service
+sudo systemctl daemon-reload
+
+for command in codexswitch codex-opencode-go-proxy opencode-go-token; do
+  sudo rm -f "/usr/local/bin/$command"
+done
+
+echo "CodexSwitch commands and proxy service removed."
+echo "User configuration and credentials were left untouched."

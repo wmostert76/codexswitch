@@ -1,0 +1,425 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import subprocess
+import time
+import tomllib
+import urllib.error
+import urllib.request
+from urllib.parse import urlparse
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+
+
+HOME = Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+AUTH_PATH = HOME / ".local/share/opencode/auth.json"
+CONFIG_PATH = HOME / ".config/opencode/opencode.json"
+MODELS_CACHE_PATH = HOME / ".cache/opencode/models.json"
+CODEX_CONFIG_PATH = HOME / ".codex/config.toml"
+OPENCODE_BIN_FALLBACK = HOME / ".local/share/npm-global/bin/opencode"
+UPSTREAM = "https://opencode.ai/zen/go/v1"
+HOST = os.environ.get("CODEX_OPENCODE_PROXY_HOST", "127.0.0.1")
+PORT = int(os.environ.get("CODEX_OPENCODE_PROXY_PORT", "14555"))
+
+
+def opencode_key() -> str:
+    data = json.loads(AUTH_PATH.read_text())
+    key = data.get("opencode-go", {}).get("key")
+    if not key:
+        raise RuntimeError(f"missing opencode-go key in {AUTH_PATH}")
+    return key
+
+
+def opencode_catalog() -> dict[str, dict]:
+    binary = shutil.which("opencode")
+    if not binary and OPENCODE_BIN_FALLBACK.exists():
+        binary = str(OPENCODE_BIN_FALLBACK)
+    if binary:
+        try:
+            proc = subprocess.run(
+                [binary, "models", "opencode-go", "--verbose"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+            catalog = {}
+            decoder = json.JSONDecoder()
+            pattern = re.compile(r"^opencode-go/([^\n]+)\n", re.MULTILINE)
+            for match in pattern.finditer(proc.stdout):
+                try:
+                    metadata, _ = decoder.raw_decode(proc.stdout, match.end())
+                except json.JSONDecodeError:
+                    continue
+                if isinstance(metadata, dict) and metadata.get("status", "active") != "deprecated":
+                    catalog[match.group(1)] = metadata
+            if catalog:
+                return catalog
+        except Exception:
+            pass
+
+    try:
+        data = json.loads(MODELS_CACHE_PATH.read_text())
+        models = data.get("opencode-go", {}).get("models", {})
+    except Exception:
+        data = json.loads(CONFIG_PATH.read_text())
+        models = data.get("provider", {}).get("opencode-go", {}).get("models", {})
+    return {
+        model_id: meta
+        for model_id, meta in models.items()
+        if not isinstance(meta, dict) or meta.get("status") != "deprecated"
+    }
+
+
+def model_reasoning(model_id: str, meta: dict) -> tuple[str, list[dict], dict[str, dict]]:
+    variants = meta.get("variants", {}) if isinstance(meta, dict) else {}
+    if not isinstance(variants, dict):
+        variants = {}
+    if set(variants) == {"none", "thinking"}:
+        levels = [
+            {"effort": "none", "description": "Thinking disabled"},
+            {"effort": "high", "description": "Adaptive thinking"},
+        ]
+        return "high", levels, {"none": variants["none"], "high": variants["thinking"]}
+
+    mapped = {}
+    levels = []
+    for variant, options in variants.items():
+        effort = "xhigh" if variant == "max" else variant
+        if effort not in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+            continue
+        mapped[effort] = options
+        levels.append({"effort": effort, "description": f"{variant} reasoning"})
+    if not levels:
+        levels = [{"effort": "medium", "description": "Model default reasoning"}]
+    default = "medium" if "medium" in mapped else "high" if "high" in mapped else levels[0]["effort"]
+    return default, levels, mapped
+
+
+def opencode_models() -> list[dict]:
+    output = []
+    for model_id, meta in sorted(opencode_catalog().items()):
+        default_reasoning, reasoning_levels, _ = model_reasoning(model_id, meta)
+        limits = meta.get("limit", {}) if isinstance(meta, dict) else {}
+        capabilities = meta.get("capabilities", {}) if isinstance(meta, dict) else {}
+        output.append(
+            {
+                "slug": model_id,
+                "id": model_id,
+                "display_name": meta.get("name", model_id) if isinstance(meta, dict) else model_id,
+                "description": "OpenCode Go model",
+                "default_reasoning_level": default_reasoning,
+                "supported_reasoning_levels": reasoning_levels,
+                "shell_type": "shell_command",
+                "visibility": "list",
+                "supported_in_api": True,
+                "priority": 1,
+                "additional_speed_tiers": [],
+                "service_tiers": [],
+                "availability_nux": None,
+                "upgrade": None,
+                "base_instructions": "",
+                "model_messages": {},
+                "supports_reasoning_summaries": True,
+                "default_reasoning_summary": "none",
+                "support_verbosity": False,
+                "default_verbosity": "low",
+                "apply_patch_tool_type": "freeform",
+                "web_search_tool_type": "text_and_image",
+                "truncation_policy": {"mode": "tokens", "limit": 10000},
+                "supports_parallel_tool_calls": True,
+                "supports_image_detail_original": False,
+                "context_window": limits.get("context", 128000),
+                "max_context_window": limits.get("context", 128000),
+                "effective_context_window_percent": 95,
+                "experimental_supported_tools": [],
+                "input_modalities": [
+                    modality
+                    for modality, enabled in capabilities.get("input", {"text": True}).items()
+                    if enabled and modality in {"text", "image"}
+                ],
+                "use_responses_lite": False,
+            }
+        )
+    return output
+
+
+def content_to_text(content) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for item in content:
+            if isinstance(item, dict):
+                parts.append(str(item.get("text") or item.get("content") or ""))
+            else:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part)
+    return str(content)
+
+
+def responses_input_to_messages(body: dict) -> list[dict]:
+    messages = []
+    instructions = body.get("instructions")
+    if instructions:
+        messages.append({"role": "system", "content": str(instructions)})
+
+    input_value = body.get("input", "")
+    if isinstance(input_value, str):
+        messages.append({"role": "user", "content": input_value})
+        return messages
+
+    if isinstance(input_value, list):
+        for item in input_value:
+            if not isinstance(item, dict):
+                messages.append({"role": "user", "content": str(item)})
+                continue
+            role = item.get("role") or "user"
+            if role == "developer":
+                role = "system"
+            content = item.get("content", "")
+            messages.append({"role": role, "content": content_to_text(content)})
+    return messages or [{"role": "user", "content": ""}]
+
+
+def configured_reasoning_effort(model_id: str) -> str | None:
+    try:
+        data = tomllib.loads(CODEX_CONFIG_PATH.read_text())
+    except Exception:
+        return None
+    if data.get("model") != model_id:
+        return None
+    effort = data.get("model_reasoning_effort")
+    return effort if isinstance(effort, str) else None
+
+
+class ThinkFilter:
+    def __init__(self):
+        self.in_think = False
+        self.pending = ""
+
+    def feed(self, text: str) -> str:
+        data = self.pending + text
+        self.pending = ""
+        output = []
+        while data:
+            if self.in_think:
+                end = data.find("</think>")
+                if end == -1:
+                    self.pending = data[-7:]
+                    return "".join(output)
+                data = data[end + len("</think>") :]
+                self.in_think = False
+                continue
+
+            start = data.find("<think>")
+            if start == -1:
+                if len(data) <= 6:
+                    self.pending = data
+                else:
+                    output.append(data[:-6])
+                    self.pending = data[-6:]
+                return "".join(output)
+
+            output.append(data[:start])
+            data = data[start + len("<think>") :]
+            self.in_think = True
+        return "".join(output)
+
+    def finish(self) -> str:
+        if self.in_think:
+            self.pending = ""
+            return ""
+        output = self.pending
+        self.pending = ""
+        return output
+
+
+def upstream_chat(body: dict):
+    reasoning = body.get("reasoning")
+    payload = {
+        "model": body.get("model"),
+        "messages": responses_input_to_messages(body),
+        "stream": bool(body.get("stream", True)),
+    }
+    if body.get("temperature") is not None:
+        payload["temperature"] = body["temperature"]
+    if body.get("max_output_tokens") is not None:
+        payload["max_tokens"] = body["max_output_tokens"]
+    model_id = str(body.get("model"))
+    effort = (reasoning or {}).get("effort") or configured_reasoning_effort(model_id)
+    model_meta = opencode_catalog().get(model_id, {})
+    _, _, effort_options = model_reasoning(model_id, model_meta)
+    options = effort_options.get(effort, {})
+    if "reasoningEffort" in options:
+        payload["reasoning_effort"] = options["reasoningEffort"]
+    if "thinking" in options:
+        payload["thinking"] = options["thinking"]
+    if effort:
+        print(f"upstream model={body.get('model')} reasoning={effort}", flush=True)
+
+    req = urllib.request.Request(
+        f"{UPSTREAM}/chat/completions",
+        data=json.dumps(payload).encode(),
+        headers={
+            "authorization": f"Bearer {opencode_key()}",
+            "content-type": "application/json",
+            "accept": "text/event-stream" if payload["stream"] else "application/json",
+            "user-agent": "opencode/1.17.9",
+        },
+        method="POST",
+    )
+    return urllib.request.urlopen(req, timeout=300)
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        print(f"{self.address_string()} - {fmt % args}", flush=True)
+
+    def send_json(self, status: int, payload: dict):
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        path = urlparse(self.path).path
+        if path in {"/health", "/v1/health"}:
+            self.send_json(200, {"ok": True})
+            return
+        if path in {"/models", "/v1/models"}:
+            self.send_json(200, {"models": opencode_models()})
+            return
+        self.send_json(404, {"error": f"not found: {self.path}"})
+
+    def do_POST(self):
+        path = urlparse(self.path).path
+        if path not in {"/responses", "/v1/responses"}:
+            self.send_json(404, {"error": f"not found: {self.path}"})
+            return
+
+        length = int(self.headers.get("content-length", "0"))
+        body = json.loads(self.rfile.read(length) or b"{}")
+        if not body.get("stream", True):
+            self.handle_non_stream(body)
+            return
+        self.handle_stream(body)
+
+    def handle_non_stream(self, body: dict):
+        try:
+            with upstream_chat({**body, "stream": False}) as upstream:
+                data = json.loads(upstream.read())
+            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            rid = f"resp_{int(time.time() * 1000)}"
+            self.send_json(
+                200,
+                {
+                    "id": rid,
+                    "object": "response",
+                    "created_at": int(time.time()),
+                    "status": "completed",
+                    "model": body.get("model"),
+                    "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                },
+            )
+        except Exception as exc:
+            self.send_json(502, {"error": str(exc)})
+
+    def sse(self, event: str, payload: dict):
+        self.wfile.write(f"event: {event}\n".encode())
+        self.wfile.write(b"data: ")
+        self.wfile.write(json.dumps(payload).encode())
+        self.wfile.write(b"\n\n")
+        self.wfile.flush()
+
+    def handle_stream(self, body: dict):
+        rid = f"resp_{int(time.time() * 1000)}"
+        item_id = "msg_0"
+        full_text = []
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("connection", "keep-alive")
+        self.end_headers()
+
+        response_base = {"id": rid, "object": "response", "created_at": int(time.time()), "status": "in_progress", "model": body.get("model"), "output": []}
+        think_filter = ThinkFilter()
+        emitted_text = False
+        self.sse("response.created", {"type": "response.created", "response": response_base})
+        self.sse("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
+        self.sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
+
+        try:
+            with upstream_chat({**body, "stream": True}) as upstream:
+                for raw in upstream:
+                    line = raw.decode(errors="replace").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[5:].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    choices = chunk.get("choices") or []
+                    if not choices:
+                        continue
+                    delta_obj = choices[0].get("delta", {})
+                    delta = delta_obj.get("content")
+                    if not delta:
+                        continue
+                    delta = think_filter.feed(delta)
+                    if not delta:
+                        continue
+                    if not emitted_text:
+                        delta = delta.lstrip()
+                    if not delta:
+                        continue
+                    emitted_text = True
+                    full_text.append(delta)
+                    self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": delta})
+
+            final_delta = think_filter.finish()
+            if final_delta:
+                if not emitted_text:
+                    final_delta = final_delta.lstrip()
+                full_text.append(final_delta)
+                self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": final_delta})
+            text = "".join(full_text)
+            self.sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": 0, "text": text})
+            self.sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": text}})
+            self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}})
+            self.sse("response.completed", {"type": "response.completed", "response": {"id": rid, "object": "response", "created_at": int(time.time()), "status": "completed", "model": body.get("model"), "output": [{"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}]}})
+            self.wfile.write(b"data: [DONE]\n\n")
+            self.wfile.flush()
+        except Exception as exc:
+            message = str(exc)
+            if isinstance(exc, urllib.error.HTTPError):
+                try:
+                    body = exc.read().decode(errors="replace")
+                    if body:
+                        message = f"{message}: {body[:1000]}"
+                except Exception:
+                    pass
+            print(f"upstream stream failed: {message}", flush=True)
+            self.sse("response.failed", {"type": "response.failed", "response": {"id": rid, "status": "failed"}, "error": {"message": message}})
+        finally:
+            self.close_connection = True
+
+
+def main():
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"codex-opencode-go-proxy listening on http://{HOST}:{PORT}/v1")
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

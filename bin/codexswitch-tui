@@ -1,0 +1,497 @@
+#!/usr/bin/env python3
+import contextlib
+import io
+import json
+import os
+import runpy
+import subprocess
+from pathlib import Path
+
+from rich.text import Text
+from textual.app import App, ComposeResult
+from textual.binding import Binding
+from textual.containers import Horizontal, Vertical
+from textual.screen import ModalScreen
+from textual.widgets import Header, Label, OptionList, Select, Static
+from textual.widgets.option_list import Option
+
+
+PROJECT = Path(__file__).resolve().parents[1]
+BACKEND_PATH = PROJECT / "bin/codexswitch"
+BACKEND = runpy.run_path(str(BACKEND_PATH))
+
+
+class HelpScreen(ModalScreen):
+    BINDINGS = [("escape", "dismiss", "Close"), ("f1", "dismiss", "Close")]
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            """
+[bold #000087]CODEXSWITCH COMMANDER[/]
+
+[b]Navigation[/]
+  Tab / Shift+Tab   Switch panel
+  Arrows            Move selection
+  Enter             Open or activate
+
+[b]Function keys[/]
+  F2 Accounts       Focus provider/account panel
+  F3 Models         Focus model panel
+  F4 Reasoning      Focus reasoning selector
+  F5 Refresh        Refresh OpenCode Go catalog
+  F6 Apply          Activate selection
+  F7 Auth           Login to selected provider
+  F8 Status         Reload active configuration
+  F9 Codex          Start Codex with active config
+  F10 Quit          Close CodexSwitch
+
+Press Escape or F1 to close.
+""",
+            id="help-dialog",
+            markup=True,
+        )
+
+
+class CodexSwitchApp(App):
+    TITLE = "CodexSwitch Commander"
+    SUB_TITLE = "Provider and model control center"
+
+    CSS = """
+    Screen {
+        background: #000087;
+        color: #bcbcbc;
+    }
+
+    Header {
+        height: 1;
+        background: #00afaf;
+        color: #000000;
+        text-style: bold;
+    }
+
+    #workspace {
+        height: 1fr;
+        padding: 0 1;
+    }
+
+    .pane {
+        width: 1fr;
+        height: 1fr;
+        border: ascii #bcbcbc;
+        background: #000087;
+    }
+
+    .pane-title {
+        height: 1;
+        background: #000087;
+        color: #ffff00;
+        text-align: center;
+        text-style: bold;
+    }
+
+    OptionList {
+        height: 1fr;
+        background: #000087;
+        color: #bcbcbc;
+        padding: 0;
+        scrollbar-color: #00afaf;
+        scrollbar-background: #000087;
+    }
+
+    OptionList:focus {
+        border: none;
+    }
+
+    OptionList > .option-list--option-highlighted {
+        background: #00afaf;
+        color: #000000;
+        text-style: bold;
+    }
+
+    #detail-box {
+        height: 8;
+        margin: 0 1;
+        border: ascii #bcbcbc;
+        background: #000087;
+        padding: 0 1;
+    }
+
+    #detail-title {
+        height: 1;
+        color: #ffff00;
+        text-style: bold;
+    }
+
+    #model-detail {
+        height: 4;
+        color: #bcbcbc;
+    }
+
+    #reason-row {
+        height: 1;
+    }
+
+    #reason-label {
+        width: 16;
+        color: #ffff00;
+    }
+
+    Select {
+        width: 1fr;
+        height: 1;
+        background: #00afaf;
+        color: #000000;
+        border: none;
+    }
+
+    Select:focus {
+        background: #ffffff;
+        color: #000000;
+    }
+
+    #status {
+        height: 1;
+        margin: 0 1;
+        background: #000000;
+        color: #ffffff;
+        padding: 0 1;
+    }
+
+    #buttonbar {
+        height: 1;
+        background: #00afaf;
+        color: #000000;
+        text-align: center;
+    }
+
+    HelpScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.65);
+    }
+
+    #help-dialog {
+        width: 66;
+        height: 25;
+        border: double #ffffff;
+        background: #bcbcbc;
+        color: #000000;
+        padding: 1 2;
+    }
+    """
+
+    BINDINGS = [
+        Binding("f1", "help", "Help", show=False),
+        Binding("f2", "accounts", "Accounts", show=False),
+        Binding("f3", "models", "Models", show=False),
+        Binding("f4", "reasoning", "Reason", show=False),
+        Binding("f5", "refresh", "Refresh", show=False),
+        Binding("f6", "apply", "Apply", show=False),
+        Binding("f7", "auth", "Auth", show=False),
+        Binding("f8", "status", "Status", show=False),
+        Binding("f9", "codex", "Codex", show=False),
+        Binding("f10", "quit", "Quit", show=False),
+        Binding("escape", "quit", "Quit", show=False),
+    ]
+
+    def __init__(self):
+        super().__init__()
+        self.provider = "openai"
+        self.account = None
+        self.model = None
+        self.catalog = {}
+        self.openai_metadata = {}
+        self.launch_codex = False
+
+    def compose(self) -> ComposeResult:
+        yield Header(show_clock=True)
+        with Horizontal(id="workspace"):
+            with Vertical(classes="pane"):
+                yield Label("Providers / Accounts", classes="pane-title")
+                yield OptionList(id="sources")
+            with Vertical(classes="pane"):
+                yield Label("Models", classes="pane-title")
+                yield OptionList(id="models")
+        with Vertical(id="detail-box"):
+            yield Label("Selection details", id="detail-title")
+            yield Static("", id="model-detail")
+            with Horizontal(id="reason-row"):
+                yield Label("Reasoning mode", id="reason-label")
+                yield Select(
+                    [("model-default", "medium")],
+                    id="reasoning",
+                    allow_blank=False,
+                    value="medium",
+                )
+        yield Static(" Ready", id="status")
+        yield Static(
+            "[reverse bold]1[/]Help [reverse bold]2[/]Acct "
+            "[reverse bold]3[/]Model [reverse bold]4[/]Think "
+            "[reverse bold]5[/]Refsh [reverse bold]6[/]Apply "
+            "[reverse bold]7[/]Auth [reverse bold]8[/]Status "
+            "[reverse bold]9[/]Codex [reverse bold]10[/]Quit",
+            id="buttonbar",
+        )
+
+    def on_mount(self) -> None:
+        self.load_state()
+        self.load_sources()
+        self.load_models()
+        self.query_one("#sources", OptionList).focus()
+
+    def capture(self, function, *args):
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            result = function(*args)
+        return result, output.getvalue().strip()
+
+    def set_status(self, message: str, error: bool = False) -> None:
+        status = self.query_one("#status", Static)
+        status.update((" ERROR: " if error else " ") + message)
+        status.styles.background = "#870000" if error else "#000000"
+
+    def load_state(self) -> None:
+        state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
+        self.provider = state.get("provider", "openai")
+        self.model = state.get("model")
+        auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
+        self.account = BACKEND["openai_auth_email"](auth)
+        self.catalog = BACKEND["opencode_model_catalog"]()
+        try:
+            proc = subprocess.run(
+                [BACKEND["codex_bin"](), "debug", "models"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=15,
+                check=False,
+            )
+            data = json.loads(proc.stdout)
+            self.openai_metadata = {
+                item["slug"]: item for item in data.get("models", []) if item.get("slug")
+            }
+        except Exception:
+            self.openai_metadata = {}
+
+    def load_sources(self) -> None:
+        options = [
+            Option(
+                Text.from_markup(
+                    f"[b]{'* ' if self.provider == 'openai' else '  '}OpenAI[/]"
+                ),
+                id="provider:openai",
+            )
+        ]
+        for email in BACKEND["openai_accounts"]():
+            marker = "*" if email == self.account else " "
+            options.append(Option(f"  {marker} {email}", id=f"account:{email}"))
+        options.append(
+            Option(
+                Text.from_markup(
+                    f"[b]{'* ' if self.provider == 'opencode-go' else '  '}OpenCode Go[/]"
+                ),
+                id="provider:opencode-go",
+            )
+        )
+        sources = self.query_one("#sources", OptionList)
+        sources.set_options(options)
+        target = f"account:{self.account}" if self.provider == "openai" and self.account else f"provider:{self.provider}"
+        for index, option in enumerate(sources.options):
+            if option.id == target:
+                sources.highlighted = index
+                break
+
+    def load_models(self) -> None:
+        models = (
+            BACKEND["openai_models"]()
+            if self.provider == "openai"
+            else BACKEND["opencode_models"]()
+        )
+        options = []
+        for model in models:
+            marker = "*" if model == self.model else " "
+            options.append(Option(f"{marker} {model}", id=f"model:{model}"))
+        model_list = self.query_one("#models", OptionList)
+        model_list.set_options(options)
+        default_model = (
+            "gpt-5.5"
+            if self.provider == "openai"
+            else BACKEND["DEFAULT_OPENCODE_MODEL"]
+        )
+        selected_index = 0
+        for index, option in enumerate(model_list.options):
+            if option.id == f"model:{self.model or default_model}":
+                selected_index = index
+                break
+        if options:
+            model_list.highlighted = selected_index
+            self.model = model_list.highlighted_option.id.split(":", 1)[1]
+        self.update_details()
+
+    def update_details(self) -> None:
+        detail = self.query_one("#model-detail", Static)
+        reasoning = self.query_one("#reasoning", Select)
+        if not self.model:
+            detail.update("No model available")
+            reasoning.set_options([("model-default", "medium")])
+            reasoning.value = "medium"
+            return
+
+        if self.provider == "opencode-go":
+            meta = self.catalog.get(self.model, {})
+            limits = meta.get("limit", {})
+            capabilities = meta.get("capabilities", {})
+            modalities = [
+                name
+                for name, enabled in capabilities.get("input", {"text": True}).items()
+                if enabled
+            ]
+            variants = BACKEND["reasoning_choices"](self.model)
+            choices = variants or [("model-default", "medium")]
+            status = meta.get("status", "active")
+            detail.update(
+                f"[bold #ffff00]{meta.get('name', self.model)}[/]  "
+                f"[#5fd7ff]{meta.get('family', 'unknown')}[/]\n"
+                f"Context: {limits.get('context', '?'):,}   Output: {limits.get('output', '?'):,}   "
+                f"Status: {status}\n"
+                f"Input: {', '.join(modalities) or 'text'}   Tools: "
+                f"{'yes' if capabilities.get('toolcall') else 'no'}"
+            )
+        else:
+            meta = self.openai_metadata.get(self.model, {})
+            choices = [
+                (item.get("effort", "medium"), item.get("effort", "medium"))
+                for item in meta.get("supported_reasoning_levels", [])
+            ] or [("model-default", "medium")]
+            detail.update(
+                f"[bold #ffff00]{meta.get('display_name', self.model)}[/]  "
+                f"[#5fd7ff]OpenAI[/]\n"
+                f"Context: {meta.get('context_window', '?'):,}   "
+                f"Default reasoning: {meta.get('default_reasoning_level', 'medium')}\n"
+                f"Account: {self.account or 'not detected'}"
+            )
+
+        reasoning.set_options(choices)
+        state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
+        current = state.get("reasoning_effort")
+        values = {value for _, value in choices}
+        if current not in values:
+            current = BACKEND["default_reasoning_effort"](self.model) if self.provider == "opencode-go" else meta.get("default_reasoning_level", "medium")
+        if current not in values:
+            current = choices[0][1]
+        reasoning.value = current
+
+    def select_source(self, option_id: str) -> None:
+        kind, value = option_id.split(":", 1)
+        if kind == "account":
+            self.provider = "openai"
+            self.account = value
+        else:
+            self.provider = value
+        self.model = None
+        self.load_sources()
+        self.load_models()
+        self.set_status(f"Selected {self.provider}")
+
+    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
+        if event.option_list.id == "models" and event.option.id:
+            self.model = event.option.id.split(":", 1)[1]
+            self.update_details()
+
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        if not event.option.id:
+            return
+        if event.option_list.id == "sources":
+            self.select_source(event.option.id)
+            self.query_one("#models", OptionList).focus()
+        elif event.option_list.id == "models":
+            self.model = event.option.id.split(":", 1)[1]
+            self.action_apply()
+
+    def action_help(self) -> None:
+        self.push_screen(HelpScreen())
+
+    def action_accounts(self) -> None:
+        self.query_one("#sources", OptionList).focus()
+
+    def action_models(self) -> None:
+        self.query_one("#models", OptionList).focus()
+
+    def action_reasoning(self) -> None:
+        self.query_one("#reasoning", Select).focus()
+
+    def action_refresh(self) -> None:
+        self.set_status("Refreshing OpenCode Go catalog...")
+        try:
+            _, output = self.capture(BACKEND["refresh_opencode_models"])
+            self.catalog = BACKEND["opencode_model_catalog"]()
+            self.load_models()
+            self.set_status(output.splitlines()[-1] if output else "Catalog refreshed")
+        except SystemExit:
+            self.set_status("Model refresh failed; existing cache retained", error=True)
+
+    def action_apply(self) -> None:
+        if not self.model:
+            self.set_status("Select a model first", error=True)
+            return
+        try:
+            output = []
+            if self.provider == "openai" and self.account:
+                _, text = self.capture(BACKEND["use_openai_account"], self.account)
+                output.append(text)
+            BACKEND["validate_provider_model"](self.provider, self.model)
+            effort = self.query_one("#reasoning", Select).value
+            if effort is Select.BLANK:
+                effort = None
+            _, text = self.capture(
+                BACKEND["update_codex_config"], self.provider, self.model, effort
+            )
+            output.append(text)
+            self.load_state()
+            self.load_sources()
+            self.load_models()
+            self.set_status(
+                f"Active: {self.provider} / {self.model}"
+                + (f" / {effort}" if effort else "")
+            )
+        except (SystemExit, Exception) as exc:
+            self.set_status(str(exc) or "Could not activate selection", error=True)
+
+    def action_auth(self) -> None:
+        self.set_status(f"Starting {self.provider} authentication...")
+        try:
+            with self.suspend():
+                subprocess.run(
+                    [str(BACKEND_PATH), "auth", self.provider],
+                    check=True,
+                    env={**os.environ, "HOME": str(BACKEND["HOME"])},
+                )
+            self.load_state()
+            self.load_sources()
+            self.set_status(f"{self.provider} authentication completed")
+        except subprocess.CalledProcessError:
+            self.set_status("Authentication was not completed", error=True)
+
+    def action_status(self) -> None:
+        self.load_state()
+        self.load_sources()
+        self.load_models()
+        self.set_status(
+            f"Active: {self.provider} / {self.model}"
+            + (f" / {self.account}" if self.provider == "openai" and self.account else "")
+        )
+
+    def action_codex(self) -> None:
+        self.launch_codex = True
+        self.exit()
+
+
+def main() -> int:
+    app = CodexSwitchApp()
+    app.run()
+    if app.launch_codex:
+        os.execvp(BACKEND["codex_bin"](), [BACKEND["codex_bin"]()])
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

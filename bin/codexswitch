@@ -1,0 +1,661 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import time
+import base64
+from pathlib import Path
+import pwd
+
+
+OPENAI_FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
+OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENCODE_PROXY_URL = "http://127.0.0.1:14555/v1"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
+PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
+TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
+TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
+
+
+def user_home() -> Path:
+    sudo_user = os.environ.get("SUDO_USER")
+    if sudo_user and sudo_user != "root":
+        try:
+            return Path(pwd.getpwnam(sudo_user).pw_dir)
+        except KeyError:
+            pass
+    return Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+
+
+HOME = user_home()
+CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex")).expanduser()
+CODEX_CONFIG = CODEX_HOME / "config.toml"
+SWITCH_HOME = HOME / ".config/codexswitch"
+SWITCH_CONFIG = SWITCH_HOME / "config.json"
+OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
+OPENCODE_CONFIG = HOME / ".config/opencode/opencode.json"
+OPENCODE_AUTH = HOME / ".local/share/opencode/auth.json"
+OPENCODE_MODELS_CACHE = HOME / ".cache/opencode/models.json"
+OPENCODE_BIN_FALLBACK = HOME / ".local/share/npm-global/bin/opencode"
+_OPENCODE_CATALOG_CACHE: dict[str, dict] | None = None
+
+
+def die(message: str, code: int = 1) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, text=True, check=check)
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+    except json.JSONDecodeError as exc:
+        die(f"{path} is geen geldige JSON: {exc}")
+
+
+def set_home_owner(path: Path) -> None:
+    try:
+        home_stat = HOME.stat()
+        os.chown(path, home_stat.st_uid, home_stat.st_gid)
+    except (FileNotFoundError, PermissionError):
+        pass
+
+
+def ensure_home_owner(path: Path) -> None:
+    if not path.exists():
+        return
+    home_stat = HOME.stat()
+    path_stat = path.stat()
+    if (path_stat.st_uid, path_stat.st_gid) == (home_stat.st_uid, home_stat.st_gid):
+        return
+    if os.geteuid() == 0:
+        os.chown(path, home_stat.st_uid, home_stat.st_gid)
+        return
+    proc = subprocess.run(
+        ["sudo", "-n", "chown", f"{home_stat.st_uid}:{home_stat.st_gid}", str(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        die(f"kan eigendom van {path} niet herstellen; voer sudo chown uit")
+
+
+def write_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    set_home_owner(path.parent)
+    set_home_owner(path)
+
+
+def write_secret_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    set_home_owner(path.parent)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        temporary.chmod(0o600)
+        set_home_owner(temporary)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+        set_home_owner(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def jwt_claims(token: str) -> dict:
+    if not isinstance(token, str) or token.count(".") != 2:
+        return {}
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims if isinstance(claims, dict) else {}
+    except (ValueError, json.JSONDecodeError):
+        return {}
+
+
+def openai_auth_email(data: dict) -> str | None:
+    tokens = data.get("tokens", {})
+    if not isinstance(tokens, dict):
+        return None
+    for token_name in ("id_token", "access_token"):
+        claims = jwt_claims(tokens.get(token_name, ""))
+        email = claims.get("email")
+        if not email:
+            profile = claims.get("https://api.openai.com/profile", {})
+            email = profile.get("email") if isinstance(profile, dict) else None
+        if isinstance(email, str) and email.strip():
+            return email.strip().lower()
+    return None
+
+
+def account_filename(email: str) -> str:
+    normalized = email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+        die(f"ongeldig e-mailadres voor OpenAI-account: {email}")
+    return normalized + ".json"
+
+
+def openai_accounts() -> list[str]:
+    if not OPENAI_ACCOUNTS_DIR.exists():
+        return []
+    accounts = []
+    for path in OPENAI_ACCOUNTS_DIR.glob("*.json"):
+        data = read_json(path, {})
+        email = openai_auth_email(data)
+        if email:
+            accounts.append(email)
+    return sorted(set(accounts))
+
+
+def save_openai_account(expected_email: str | None = None) -> str:
+    auth_path = CODEX_HOME / "auth.json"
+    ensure_home_owner(auth_path)
+    data = read_json(auth_path, {})
+    email = openai_auth_email(data)
+    if not email:
+        die(f"kan geen OpenAI e-mailadres herkennen in {CODEX_HOME / 'auth.json'}")
+    if expected_email and email != expected_email.strip().lower():
+        die(f"huidige login is {email}, niet {expected_email.strip().lower()}")
+    destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
+    write_secret_json(destination, data)
+    print(f"OpenAI-account opgeslagen: {email}")
+    return email
+
+
+def use_openai_account(email: str) -> None:
+    normalized = email.strip().lower()
+    source = OPENAI_ACCOUNTS_DIR / account_filename(normalized)
+    if not source.exists():
+        die(f"geen opgeslagen OpenAI-account voor {normalized}")
+    data = read_json(source, {})
+    actual_email = openai_auth_email(data)
+    if actual_email != normalized:
+        die(f"accountbestand klopt niet: verwacht {normalized}, gevonden {actual_email or 'onbekend'}")
+    write_secret_json(CODEX_HOME / "auth.json", data)
+    state = read_json(SWITCH_CONFIG, {})
+    state["openai_account"] = normalized
+    write_json(SWITCH_CONFIG, state)
+    print(f"OpenAI-account actief: {normalized}")
+
+
+def list_openai_accounts() -> None:
+    current_data = read_json(CODEX_HOME / "auth.json", {})
+    current = openai_auth_email(current_data)
+    accounts = openai_accounts()
+    if not accounts:
+        print("Geen opgeslagen OpenAI-accounts")
+        return
+    for email in accounts:
+        marker = "*" if email == current else " "
+        print(f"{marker} {email}")
+
+
+def codex_bin() -> str:
+    found = shutil.which("codex")
+    if not found:
+        die("codex niet gevonden in PATH")
+    return found
+
+
+def opencode_bin() -> str:
+    found = shutil.which("opencode")
+    if found:
+        return found
+    if OPENCODE_BIN_FALLBACK.exists():
+        return str(OPENCODE_BIN_FALLBACK)
+    die("opencode niet gevonden in PATH of ~/.local/share/npm-global/bin/opencode")
+
+
+def proxy_healthy() -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen("http://127.0.0.1:14555/v1/health", timeout=1) as res:
+            return res.status == 200
+    except Exception:
+        return False
+
+
+def ensure_proxy() -> None:
+    if proxy_healthy():
+        return
+    if shutil.which("systemctl"):
+        subprocess.run(["sudo", "systemctl", "start", "codex-opencode-go-proxy.service"], check=False)
+        time.sleep(0.5)
+        if proxy_healthy():
+            return
+    if not Path(PROXY_BIN).exists():
+        die(f"proxy ontbreekt: {PROXY_BIN}")
+    log = SWITCH_HOME / "proxy.log"
+    SWITCH_HOME.mkdir(parents=True, exist_ok=True)
+    subprocess.Popen([PROXY_BIN], stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
+    time.sleep(0.5)
+    if not proxy_healthy():
+        die(f"OpenCode Go proxy startte niet; zie {log}")
+
+
+def openai_models() -> list[str]:
+    try:
+        proc = subprocess.run(
+            [codex_bin(), "debug", "models"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=12,
+            check=False,
+        )
+        data = json.loads(proc.stdout)
+        models = [m["slug"] for m in data.get("models", []) if m.get("slug")]
+        return models or OPENAI_FALLBACK_MODELS
+    except Exception:
+        return OPENAI_FALLBACK_MODELS
+
+
+def opencode_models() -> list[str]:
+    catalog = opencode_model_catalog()
+    if catalog:
+        return sorted(catalog)
+
+    cache = read_json(OPENCODE_MODELS_CACHE, {})
+    cached_models = cache.get("opencode-go", {}).get("models", {}) if isinstance(cache, dict) else {}
+    if isinstance(cached_models, dict) and cached_models:
+        return sorted(
+            model_id
+            for model_id, metadata in cached_models.items()
+            if not isinstance(metadata, dict) or metadata.get("status") != "deprecated"
+        )
+
+    data = read_json(OPENCODE_CONFIG, {})
+    models = data.get("provider", {}).get("opencode-go", {}).get("models", {})
+    if not isinstance(models, dict):
+        return []
+    return sorted(models.keys())
+
+
+def parse_opencode_catalog(output: str) -> dict[str, dict]:
+    catalog = {}
+    decoder = json.JSONDecoder()
+    pattern = re.compile(r"^opencode-go/([^\n]+)\n", re.MULTILINE)
+    for match in pattern.finditer(output):
+        try:
+            metadata, _ = decoder.raw_decode(output, match.end())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(metadata, dict) and metadata.get("status", "active") != "deprecated":
+            catalog[match.group(1)] = metadata
+    return catalog
+
+
+def refresh_opencode_models(strict: bool = True) -> bool:
+    global _OPENCODE_CATALOG_CACHE
+    print("OpenCode Go-modelcatalogus verversen...")
+    try:
+        proc = subprocess.run(
+            [opencode_bin(), "models", "opencode-go", "--refresh", "--verbose"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=60,
+            check=False,
+        )
+    except Exception as exc:
+        if strict:
+            die(f"model-refresh mislukt: {exc}")
+        print(f"warning: model-refresh mislukt; bestaande cache blijft actief: {exc}", file=sys.stderr)
+        return False
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout).strip()
+        if strict:
+            die(f"model-refresh mislukt: {detail or f'exitcode {proc.returncode}'}")
+        print(
+            f"warning: model-refresh mislukt; bestaande cache blijft actief: "
+            f"{detail or f'exitcode {proc.returncode}'}",
+            file=sys.stderr,
+        )
+        return False
+
+    _OPENCODE_CATALOG_CACHE = parse_opencode_catalog(proc.stdout)
+    print(f"OpenCode Go-modellen bijgewerkt: {len(_OPENCODE_CATALOG_CACHE)} actief")
+    return True
+
+
+def opencode_model_catalog() -> dict[str, dict]:
+    global _OPENCODE_CATALOG_CACHE
+    if _OPENCODE_CATALOG_CACHE is not None:
+        return _OPENCODE_CATALOG_CACHE
+    try:
+        proc = subprocess.run(
+            [opencode_bin(), "models", "opencode-go", "--verbose"],
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=15,
+            check=False,
+        )
+    except Exception:
+        return {}
+    if proc.returncode != 0:
+        return {}
+
+    _OPENCODE_CATALOG_CACHE = parse_opencode_catalog(proc.stdout)
+    return _OPENCODE_CATALOG_CACHE
+
+
+def reasoning_choices(model: str) -> list[tuple[str, str]]:
+    variants = opencode_model_catalog().get(model, {}).get("variants", {})
+    if not isinstance(variants, dict):
+        return []
+    if set(variants) == {"none", "thinking"}:
+        return [("thinking", "high"), ("none", "none")]
+
+    choices = []
+    for variant in variants:
+        effort = "xhigh" if variant == "max" else variant
+        if effort in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+            choices.append((variant, effort))
+    return choices
+
+
+def default_reasoning_effort(model: str) -> str:
+    choices = reasoning_choices(model)
+    efforts = [effort for _, effort in choices]
+    for preferred in ("medium", "high", "xhigh", "low", "none"):
+        if preferred in efforts:
+            return preferred
+    return "medium"
+
+
+def validate_provider_model(provider: str, model: str) -> None:
+    if provider == "openai":
+        if model not in openai_models():
+            print(f"warning: OpenAI model '{model}' staat niet in de huidige Codex catalogus", file=sys.stderr)
+        return
+    if provider == "opencode-go":
+        models = opencode_models()
+        if not models:
+            die(f"geen OpenCode Go modellen gevonden in {OPENCODE_CONFIG}")
+        if model not in models:
+            die(f"OpenCode Go model '{model}' bestaat niet in {OPENCODE_CONFIG}")
+        return
+    die(f"onbekende provider: {provider}")
+
+
+def remove_block(lines: list[str], section: str) -> list[str]:
+    start_re = re.compile(rf"^\s*\[{re.escape(section)}\]\s*$")
+    any_section_re = re.compile(r"^\s*\[.+\]\s*$")
+    output: list[str] = []
+    i = 0
+    while i < len(lines):
+        if start_re.match(lines[i]):
+            i += 1
+            while i < len(lines) and not any_section_re.match(lines[i]):
+                i += 1
+            continue
+        output.append(lines[i])
+        i += 1
+    return output
+
+
+def set_top_level(lines: list[str], key: str, value: str) -> list[str]:
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    any_section_re = re.compile(r"^\s*\[.+\]\s*$")
+    output: list[str] = []
+    inserted = False
+    in_top = True
+    for line in lines:
+        if any_section_re.match(line):
+            if in_top and not inserted:
+                output.append(f'{key} = "{value}"\n')
+                inserted = True
+            in_top = False
+        if in_top and key_re.match(line):
+            if not inserted:
+                output.append(f'{key} = "{value}"\n')
+                inserted = True
+            continue
+        output.append(line)
+    if not inserted:
+        output.insert(0, f'{key} = "{value}"\n')
+    return output
+
+
+def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
+    if provider == "opencode-go":
+        ensure_proxy()
+    CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    ensure_home_owner(CODEX_CONFIG)
+    lines = CODEX_CONFIG.read_text().splitlines(True) if CODEX_CONFIG.exists() else []
+    backup = CODEX_CONFIG.with_suffix(f".toml.bak-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}")
+    if CODEX_CONFIG.exists():
+        shutil.copy2(CODEX_CONFIG, backup)
+
+    lines = remove_block(lines, "model_providers.opencode-go.auth")
+    lines = remove_block(lines, "model_providers.opencode-go")
+    lines = set_top_level(lines, "model", model)
+    lines = set_top_level(lines, "model_provider", provider)
+    if provider == "opencode-go":
+        choices = reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        reasoning_effort = reasoning_effort or default_reasoning_effort(model)
+        if allowed and reasoning_effort not in allowed:
+            die(
+                f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                f"kies uit {', '.join(label for label, _ in choices)}"
+            )
+        lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+
+    if provider == "opencode-go":
+        if not Path(TOKEN_HELPER).exists():
+            die(f"token helper ontbreekt: {TOKEN_HELPER}")
+        provider_block = f'''
+
+[model_providers.opencode-go]
+name = "OpenCode Go"
+base_url = "{OPENCODE_PROXY_URL}"
+wire_api = "responses"
+
+[model_providers.opencode-go.auth]
+command = "{TOKEN_HELPER}"
+timeout_ms = 5000
+refresh_interval_ms = 0
+'''
+        lines.append(provider_block)
+
+    CODEX_CONFIG.write_text("".join(lines))
+    state = read_json(SWITCH_CONFIG, {})
+    state.update({"provider": provider, "model": model})
+    if provider == "opencode-go":
+        state["reasoning_effort"] = reasoning_effort
+    write_json(SWITCH_CONFIG, state)
+    if backup.exists():
+        print(f"backup: {backup}")
+    suffix = f" / denken={reasoning_effort}" if provider == "opencode-go" else ""
+    print(f"actief: {provider} / {model}{suffix}")
+
+
+def status() -> None:
+    state = read_json(SWITCH_CONFIG, {})
+    current_openai_account = openai_auth_email(read_json(CODEX_HOME / "auth.json", {}))
+    print(f"codex:        {codex_bin()}")
+    print(f"codex config: {CODEX_CONFIG}")
+    print(f"opencode:     {opencode_bin()}")
+    print(f"opencode cfg: {OPENCODE_CONFIG}")
+    print(f"opencode auth:{OPENCODE_AUTH}")
+    print(f"switch state: {SWITCH_CONFIG}")
+    print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}")
+    print(f"openai acct:  {current_openai_account or 'onbekend'}")
+    print(f"accounts:     {len(openai_accounts())} opgeslagen")
+    if OPENCODE_AUTH.exists():
+        data = read_json(OPENCODE_AUTH, {})
+        print(f"opencode-go auth: {'ok' if data.get('opencode-go', {}).get('key') else 'mist key'}")
+    else:
+        print("opencode-go auth: ontbreekt")
+
+
+def list_models() -> None:
+    print("OpenAI:")
+    for model in openai_models():
+        print(f"  {model}")
+    print("\nOpenCode Go:")
+    for model in opencode_models():
+        print(f"  {model}")
+
+
+def choose(title: str, options: list[str]) -> str:
+    if not options:
+        die(f"geen opties voor {title}")
+    print(f"\n{title}")
+    for idx, option in enumerate(options, 1):
+        print(f"  {idx}. {option}")
+    while True:
+        raw = input("Keuze: ").strip()
+        if raw.isdigit() and 1 <= int(raw) <= len(options):
+            return options[int(raw) - 1]
+        print("Ongeldige keuze")
+
+
+def auth(provider: str | None = None) -> None:
+    provider = provider or choose("Auth provider", ["openai", "opencode-go"])
+    if provider == "openai":
+        ensure_home_owner(CODEX_HOME / "auth.json")
+        current_auth = read_json(CODEX_HOME / "auth.json", {})
+        if openai_auth_email(current_auth):
+            save_openai_account()
+        run([codex_bin(), "login"], check=True)
+        ensure_home_owner(CODEX_HOME / "auth.json")
+        save_openai_account()
+        return
+    if provider == "opencode-go":
+        print("OpenCode auth login start. Kies/gebruik OpenCode Go als provider wanneer gevraagd.")
+        run([opencode_bin(), "auth", "login"], check=True)
+        return
+    die(f"onbekende auth provider: {provider}")
+
+
+def interactive() -> None:
+    while True:
+        action = choose(
+            "codexswitch",
+            ["provider/model kiezen", "modellen verversen", "auth", "status", "modellen tonen", "stop"],
+        )
+        if action == "provider/model kiezen":
+            provider = choose("Provider", ["openai", "opencode-go"])
+            if provider == "openai":
+                accounts = openai_accounts()
+                if accounts:
+                    use_openai_account(choose("OpenAI-account", accounts))
+            else:
+                refresh_opencode_models(strict=False)
+            models = openai_models() if provider == "openai" else opencode_models()
+            default = "gpt-5.5" if provider == "openai" else DEFAULT_OPENCODE_MODEL
+            ordered = [default] + [m for m in models if m != default]
+            model = choose("Model", ordered)
+            validate_provider_model(provider, model)
+            effort = None
+            if provider == "opencode-go":
+                choices = reasoning_choices(model)
+                if choices:
+                    label = choose("Denkstand", [label for label, _ in choices])
+                    effort = dict(choices)[label]
+                else:
+                    print("Denkstand: vaste modeldefault")
+            update_codex_config(provider, model, effort)
+        elif action == "modellen verversen":
+            refresh_opencode_models()
+        elif action == "auth":
+            auth()
+        elif action == "status":
+            status()
+        elif action == "modellen tonen":
+            list_models()
+        else:
+            return
+
+
+def usage() -> None:
+    print("""Gebruik:
+  codexswitch                 Commander TUI
+  codexswitch classic         klassiek tekstmenu
+  codexswitch list            toon modellen
+  codexswitch refresh         ververs OpenCode Go-modellen
+  codexswitch status          toon paden en huidige keuze
+  codexswitch use PROVIDER MODEL [DENKSTAND]
+  codexswitch auth [openai|opencode-go]
+  codexswitch accounts
+  codexswitch account save [EMAIL]
+  codexswitch account use EMAIL
+  codexswitch run [PROMPT...]
+""")
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        if sys.stdin.isatty() and sys.stdout.isatty() and Path(TUI_PYTHON).exists():
+            os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
+        interactive()
+        return 0
+    cmd = argv[0]
+    if cmd in {"-h", "--help", "help"}:
+        usage()
+        return 0
+    if cmd == "classic":
+        interactive()
+        return 0
+    if cmd == "list":
+        list_models()
+        return 0
+    if cmd == "refresh":
+        refresh_opencode_models()
+        return 0
+    if cmd == "status":
+        status()
+        return 0
+    if cmd == "auth":
+        auth(argv[1] if len(argv) > 1 else None)
+        return 0
+    if cmd == "accounts":
+        list_openai_accounts()
+        return 0
+    if cmd == "account":
+        if len(argv) < 2:
+            die("gebruik: codexswitch account save [EMAIL] | account use EMAIL")
+        action = argv[1]
+        if action == "save" and len(argv) in {2, 3}:
+            save_openai_account(argv[2] if len(argv) == 3 else None)
+            return 0
+        if action == "use" and len(argv) == 3:
+            use_openai_account(argv[2])
+            return 0
+        die("gebruik: codexswitch account save [EMAIL] | account use EMAIL")
+    if cmd == "use":
+        if len(argv) not in {3, 4}:
+            die("gebruik: codexswitch use PROVIDER MODEL [DENKSTAND]")
+        validate_provider_model(argv[1], argv[2])
+        effort = argv[3] if len(argv) == 4 else None
+        if argv[1] == "opencode-go" and effort == "max":
+            effort = "xhigh"
+        if argv[1] == "opencode-go" and effort == "thinking":
+            effort = "high"
+        update_codex_config(argv[1], argv[2], effort)
+        return 0
+    if cmd == "run":
+        os.execvp(codex_bin(), [codex_bin(), *argv[1:]])
+    usage()
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
