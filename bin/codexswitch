@@ -5,6 +5,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import time
 import base64
 from pathlib import Path
@@ -267,14 +268,18 @@ def openai_models() -> list[str]:
 
 def openai_model_catalog() -> dict[str, dict]:
     try:
-        proc = subprocess.run(
-            [codex_bin(), "debug", "models"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            timeout=12,
-            check=False,
-        )
+        with tempfile.TemporaryDirectory(prefix="codexswitch-models-") as temporary_home:
+            env = os.environ.copy()
+            env["CODEX_HOME"] = temporary_home
+            proc = subprocess.run(
+                [codex_bin(), "debug", "models"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=12,
+                check=False,
+                env=env,
+            )
         data = json.loads(proc.stdout)
         return {
             model["slug"]: model

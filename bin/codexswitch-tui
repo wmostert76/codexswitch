@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 import contextlib
 import io
-import json
 import os
 import runpy
 import subprocess
@@ -212,6 +211,7 @@ class CodexSwitchApp(App):
         self.catalog = {}
         self.openai_metadata = {}
         self.launch_codex = False
+        self.loading_sources = False
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
@@ -263,21 +263,7 @@ class CodexSwitchApp(App):
         auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
         self.account = BACKEND["openai_auth_email"](auth)
         self.catalog = BACKEND["opencode_model_catalog"]()
-        try:
-            proc = subprocess.run(
-                [BACKEND["codex_bin"](), "debug", "models"],
-                text=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=15,
-                check=False,
-            )
-            data = json.loads(proc.stdout)
-            self.openai_metadata = {
-                item["slug"]: item for item in data.get("models", []) if item.get("slug")
-            }
-        except Exception:
-            self.openai_metadata = {}
+        self.openai_metadata = BACKEND["openai_model_catalog"]()
 
     def load_sources(self) -> None:
         openai_active = self.provider == "openai"
@@ -306,12 +292,16 @@ class CodexSwitchApp(App):
             )
         )
         sources = self.query_one("#sources", OptionList)
-        sources.set_options(options)
-        target = f"account:{self.account}" if self.provider == "openai" and self.account else f"provider:{self.provider}"
-        for index, option in enumerate(sources.options):
-            if option.id == target:
-                sources.highlighted = index
-                break
+        self.loading_sources = True
+        try:
+            sources.set_options(options)
+            target = f"account:{self.account}" if self.provider == "openai" and self.account else f"provider:{self.provider}"
+            for index, option in enumerate(sources.options):
+                if option.id == target:
+                    sources.highlighted = index
+                    break
+        finally:
+            self.loading_sources = False
 
     def load_models(self) -> None:
         models = (
@@ -414,7 +404,13 @@ class CodexSwitchApp(App):
         self.set_status(f"Selected {self.provider}")
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option_list.id == "models" and event.option.id:
+        if event.option_list.id == "sources" and event.option.id and not self.loading_sources:
+            kind, value = event.option.id.split(":", 1)
+            selected_provider = "openai" if kind == "account" else value
+            selected_account = value if kind == "account" else self.account
+            if selected_provider != self.provider or selected_account != self.account:
+                self.select_source(event.option.id)
+        elif event.option_list.id == "models" and event.option.id:
             self.model = event.option.id.split(":", 1)[1]
             self.update_details()
         elif event.option_list.id == "reasoning" and event.option.id:

@@ -161,6 +161,21 @@ def content_to_text(content) -> str:
     return str(content)
 
 
+def append_tool_call(messages: list[dict], item: dict) -> None:
+    tool_call = {
+        "id": item.get("call_id") or item.get("id"),
+        "type": "function",
+        "function": {
+            "name": item.get("name", ""),
+            "arguments": item.get("arguments") or item.get("input") or "",
+        },
+    }
+    if messages and messages[-1].get("role") == "assistant" and messages[-1].get("tool_calls"):
+        messages[-1]["tool_calls"].append(tool_call)
+        return
+    messages.append({"role": "assistant", "content": None, "tool_calls": [tool_call]})
+
+
 def responses_input_to_messages(body: dict) -> list[dict]:
     messages = []
     instructions = body.get("instructions")
@@ -177,12 +192,75 @@ def responses_input_to_messages(body: dict) -> list[dict]:
             if not isinstance(item, dict):
                 messages.append({"role": "user", "content": str(item)})
                 continue
+            item_type = item.get("type")
+            if item_type in {"function_call", "custom_tool_call"}:
+                append_tool_call(messages, item)
+                continue
+            if item_type in {"function_call_output", "custom_tool_call_output"}:
+                messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": item.get("call_id"),
+                        "content": content_to_text(item.get("output", "")),
+                    }
+                )
+                continue
             role = item.get("role") or "user"
             if role == "developer":
                 role = "system"
             content = item.get("content", "")
             messages.append({"role": role, "content": content_to_text(content)})
     return messages or [{"role": "user", "content": ""}]
+
+
+def responses_tools_to_chat(body: dict) -> list[dict]:
+    tools = []
+    for tool in body.get("tools", []):
+        if not isinstance(tool, dict):
+            continue
+        if tool.get("type") == "function" and tool.get("name"):
+            function = {
+                "name": tool["name"],
+                "description": tool.get("description", ""),
+                "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+            }
+            if "strict" in tool:
+                function["strict"] = tool["strict"]
+            tools.append({"type": "function", "function": function})
+        elif tool.get("type") == "custom" and tool.get("name"):
+            tools.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool["name"],
+                        "description": tool.get("description", ""),
+                        "parameters": {
+                            "type": "object",
+                            "properties": {"input": {"type": "string"}},
+                            "required": ["input"],
+                            "additionalProperties": False,
+                        },
+                    },
+                }
+            )
+    return tools
+
+
+def chat_tool_calls(message: dict) -> list[dict]:
+    output = []
+    for index, tool_call in enumerate(message.get("tool_calls") or []):
+        function = tool_call.get("function") or {}
+        call_id = tool_call.get("id") or f"call_{index}"
+        output.append(
+            {
+                "id": f"fc_{call_id}",
+                "type": "function_call",
+                "call_id": call_id,
+                "name": function.get("name", ""),
+                "arguments": function.get("arguments", ""),
+            }
+        )
+    return output
 
 
 def configured_reasoning_effort(model_id: str) -> str | None:
@@ -245,6 +323,11 @@ def upstream_chat(body: dict):
         "messages": responses_input_to_messages(body),
         "stream": bool(body.get("stream", True)),
     }
+    tools = responses_tools_to_chat(body)
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = body.get("tool_choice", "auto")
+        payload["parallel_tool_calls"] = body.get("parallel_tool_calls", True)
     if body.get("temperature") is not None:
         payload["temperature"] = body["temperature"]
     if body.get("max_output_tokens") is not None:
@@ -316,7 +399,18 @@ class Handler(BaseHTTPRequestHandler):
         try:
             with upstream_chat({**body, "stream": False}) as upstream:
                 data = json.loads(upstream.read())
-            text = data.get("choices", [{}])[0].get("message", {}).get("content", "")
+            message = data.get("choices", [{}])[0].get("message", {})
+            text = message.get("content") or ""
+            output = []
+            if text:
+                output.append(
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": text}],
+                    }
+                )
+            output.extend(chat_tool_calls(message))
             rid = f"resp_{int(time.time() * 1000)}"
             self.send_json(
                 200,
@@ -326,7 +420,7 @@ class Handler(BaseHTTPRequestHandler):
                     "created_at": int(time.time()),
                     "status": "completed",
                     "model": body.get("model"),
-                    "output": [{"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}],
+                    "output": output,
                 },
             )
         except Exception as exc:
@@ -343,6 +437,8 @@ class Handler(BaseHTTPRequestHandler):
         rid = f"resp_{int(time.time() * 1000)}"
         item_id = "msg_0"
         full_text = []
+        tool_calls = {}
+        output = []
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")
@@ -351,10 +447,9 @@ class Handler(BaseHTTPRequestHandler):
 
         response_base = {"id": rid, "object": "response", "created_at": int(time.time()), "status": "in_progress", "model": body.get("model"), "output": []}
         think_filter = ThinkFilter()
-        emitted_text = False
+        text_started = False
+        text_output_index = None
         self.sse("response.created", {"type": "response.created", "response": response_base})
-        self.sse("response.output_item.added", {"type": "response.output_item.added", "output_index": 0, "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
-        self.sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": ""}})
 
         try:
             with upstream_chat({**body, "stream": True}) as upstream:
@@ -374,30 +469,106 @@ class Handler(BaseHTTPRequestHandler):
                         continue
                     delta_obj = choices[0].get("delta", {})
                     delta = delta_obj.get("content")
-                    if not delta:
-                        continue
-                    delta = think_filter.feed(delta)
-                    if not delta:
-                        continue
-                    if not emitted_text:
-                        delta = delta.lstrip()
-                    if not delta:
-                        continue
-                    emitted_text = True
-                    full_text.append(delta)
-                    self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": delta})
+                    if delta:
+                        delta = think_filter.feed(delta)
+                        if not text_started:
+                            delta = delta.lstrip()
+                        if delta:
+                            if not text_started:
+                                text_started = True
+                                text_output_index = len(output)
+                                output.append(None)
+                                self.sse("response.output_item.added", {"type": "response.output_item.added", "output_index": text_output_index, "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
+                                self.sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": ""}})
+                            full_text.append(delta)
+                            self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "delta": delta})
+
+                    for tool_delta in delta_obj.get("tool_calls") or []:
+                        index = tool_delta.get("index", 0)
+                        state = tool_calls.setdefault(
+                            index,
+                            {
+                                "call_id": tool_delta.get("id") or f"call_{index}",
+                                "name": "",
+                                "arguments": [],
+                                "started": False,
+                                "output_index": None,
+                            },
+                        )
+                        if tool_delta.get("id"):
+                            state["call_id"] = tool_delta["id"]
+                        function = tool_delta.get("function") or {}
+                        if function.get("name"):
+                            state["name"] += function["name"]
+                        arguments = function.get("arguments") or ""
+                        if not state["started"] and state["name"]:
+                            state["started"] = True
+                            state["output_index"] = len(output)
+                            output.append(None)
+                            self.sse(
+                                "response.output_item.added",
+                                {
+                                    "type": "response.output_item.added",
+                                    "output_index": state["output_index"],
+                                    "item": {
+                                        "id": f"fc_{state['call_id']}",
+                                        "type": "function_call",
+                                        "call_id": state["call_id"],
+                                        "name": state["name"],
+                                        "arguments": "",
+                                    },
+                                },
+                            )
+                        if arguments:
+                            state["arguments"].append(arguments)
+                            if state["started"]:
+                                self.sse(
+                                    "response.function_call_arguments.delta",
+                                    {
+                                        "type": "response.function_call_arguments.delta",
+                                        "item_id": f"fc_{state['call_id']}",
+                                        "output_index": state["output_index"],
+                                        "delta": arguments,
+                                    },
+                                )
 
             final_delta = think_filter.finish()
             if final_delta:
-                if not emitted_text:
+                if not text_started:
                     final_delta = final_delta.lstrip()
+                if final_delta and not text_started:
+                    text_started = True
+                    text_output_index = len(output)
+                    output.append(None)
+                    self.sse("response.output_item.added", {"type": "response.output_item.added", "output_index": text_output_index, "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
+                    self.sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": ""}})
                 full_text.append(final_delta)
-                self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": 0, "content_index": 0, "delta": final_delta})
+                self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "delta": final_delta})
             text = "".join(full_text)
-            self.sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": 0, "content_index": 0, "text": text})
-            self.sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": 0, "content_index": 0, "part": {"type": "output_text", "text": text}})
-            self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}})
-            self.sse("response.completed", {"type": "response.completed", "response": {"id": rid, "object": "response", "created_at": int(time.time()), "status": "completed", "model": body.get("model"), "output": [{"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}]}})
+            if text_started:
+                message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+                output[text_output_index] = message
+                self.sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "text": text})
+                self.sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": text}})
+                self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": text_output_index, "item": message})
+            for state in tool_calls.values():
+                if not state["started"]:
+                    continue
+                arguments = "".join(state["arguments"])
+                item = {
+                    "id": f"fc_{state['call_id']}",
+                    "type": "function_call",
+                    "call_id": state["call_id"],
+                    "name": state["name"],
+                    "arguments": arguments,
+                }
+                output[state["output_index"]] = item
+                self.sse("response.function_call_arguments.done", {"type": "response.function_call_arguments.done", "item_id": item["id"], "output_index": state["output_index"], "arguments": arguments})
+                self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": state["output_index"], "item": item})
+            if not output:
+                message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": ""}]}
+                output.append(message)
+            self.sse("response.completed", {"type": "response.completed", "response": {"id": rid, "object": "response", "created_at": int(time.time()), "status": "completed", "model": body.get("model"), "output": output}})
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except Exception as exc:
