@@ -261,6 +261,11 @@ def ensure_proxy() -> None:
 
 
 def openai_models() -> list[str]:
+    catalog = openai_model_catalog()
+    return list(catalog) or OPENAI_FALLBACK_MODELS
+
+
+def openai_model_catalog() -> dict[str, dict]:
     try:
         proc = subprocess.run(
             [codex_bin(), "debug", "models"],
@@ -271,10 +276,22 @@ def openai_models() -> list[str]:
             check=False,
         )
         data = json.loads(proc.stdout)
-        models = [m["slug"] for m in data.get("models", []) if m.get("slug")]
-        return models or OPENAI_FALLBACK_MODELS
+        return {
+            model["slug"]: model
+            for model in data.get("models", [])
+            if model.get("slug")
+        }
     except Exception:
-        return OPENAI_FALLBACK_MODELS
+        return {}
+
+
+def openai_reasoning_choices(model: str) -> list[tuple[str, str]]:
+    metadata = openai_model_catalog().get(model, {})
+    return [
+        (item["effort"], item["effort"])
+        for item in metadata.get("supported_reasoning_levels", [])
+        if item.get("effort")
+    ]
 
 
 def opencode_models() -> list[str]:
@@ -469,6 +486,15 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 f"kies uit {', '.join(label for label, _ in choices)}"
             )
         lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+    elif provider == "openai" and reasoning_effort:
+        choices = openai_reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        if allowed and reasoning_effort not in allowed:
+            die(
+                f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                f"kies uit {', '.join(label for label, _ in choices)}"
+            )
+        lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
 
     if provider == "opencode-go":
         if not Path(TOKEN_HELPER).exists():
@@ -490,12 +516,12 @@ refresh_interval_ms = 0
     CODEX_CONFIG.write_text("".join(lines))
     state = read_json(SWITCH_CONFIG, {})
     state.update({"provider": provider, "model": model})
-    if provider == "opencode-go":
+    if reasoning_effort:
         state["reasoning_effort"] = reasoning_effort
     write_json(SWITCH_CONFIG, state)
     if backup.exists():
         print(f"backup: {backup}")
-    suffix = f" / denken={reasoning_effort}" if provider == "opencode-go" else ""
+    suffix = f" / denken={reasoning_effort}" if reasoning_effort else ""
     print(f"actief: {provider} / {model}{suffix}")
 
 

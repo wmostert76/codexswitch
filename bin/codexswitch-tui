@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Header, Label, OptionList, Select, Static
+from textual.widgets import Header, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 
@@ -35,9 +35,9 @@ class HelpScreen(ModalScreen):
   Enter             Open or activate
 
 [b]Function keys[/]
-  F2 Accounts       Focus provider/account panel
+  F2 Providers      Focus provider/account panel
   F3 Models         Focus model panel
-  F4 Reasoning      Focus reasoning selector
+  F4 Reasoning      Focus reasoning modes
   F5 Refresh        Refresh OpenCode Go catalog
   F6 Apply          Activate selection
   F7 Auth           Login to selected provider
@@ -75,16 +75,23 @@ class CodexSwitchApp(App):
     }
 
     .pane {
-        width: 1fr;
         height: 1fr;
-        border: ascii #bcbcbc;
+        border: solid #bcbcbc;
         background: #000087;
+    }
+
+    #model-pane {
+        width: 1fr;
+    }
+
+    #source-pane {
+        width: 38;
     }
 
     .pane-title {
         height: 1;
-        background: #000087;
-        color: #ffff00;
+        background: #bcbcbc;
+        color: #000087;
         text-align: center;
         text-style: bold;
     }
@@ -94,12 +101,9 @@ class CodexSwitchApp(App):
         background: #000087;
         color: #bcbcbc;
         padding: 0;
+        border: none;
         scrollbar-color: #00afaf;
         scrollbar-background: #000087;
-    }
-
-    OptionList:focus {
-        border: none;
     }
 
     OptionList > .option-list--option-highlighted {
@@ -108,45 +112,42 @@ class CodexSwitchApp(App):
         text-style: bold;
     }
 
-    #detail-box {
-        height: 8;
+    #lower-pane {
+        height: 9;
         margin: 0 1;
-        border: ascii #bcbcbc;
+    }
+
+    #detail-box, #reason-box {
+        height: 1fr;
+        border: solid #bcbcbc;
         background: #000087;
+    }
+
+    #detail-box {
+        width: 2fr;
         padding: 0 1;
     }
 
-    #detail-title {
+    #reason-box {
+        width: 30;
+    }
+
+    .lower-title {
         height: 1;
-        color: #ffff00;
+        background: #bcbcbc;
+        color: #000087;
+        text-align: center;
         text-style: bold;
     }
 
     #model-detail {
-        height: 4;
+        height: 1fr;
         color: #bcbcbc;
     }
 
-    #reason-row {
-        height: 1;
-    }
-
-    #reason-label {
-        width: 16;
-        color: #ffff00;
-    }
-
-    Select {
+    #reasoning {
         width: 1fr;
-        height: 1;
-        background: #00afaf;
-        color: #000000;
-        border: none;
-    }
-
-    Select:focus {
-        background: #ffffff;
-        color: #000000;
+        height: 1fr;
     }
 
     #status {
@@ -205,26 +206,22 @@ class CodexSwitchApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="workspace"):
-            with Vertical(classes="pane"):
-                yield Label("Providers / Accounts", classes="pane-title")
-                yield OptionList(id="sources")
-            with Vertical(classes="pane"):
-                yield Label("Models", classes="pane-title")
+            with Vertical(classes="pane", id="model-pane"):
+                yield Label("┤ MODELS ├", classes="pane-title")
                 yield OptionList(id="models")
-        with Vertical(id="detail-box"):
-            yield Label("Selection details", id="detail-title")
-            yield Static("", id="model-detail")
-            with Horizontal(id="reason-row"):
-                yield Label("Reasoning mode", id="reason-label")
-                yield Select(
-                    [("model-default", "medium")],
-                    id="reasoning",
-                    allow_blank=False,
-                    value="medium",
-                )
+            with Vertical(classes="pane", id="source-pane"):
+                yield Label("┤ PROVIDERS / ACCOUNTS ├", classes="pane-title")
+                yield OptionList(id="sources")
+        with Horizontal(id="lower-pane"):
+            with Vertical(id="detail-box"):
+                yield Label("┤ MODEL DETAILS ├", classes="lower-title")
+                yield Static("", id="model-detail")
+            with Vertical(id="reason-box"):
+                yield Label("┤ REASONING ├", classes="lower-title")
+                yield OptionList(id="reasoning")
         yield Static(" Ready", id="status")
         yield Static(
-            "[reverse bold]1[/]Help [reverse bold]2[/]Acct "
+            "[reverse bold]1[/]Help [reverse bold]2[/]Prov "
             "[reverse bold]3[/]Model [reverse bold]4[/]Think "
             "[reverse bold]5[/]Refsh [reverse bold]6[/]Apply "
             "[reverse bold]7[/]Auth [reverse bold]8[/]Status "
@@ -236,7 +233,7 @@ class CodexSwitchApp(App):
         self.load_state()
         self.load_sources()
         self.load_models()
-        self.query_one("#sources", OptionList).focus()
+        self.query_one("#models", OptionList).focus()
 
     def capture(self, function, *args):
         output = io.StringIO()
@@ -273,21 +270,27 @@ class CodexSwitchApp(App):
             self.openai_metadata = {}
 
     def load_sources(self) -> None:
+        openai_active = self.provider == "openai"
+        opencode_active = self.provider == "opencode-go"
         options = [
             Option(
                 Text.from_markup(
-                    f"[b]{'* ' if self.provider == 'openai' else '  '}OpenAI[/]"
+                    f"[b]{'●' if openai_active else '○'} OPENAI[/]"
                 ),
                 id="provider:openai",
             )
         ]
-        for email in BACKEND["openai_accounts"]():
-            marker = "*" if email == self.account else " "
-            options.append(Option(f"  {marker} {email}", id=f"account:{email}"))
+        accounts = BACKEND["openai_accounts"]()
+        for index, email in enumerate(accounts):
+            branch = "└─" if index == len(accounts) - 1 else "├─"
+            marker = "●" if openai_active and email == self.account else "○"
+            options.append(
+                Option(f"  {branch} {marker} {email}", id=f"account:{email}")
+            )
         options.append(
             Option(
                 Text.from_markup(
-                    f"[b]{'* ' if self.provider == 'opencode-go' else '  '}OpenCode Go[/]"
+                    f"[b]{'●' if opencode_active else '○'} OPENCODE GO[/]"
                 ),
                 id="provider:opencode-go",
             )
@@ -308,8 +311,8 @@ class CodexSwitchApp(App):
         )
         options = []
         for model in models:
-            marker = "*" if model == self.model else " "
-            options.append(Option(f"{marker} {model}", id=f"model:{model}"))
+            marker = "●" if model == self.model else "○"
+            options.append(Option(f" {marker}  {model}", id=f"model:{model}"))
         model_list = self.query_one("#models", OptionList)
         model_list.set_options(options)
         default_model = (
@@ -329,11 +332,11 @@ class CodexSwitchApp(App):
 
     def update_details(self) -> None:
         detail = self.query_one("#model-detail", Static)
-        reasoning = self.query_one("#reasoning", Select)
+        reasoning = self.query_one("#reasoning", OptionList)
         if not self.model:
             detail.update("No model available")
-            reasoning.set_options([("model-default", "medium")])
-            reasoning.value = "medium"
+            reasoning.set_options([Option("  model default", id="reason:medium")])
+            reasoning.highlighted = 0
             return
 
         if self.provider == "opencode-go":
@@ -358,10 +361,9 @@ class CodexSwitchApp(App):
             )
         else:
             meta = self.openai_metadata.get(self.model, {})
-            choices = [
-                (item.get("effort", "medium"), item.get("effort", "medium"))
-                for item in meta.get("supported_reasoning_levels", [])
-            ] or [("model-default", "medium")]
+            choices = BACKEND["openai_reasoning_choices"](self.model) or [
+                ("model-default", "medium")
+            ]
             detail.update(
                 f"[bold #ffff00]{meta.get('display_name', self.model)}[/]  "
                 f"[#5fd7ff]OpenAI[/]\n"
@@ -370,7 +372,6 @@ class CodexSwitchApp(App):
                 f"Account: {self.account or 'not detected'}"
             )
 
-        reasoning.set_options(choices)
         state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
         current = state.get("reasoning_effort")
         values = {value for _, value in choices}
@@ -378,7 +379,17 @@ class CodexSwitchApp(App):
             current = BACKEND["default_reasoning_effort"](self.model) if self.provider == "opencode-go" else meta.get("default_reasoning_level", "medium")
         if current not in values:
             current = choices[0][1]
-        reasoning.value = current
+        reason_options = []
+        selected_index = 0
+        for index, (label, value) in enumerate(choices):
+            marker = "●" if value == current else "○"
+            reason_options.append(
+                Option(f" {marker}  {label}", id=f"reason:{value}")
+            )
+            if value == current:
+                selected_index = index
+        reasoning.set_options(reason_options)
+        reasoning.highlighted = selected_index
 
     def select_source(self, option_id: str) -> None:
         kind, value = option_id.split(":", 1)
@@ -396,6 +407,8 @@ class CodexSwitchApp(App):
         if event.option_list.id == "models" and event.option.id:
             self.model = event.option.id.split(":", 1)[1]
             self.update_details()
+        elif event.option_list.id == "reasoning" and event.option.id:
+            self.mark_reasoning(event.option.id.split(":", 1)[1])
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if not event.option.id:
@@ -405,6 +418,9 @@ class CodexSwitchApp(App):
             self.query_one("#models", OptionList).focus()
         elif event.option_list.id == "models":
             self.model = event.option.id.split(":", 1)[1]
+            self.update_details()
+            self.query_one("#reasoning", OptionList).focus()
+        elif event.option_list.id == "reasoning":
             self.action_apply()
 
     def action_help(self) -> None:
@@ -417,7 +433,26 @@ class CodexSwitchApp(App):
         self.query_one("#models", OptionList).focus()
 
     def action_reasoning(self) -> None:
-        self.query_one("#reasoning", Select).focus()
+        self.query_one("#reasoning", OptionList).focus()
+
+    def selected_reasoning(self) -> str | None:
+        reasoning = self.query_one("#reasoning", OptionList)
+        option = reasoning.highlighted_option
+        if option is None or not option.id:
+            return None
+        return option.id.split(":", 1)[1]
+
+    def mark_reasoning(self, selected: str) -> None:
+        reasoning = self.query_one("#reasoning", OptionList)
+        for index, option in enumerate(reasoning.options):
+            if not option.id:
+                continue
+            value = option.id.split(":", 1)[1]
+            label = str(option.prompt).lstrip(" ●○")
+            marker = "●" if value == selected else "○"
+            reasoning.replace_option_prompt_at_index(
+                index, f" {marker}  {label}"
+            )
 
     def action_refresh(self) -> None:
         self.set_status("Refreshing OpenCode Go catalog...")
@@ -439,9 +474,7 @@ class CodexSwitchApp(App):
                 _, text = self.capture(BACKEND["use_openai_account"], self.account)
                 output.append(text)
             BACKEND["validate_provider_model"](self.provider, self.model)
-            effort = self.query_one("#reasoning", Select).value
-            if effort is Select.BLANK:
-                effort = None
+            effort = self.selected_reasoning()
             _, text = self.capture(
                 BACKEND["update_codex_config"], self.provider, self.model, effort
             )
