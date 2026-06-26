@@ -19,7 +19,7 @@ Versioning follows pragmatic semantic versioning:
   the account after Codex completes login.
 - `codexswitch --help` now shows the project credits.
 - Running `codexswitch` without arguments now shows help; the TUI is started
-  explicitly with `codexswitch tui` or `codexswitch commander`.
+  explicitly with `codexswitch tui`.
 
 ## [0.5.2] - 2026-06-26
 

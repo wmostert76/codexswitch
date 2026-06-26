@@ -79,7 +79,6 @@ every install so updated proxy code is active immediately.
 ```bash
 codexswitch                         # show help
 codexswitch tui                     # start Commander TUI
-codexswitch commander               # start Commander TUI
 codexswitch classic                 # searchable classic picker
 codexswitch use PROVIDER MODEL [REASONING]
 codexswitch auth [openai|opencode-go|openrouter]

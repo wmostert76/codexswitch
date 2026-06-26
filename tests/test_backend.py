@@ -51,6 +51,7 @@ def test_cli_help_contains_credits_and_tui_command():
     assert "by WAM-Software since (c) 1988" in proc.stdout
     assert "AI-assisted implementation: OpenAI Codex" in proc.stdout
     assert "codexswitch tui" in proc.stdout
+    assert "codexswitch commander" not in proc.stdout
 
 
 def test_cli_without_args_shows_help_not_tui():
@@ -64,6 +65,7 @@ def test_cli_without_args_shows_help_not_tui():
     assert "CodexSwitch Commander" in proc.stdout
     assert "Usage:" in proc.stdout
     assert "codexswitch tui" in proc.stdout
+    assert "codexswitch commander" not in proc.stdout
 
 
 def test_choose_filters_before_selecting(monkeypatch):

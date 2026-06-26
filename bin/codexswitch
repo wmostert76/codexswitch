@@ -919,7 +919,6 @@ def usage() -> None:
 
 Usage:
   codexswitch tui                    start Commander TUI
-  codexswitch commander              start Commander TUI
   codexswitch classic                start searchable classic picker
   codexswitch use PROVIDER MODEL [REASONING]
   codexswitch auth [openai|opencode-go|openrouter]
@@ -959,7 +958,7 @@ def main(argv: list[str]) -> int:
     if cmd in {"-v", "--version"}:
         print(f"{Path(sys.argv[0]).name} {VERSION}")
         return 0
-    if cmd in {"tui", "commander"}:
+    if cmd == "tui":
         if not Path(TUI_PYTHON).exists():
             die(f"TUI Python ontbreekt: {TUI_PYTHON}; draai ./install.sh")
         os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
