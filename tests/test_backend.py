@@ -24,7 +24,7 @@ _spec.loader.exec_module(cs)
 
 
 def test_version_constant_is_release_version():
-    assert cs.VERSION == "0.5.3"
+    assert cs.VERSION == "0.5.4"
     assert cs.CREDITS_OWNER == "by WAM-Software since (c) 1988"
     assert cs.CREDITS_AI == "AI-assisted implementation: OpenAI Codex"
 
@@ -37,7 +37,7 @@ def test_cli_version_output():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.3"
+    assert proc.stdout.strip() == "codexswitch 0.5.4"
 
 
 def test_cli_help_contains_credits_and_tui_command():

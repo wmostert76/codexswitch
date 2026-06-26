@@ -71,7 +71,7 @@ every install so updated proxy code is active immediately.
 | `F6` | Apply selected provider/model |
 | `F7` | Authenticate selected provider |
 | `F8` | Reload active status |
-| `F9` | Start Codex |
+| `F9` | Resume Codex with sandbox bypass and search |
 | `F10` | Quit |
 
 ## CLI reference
@@ -90,6 +90,12 @@ codexswitch list
 codexswitch status
 codexswitch run [PROMPT...]
 codexswitch --version
+```
+
+From the TUI, `F9` applies the current selection and then starts Codex as:
+
+```bash
+codex resume --dangerously-bypass-approvals-and-sandbox --search
 ```
 
 Examples:

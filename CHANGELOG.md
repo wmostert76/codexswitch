@@ -8,6 +8,13 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.4] - 2026-06-26
+
+### Changed
+
+- TUI `F9` now launches Codex as
+  `codex resume --dangerously-bypass-approvals-and-sandbox --search`.
+
 ## [0.5.3] - 2026-06-26
 
 ### Changed

@@ -21,8 +21,17 @@ _spec.loader.exec_module(tui)
 
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.3" in tui.CodexSwitchApp.SUB_TITLE
+    assert "v0.5.4" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
+
+
+def test_codex_launch_argv_uses_resume_bypass_and_search():
+    assert tui.codex_launch_argv("/usr/local/bin/codex") == [
+        "/usr/local/bin/codex",
+        "resume",
+        "--dangerously-bypass-approvals-and-sandbox",
+        "--search",
+    ]
 
 
 def test_button_bar_is_compact_commander_style():

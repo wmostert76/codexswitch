@@ -18,6 +18,11 @@ from textual.widgets.option_list import Option
 PROJECT = Path(__file__).resolve().parents[1]
 BACKEND_PATH = PROJECT / "bin/codexswitch"
 BACKEND = runpy.run_path(str(BACKEND_PATH))
+CODEX_TUI_LAUNCH_ARGS = (
+    "resume",
+    "--dangerously-bypass-approvals-and-sandbox",
+    "--search",
+)
 BUTTON_BAR = (
     "[reverse bold]1[/]Help  "
     "[reverse bold]2[/]Prov  "
@@ -55,7 +60,7 @@ AI-assisted implementation: OpenAI Codex
   F6 Apply          Activate selection
   F7 Auth           Login to selected provider
   F8 Status         Reload active configuration
-  F9 Codex          Start Codex with active config
+  F9 Codex          Resume Codex with bypass sandbox and search
   F10 Quit          Close CodexSwitch
 
 Press Escape or F1 to close.
@@ -746,8 +751,14 @@ def main() -> int:
     app = CodexSwitchApp()
     app.run()
     if app.launch_codex:
-        os.execvp(BACKEND["codex_bin"](), [BACKEND["codex_bin"]()])
+        argv = codex_launch_argv()
+        os.execvp(argv[0], argv)
     return 0
+
+
+def codex_launch_argv(binary: str | None = None) -> list[str]:
+    binary = binary or BACKEND["codex_bin"]()
+    return [binary, *CODEX_TUI_LAUNCH_ARGS]
 
 
 if __name__ == "__main__":
