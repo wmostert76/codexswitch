@@ -396,7 +396,28 @@ def refresh_openrouter_models(strict: bool = True) -> bool:
 
 
 def openrouter_reasoning_choices(model: str) -> list[tuple[str, str]]:
-    return []
+    meta = openrouter_model_catalog().get(model, {})
+    if not isinstance(meta, dict):
+        return []
+    reasoning = meta.get("reasoning", {})
+    if not isinstance(reasoning, dict):
+        return []
+    efforts = reasoning.get("supported_efforts", [])
+    if not isinstance(efforts, list) or not efforts:
+        return []
+    # OpenRouter uses "max" as a synonym for "xhigh"; prefer the canonical name
+    choices = []
+    seen = set()
+    for effort in efforts:
+        if not isinstance(effort, str):
+            continue
+        if effort == "max" and "xhigh" in efforts:
+            continue  # skip "max" when "xhigh" is also present
+        normalized = "xhigh" if effort == "max" else effort
+        if normalized not in seen:
+            seen.add(normalized)
+            choices.append((effort, normalized))
+    return choices
 
 
 def opencode_models() -> list[str]:
@@ -491,11 +512,22 @@ def reasoning_choices(model: str) -> list[tuple[str, str]]:
 
 
 def default_reasoning_effort(model: str) -> str:
+    # Try OpenCode Go variants first
     choices = reasoning_choices(model)
     efforts = [effort for _, effort in choices]
-    for preferred in ("medium", "high", "xhigh", "low", "none"):
-        if preferred in efforts:
-            return preferred
+    if efforts:
+        for preferred in ("medium", "high", "xhigh", "low", "none"):
+            if preferred in efforts:
+                return preferred
+    # Try OpenRouter reasoning.default_effort
+    meta = openrouter_model_catalog().get(model, {})
+    if isinstance(meta, dict):
+        reasoning = meta.get("reasoning", {})
+        if isinstance(reasoning, dict):
+            default = reasoning.get("default_effort")
+            if isinstance(default, str):
+                # Normalize "max" to "xhigh"
+                return "xhigh" if default == "max" else default
     return "medium"
 
 
@@ -636,7 +668,21 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 f"kies uit {', '.join(label for label, _ in choices)}"
             )
         lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
-    elif provider in {"openai", "openrouter"}:
+    elif provider == "openrouter":
+        choices = openrouter_reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        if reasoning_effort and allowed:
+            if reasoning_effort not in allowed:
+                die(
+                    f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                    f"kies uit {', '.join(label for label, _ in choices)}"
+                )
+            lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+        else:
+            lines = remove_top_level(lines, "model_reasoning_effort")
+            if not allowed:
+                reasoning_effort = None
+    elif provider == "openai":
         lines = remove_top_level(lines, "model_reasoning_effort")
 
     if provider == "opencode-go":

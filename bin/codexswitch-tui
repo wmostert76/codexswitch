@@ -599,19 +599,23 @@ class CodexSwitchApp(App):
             context = meta.get("context_length", "?") if isinstance(meta, dict) else "?"
             context_display = f"{context:,}" if isinstance(context, int) else str(context)
             input_modalities = architecture.get("input_modalities", ["text"]) if isinstance(architecture, dict) else ["text"]
-            choices = [("model-default", "medium")]
+            choices = BACKEND["openrouter_reasoning_choices"](self.model) or [
+                ("model-default", "medium")
+            ]
+            reasoning_info = meta.get("reasoning", {}) if isinstance(meta, dict) else {}
             detail.update(
                 f"[bold #ffff00]{meta.get('name', self.model) if isinstance(meta, dict) else self.model}[/]  "
                 f"[#5fd7ff]OpenRouter[/]\n"
                 f"Context: {context_display}   Input: {', '.join(input_modalities)}\n"
-                f"Auth: {'ok' if BACKEND['openrouter_key_present']() else 'missing'}"
+                f"Auth: {'ok' if BACKEND['openrouter_key_present']() else 'missing'}   "
+                f"Reasoning: {'mandatory' if reasoning_info.get('mandatory') else 'optional'}"
             )
 
         state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
         current = state.get("reasoning_effort")
         values = {value for _, value in choices}
         if current not in values:
-            current = BACKEND["default_reasoning_effort"](self.model) if self.provider == "opencode-go" else meta.get("default_reasoning_level", "medium")
+            current = BACKEND["default_reasoning_effort"](self.model) if self.provider in ("opencode-go", "openrouter") else meta.get("default_reasoning_level", "medium")
         if current not in values:
             current = choices[0][1]
         reason_options = []

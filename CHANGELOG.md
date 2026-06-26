@@ -4,6 +4,12 @@ All notable CodexSwitch changes are documented here.
 
 ## [0.5.12] - 2026-06-26
 
+### Fixed
+
+- OpenRouter models now show actual reasoning choices (supported_efforts) instead of
+  always displaying "model-default". OpenRouter reasoning effort is now written to
+  the Codex config when the model supports it.
+
 ### Added
 
 - TUI function-key bar now supports mouse clicks (Midnight Commander style).
@@ -111,6 +117,12 @@ Versioning follows pragmatic semantic versioning:
 - `codexswitch refresh` now refreshes both OpenCode Go and OpenRouter catalogs.
 
 ## [0.5.1] - 2026-06-26
+
+### Fixed
+
+- OpenRouter models now show actual reasoning choices (supported_efforts) instead of
+  always displaying "model-default". OpenRouter reasoning effort is now written to
+  the Codex config when the model supports it.
 
 ### Added
 
