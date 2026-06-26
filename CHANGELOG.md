@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.12] - 2026-06-26
+
+### Added
+
+- TUI function-key bar now supports mouse clicks (Midnight Commander style).
+  Hover a key label to highlight it and click to trigger the action.
+
+
 Versioning follows pragmatic semantic versioning:
 
 - Patch (`0.0.x`) for fixes and low-risk compatibility improvements.

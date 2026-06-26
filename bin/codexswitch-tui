@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+import asyncio
 import contextlib
 import io
 import os
@@ -14,10 +15,25 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
+from textual.events import Click
+
 
 PROJECT = Path(__file__).resolve().parents[1]
 BACKEND_PATH = PROJECT / "bin/codexswitch"
 BACKEND = runpy.run_path(str(BACKEND_PATH))
+
+FKEY_ACTIONS = {
+    "1": "help",
+    "2": "accounts",
+    "3": "models",
+    "4": "reasoning",
+    "5": "refresh",
+    "6": "apply",
+    "7": "auth",
+    "8": "status",
+    "9": "codex",
+    "10": "quit",
+}
 CODEX_TUI_LAUNCH_ARGS = (
     "resume",
     "--dangerously-bypass-approvals-and-sandbox",
@@ -35,6 +51,15 @@ FUNCTION_KEYS = (
     ("9", "Codex"),
     ("10", "Quit"),
 )
+
+
+
+class FKey(Static):
+    """A clickable function-key label styled like Midnight Commander."""
+
+    def __init__(self, *args, action: str = "", **kwargs) -> None:
+        super().__init__(*args, **kwargs)
+        self.fkey_action = action
 
 
 def splash_line(text: str) -> str:
@@ -256,6 +281,25 @@ class CodexSwitchApp(App):
         text-style: bold;
     }
 
+    FKey {
+        width: 1fr;
+        height: 1;
+        background: #00afaf;
+        color: #000000;
+        text-align: left;
+        text-style: bold;
+    }
+
+    FKey:hover {
+        background: #ffffff;
+        color: #000087;
+    }
+
+    FKey:focus {
+        background: #ffff00;
+        color: #000000;
+    }
+
     .fkey {
         width: 1fr;
         height: 1;
@@ -357,9 +401,11 @@ class CodexSwitchApp(App):
         yield Static(" Ready", id="status")
         with Horizontal(id="buttonbar"):
             for number, label in FUNCTION_KEYS:
-                yield Static(
+                yield FKey(
                     f"[reverse bold]{number:>2}[/] {label}",
                     classes="fkey",
+                    id=f"fkey-{FKEY_ACTIONS[number]}",
+                    action=FKEY_ACTIONS[number],
                     markup=True,
                 )
 
@@ -369,6 +415,11 @@ class CodexSwitchApp(App):
         self.load_models()
         self.query_one("#models", OptionList).focus()
         self.push_screen(SplashScreen())
+
+    def on_click(self, event: Click) -> None:
+        """Handle mouse clicks on function key labels."""
+        if isinstance(event.control, FKey) and event.control.fkey_action:
+            asyncio.ensure_future(self.run_action(event.control.fkey_action))
 
     def capture(self, function, *args):
         output = io.StringIO()
