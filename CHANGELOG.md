@@ -2,6 +2,15 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.6.1] - 2026-06-26
+
+### Changed
+
+- `install.sh` now checks an existing git checkout for updates before
+  installing, runs a safe `git pull --ff-only`, fetches tags and restarts
+  itself when the installer changed. This makes re-running `./install.sh` a
+  normal update path on existing hosts.
+
 ## [0.6.0] - 2026-06-26
 
 ### Added

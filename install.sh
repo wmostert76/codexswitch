@@ -8,6 +8,17 @@ if [[ -n ${SUDO_USER:-} && "$SUDO_USER" != "root" ]]; then
 fi
 TARGET_HOME=$(getent passwd "$TARGET_USER" | cut -d: -f6)
 VENV="$PROJECT_ROOT/.venv"
+SKIP_SELF_UPDATE=0
+for arg in "$@"; do
+  case "$arg" in
+    --no-self-update) SKIP_SELF_UPDATE=1 ;;
+    *)
+      echo "Unknown install option: $arg" >&2
+      echo "Usage: ./install.sh [--no-self-update]" >&2
+      exit 2
+      ;;
+  esac
+done
 
 if [[ -z "$TARGET_HOME" ]]; then
   echo "Could not determine home directory for $TARGET_USER" >&2
@@ -18,6 +29,42 @@ SUDO=()
 if [[ $(id -u) -ne 0 ]]; then
   SUDO=(sudo)
 fi
+
+maybe_self_update() {
+  if [[ "$SKIP_SELF_UPDATE" -eq 1 ]]; then
+    return
+  fi
+  if ! command -v git >/dev/null 2>&1; then
+    return
+  fi
+  if ! git -C "$PROJECT_ROOT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    return
+  fi
+  local branch before after
+  branch=$(git -C "$PROJECT_ROOT" rev-parse --abbrev-ref HEAD)
+  if [[ "$branch" == "HEAD" ]]; then
+    echo "Detached git checkout detected; skipping installer self-update"
+    return
+  fi
+  if [[ -n "$(git -C "$PROJECT_ROOT" status --porcelain)" ]]; then
+    echo "Local repository has uncommitted changes; skipping installer self-update" >&2
+    echo "Commit/stash changes first, then run ./install.sh again." >&2
+    return
+  fi
+  before=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+  echo "Checking CodexSwitch updates for $branch..."
+  git -C "$PROJECT_ROOT" fetch --tags origin
+  if [[ "$branch" == "main" ]]; then
+    git -C "$PROJECT_ROOT" pull --ff-only origin main
+  else
+    git -C "$PROJECT_ROOT" pull --ff-only
+  fi
+  after=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
+  if [[ "$before" != "$after" ]]; then
+    echo "CodexSwitch updated; restarting installer..."
+    exec bash "$PROJECT_ROOT/install.sh" --no-self-update
+  fi
+}
 
 detect_package_manager() {
   for manager in apt-get dnf yum pacman zypper apk; do
@@ -104,6 +151,7 @@ ensure_codex_cli() {
   "${SUDO[@]}" npm install -g @openai/codex
 }
 
+maybe_self_update
 ensure_system_dependencies
 ensure_codex_cli
 
