@@ -46,8 +46,7 @@ class SplashScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"""{BACKEND['ASCII_LOGO']}
-{BACKEND['COMMANDER_SPACED']}
+            f"""{BACKEND['BRAND_BANNER']}
 
 CodexSwitch Commander v{BACKEND['VERSION']}
 {BACKEND['CREDITS_OWNER']}

@@ -19,7 +19,7 @@ from pathlib import Path
 import pwd
 
 
-VERSION = "0.5.7"
+VERSION = "0.5.8"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -28,6 +28,11 @@ ASCII_LOGO = r"""   ___          _            __          _ _       _
 / /__| (_) | (_| |  __/>  < _\ \\ V  V /| | || (__| | | |
 \____/\___/ \__,_|\___/_/\_\\__/ \_/\_/ |_|\__\___|_| |_|"""
 COMMANDER_SPACED = "C O M M A N D E R"
+ASCII_LOGO_WIDTH = max(len(line) for line in ASCII_LOGO.splitlines())
+COMMANDER_CENTERED = COMMANDER_SPACED.rjust(
+    (ASCII_LOGO_WIDTH + len(COMMANDER_SPACED)) // 2
+)
+BRAND_BANNER = f"{ASCII_LOGO}\n{COMMANDER_CENTERED}"
 
 
 def user_home() -> Path:

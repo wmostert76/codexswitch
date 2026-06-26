@@ -16,6 +16,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codexswitch_common import (
     ASCII_LOGO,
+    BRAND_BANNER,
+    COMMANDER_CENTERED,
     COMMANDER_SPACED,
     CREDITS_AI,
     CREDITS_OWNER,
@@ -915,8 +917,7 @@ def interactive() -> None:
 
 
 def usage() -> None:
-    print(f"""{ASCII_LOGO}
-{COMMANDER_SPACED}
+    print(f"""{BRAND_BANNER}
 
 {APP_TITLE} {VERSION}
 {CREDITS_OWNER}

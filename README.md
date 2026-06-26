@@ -6,8 +6,7 @@
  / /  / _ \ / _` |/ _ \ \/ /\ \\ \ /\ / / | __/ __| '_ \
 / /__| (_) | (_| |  __/>  < _\ \\ V  V /| | || (__| | | |
 \____/\___/ \__,_|\___/_/\_\\__/ \_/\_/ |_|\__\___|_| |_|
-
-C O M M A N D E R
+                    C O M M A N D E R
 ```
 
 Switch Codex CLI between native OpenAI accounts, OpenCode Go models and
