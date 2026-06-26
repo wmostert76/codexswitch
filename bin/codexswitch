@@ -8,12 +8,15 @@ import sys
 import tempfile
 import time
 import base64
+import getpass
+import urllib.error
+import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codexswitch_common import (
+    VERSION,
     user_home as _common_user_home,
-    parse_opencode_catalog as _common_parse_opencode_catalog,
     opencode_catalog_from_binary as _common_catalog_from_binary,
     opencode_bin as _common_opencode_bin,
 )
@@ -21,11 +24,14 @@ from codexswitch_common import (
 
 OPENAI_FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
 DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
+OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_PROXY_URL = "http://127.0.0.1:14555/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_CONFIG_BACKUPS = 5
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
+OPENROUTER_TOKEN_HELPER = shutil.which("openrouter-token") or str(PROJECT_ROOT / "bin/openrouter-token")
 PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
 TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
 TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
@@ -41,11 +47,15 @@ CODEX_CONFIG = CODEX_HOME / "config.toml"
 SWITCH_HOME = HOME / ".config/codexswitch"
 SWITCH_CONFIG = SWITCH_HOME / "config.json"
 OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
+OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
+OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
 OPENCODE_CONFIG = HOME / ".config/opencode/opencode.json"
 OPENCODE_AUTH = HOME / ".local/share/opencode/auth.json"
 OPENCODE_MODELS_CACHE = HOME / ".cache/opencode/models.json"
 OPENCODE_BIN_FALLBACK = HOME / ".local/share/npm-global/bin/opencode"
 _OPENCODE_CATALOG_CACHE: dict[str, dict] | None = None
+_OPENAI_CATALOG_CACHE: dict[str, dict] | None = None
+_OPENROUTER_CATALOG_CACHE: dict[str, dict] | None = None
 
 
 def die(message: str, code: int = 1) -> None:
@@ -182,9 +192,14 @@ def sync_active_openai_account() -> str | None:
     auth_path = CODEX_HOME / "auth.json"
     ensure_home_owner(auth_path)
     data = read_json(auth_path, {})
+    if not data:
+        return None
     email = openai_auth_email(data)
     if not email:
-        return None
+        die(
+            "actieve OpenAI-login kan niet veilig worden opgeslagen; "
+            "auth.json bevat credentials maar geen herkenbaar e-mailadres"
+        )
     destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
     write_secret_json(destination, data)
     return email
@@ -217,6 +232,19 @@ def list_openai_accounts() -> None:
     for email in accounts:
         marker = "*" if email == current else " "
         print(f"{marker} {email}")
+
+
+def save_openrouter_key(key: str) -> None:
+    normalized = key.strip()
+    if not normalized:
+        die("OpenRouter API-key is leeg")
+    write_secret_json(OPENROUTER_AUTH, {"api_key": normalized})
+    print("OpenRouter API-key opgeslagen")
+
+
+def openrouter_key_present() -> bool:
+    data = read_json(OPENROUTER_AUTH, {})
+    return bool(isinstance(data, dict) and data.get("api_key"))
 
 
 def codex_bin() -> str:
@@ -266,7 +294,10 @@ def openai_models() -> list[str]:
     return list(catalog) or OPENAI_FALLBACK_MODELS
 
 
-def openai_model_catalog() -> dict[str, dict]:
+def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
+    global _OPENAI_CATALOG_CACHE
+    if _OPENAI_CATALOG_CACHE is not None and not refresh:
+        return _OPENAI_CATALOG_CACHE
     try:
         with tempfile.TemporaryDirectory(prefix="codexswitch-models-") as temporary_home:
             env = os.environ.copy()
@@ -281,11 +312,12 @@ def openai_model_catalog() -> dict[str, dict]:
                 env=env,
             )
         data = json.loads(proc.stdout)
-        return {
+        _OPENAI_CATALOG_CACHE = {
             model["slug"]: model
             for model in data.get("models", [])
             if model.get("slug")
         }
+        return _OPENAI_CATALOG_CACHE
     except Exception:
         return {}
 
@@ -297,6 +329,61 @@ def openai_reasoning_choices(model: str) -> list[tuple[str, str]]:
         for item in metadata.get("supported_reasoning_levels", [])
         if item.get("effort")
     ]
+
+
+def openrouter_model_catalog(refresh: bool = False) -> dict[str, dict]:
+    global _OPENROUTER_CATALOG_CACHE
+    if _OPENROUTER_CATALOG_CACHE is not None and not refresh:
+        return _OPENROUTER_CATALOG_CACHE
+    if not refresh:
+        cached = read_json(OPENROUTER_MODELS_CACHE, {})
+        if isinstance(cached, dict) and isinstance(cached.get("models"), dict):
+            _OPENROUTER_CATALOG_CACHE = cached["models"]
+            return _OPENROUTER_CATALOG_CACHE
+    try:
+        req = urllib.request.Request(
+            f"{OPENROUTER_BASE_URL}/models",
+            headers={
+                "accept": "application/json",
+                "user-agent": "codexswitch/1.1",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        _OPENROUTER_CATALOG_CACHE = {}
+        return {}
+    catalog = {}
+    for item in payload.get("data", []):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        catalog[item["id"]] = item
+    _OPENROUTER_CATALOG_CACHE = catalog
+    write_json(OPENROUTER_MODELS_CACHE, {"models": catalog, "updated_at": int(time.time())})
+    return _OPENROUTER_CATALOG_CACHE
+
+
+def openrouter_models() -> list[str]:
+    catalog = openrouter_model_catalog()
+    if not catalog:
+        return OPENROUTER_FALLBACK_MODELS
+    return sorted(catalog)
+
+
+def refresh_openrouter_models(strict: bool = True) -> bool:
+    print("OpenRouter-modelcatalogus verversen...")
+    catalog = openrouter_model_catalog(refresh=True)
+    if not catalog:
+        if strict:
+            die("OpenRouter model-refresh mislukt; geen modellen ontvangen")
+        print("warning: OpenRouter model-refresh mislukt; bestaande fallback blijft actief", file=sys.stderr)
+        return False
+    print(f"OpenRouter-modellen bijgewerkt: {len(catalog)} actief")
+    return True
+
+
+def openrouter_reasoning_choices(model: str) -> list[tuple[str, str]]:
+    return []
 
 
 def opencode_models() -> list[str]:
@@ -411,6 +498,10 @@ def validate_provider_model(provider: str, model: str) -> None:
         if model not in models:
             die(f"OpenCode Go model '{model}' bestaat niet in {OPENCODE_CONFIG}")
         return
+    if provider == "openrouter":
+        if model not in openrouter_models():
+            print(f"warning: OpenRouter model '{model}' staat niet in de huidige catalogus", file=sys.stderr)
+        return
     die(f"onbekende provider: {provider}")
 
 
@@ -476,9 +567,26 @@ def cleanup_config_backups() -> None:
         old.unlink(missing_ok=True)
 
 
+def warm_codex_model_catalog() -> bool:
+    try:
+        proc = subprocess.run(
+            [codex_bin(), "debug", "models"],
+            text=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0
+
+
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
     if provider == "opencode-go":
         ensure_proxy()
+    if provider == "openrouter" and not openrouter_key_present():
+        die("OpenRouter API-key ontbreekt; gebruik: codexswitch auth openrouter")
     CODEX_HOME.mkdir(parents=True, exist_ok=True)
     ensure_home_owner(CODEX_CONFIG)
     lines = CODEX_CONFIG.read_text().splitlines(True) if CODEX_CONFIG.exists() else []
@@ -489,6 +597,8 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
 
     lines = remove_block(lines, "model_providers.opencode-go.auth")
     lines = remove_block(lines, "model_providers.opencode-go")
+    lines = remove_block(lines, "model_providers.openrouter.auth")
+    lines = remove_block(lines, "model_providers.openrouter")
     lines = set_top_level(lines, "model", model)
     lines = set_top_level(lines, "model_provider", provider)
     if provider == "opencode-go":
@@ -510,7 +620,7 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 f"kies uit {', '.join(label for label, _ in choices)}"
             )
         lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
-    elif provider == "openai":
+    elif provider in {"openai", "openrouter"}:
         lines = remove_top_level(lines, "model_reasoning_effort")
 
     if provider == "opencode-go":
@@ -530,12 +640,39 @@ refresh_interval_ms = 0
 '''
         lines.append(provider_block)
 
+    if provider == "openrouter":
+        if not Path(OPENROUTER_TOKEN_HELPER).exists():
+            die(f"OpenRouter token helper ontbreekt: {OPENROUTER_TOKEN_HELPER}")
+        provider_block = f'''
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "{OPENROUTER_BASE_URL}"
+wire_api = "responses"
+
+[model_providers.openrouter.auth]
+command = "{OPENROUTER_TOKEN_HELPER}"
+timeout_ms = 5000
+refresh_interval_ms = 0
+'''
+        lines.append(provider_block)
+        reasoning_effort = None
+
     CODEX_CONFIG.write_text("".join(lines))
     state = read_json(SWITCH_CONFIG, {})
     state.update({"provider": provider, "model": model})
     if reasoning_effort:
         state["reasoning_effort"] = reasoning_effort
+    else:
+        state.pop("reasoning_effort", None)
+    if provider in {"opencode-go", "openrouter"}:
+        state.pop("openai_account", None)
     write_json(SWITCH_CONFIG, state)
+    if provider in {"opencode-go", "openrouter"} and not warm_codex_model_catalog():
+        print(
+            "warning: Codex modelcatalogus kon niet vooraf worden geladen",
+            file=sys.stderr,
+        )
     if backup.exists():
         print(f"backup: {backup}")
     suffix = f" / denken={reasoning_effort}" if reasoning_effort else ""
@@ -550,6 +687,7 @@ def status() -> None:
     print(f"opencode:     {opencode_bin()}")
     print(f"opencode cfg: {OPENCODE_CONFIG}")
     print(f"opencode auth:{OPENCODE_AUTH}")
+    print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
     print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}")
     print(f"openai acct:  {current_openai_account or 'onbekend'}")
@@ -568,6 +706,9 @@ def list_models() -> None:
     print("\nOpenCode Go:")
     for model in opencode_models():
         print(f"  {model}")
+    print("\nOpenRouter:")
+    for model in openrouter_models():
+        print(f"  {model}")
 
 
 def choose(title: str, options: list[str]) -> str:
@@ -584,13 +725,13 @@ def choose(title: str, options: list[str]) -> str:
 
 
 def auth(provider: str | None = None) -> None:
-    provider = provider or choose("Auth provider", ["openai", "opencode-go"])
+    provider = provider or choose("Auth provider", ["openai", "opencode-go", "openrouter"])
     if provider == "openai":
         ensure_home_owner(CODEX_HOME / "auth.json")
         current_auth = read_json(CODEX_HOME / "auth.json", {})
-        if openai_auth_email(current_auth):
-            save_openai_account()
-        run([codex_bin(), "login"], check=True)
+        if current_auth:
+            sync_active_openai_account()
+        run([codex_bin(), "login", "--device-auth"], check=True)
         ensure_home_owner(CODEX_HOME / "auth.json")
         save_openai_account()
         return
@@ -598,10 +739,16 @@ def auth(provider: str | None = None) -> None:
         print("OpenCode auth login start. Kies/gebruik OpenCode Go als provider wanneer gevraagd.")
         run([opencode_bin(), "auth", "login"], check=True)
         return
+    if provider == "openrouter":
+        key = getpass.getpass("OpenRouter API-key: ")
+        save_openrouter_key(key)
+        refresh_openrouter_models(strict=False)
+        return
     die(f"onbekende auth provider: {provider}")
 
 
 def interactive() -> None:
+    print(f"CodexSwitch Commander {VERSION}")
     while True:
         action = choose(
             "codexswitch",
@@ -614,22 +761,37 @@ def interactive() -> None:
                 continue
             sub = choose(
                 "OpenAI-accounts",
-                ["account activeren", "huidige login opslaan", "terug"],
+                ["account toevoegen via device sign-in", "account activeren", "huidige login opslaan", "terug"],
             )
-            if sub == "account activeren":
+            if sub == "account toevoegen via device sign-in":
+                auth("openai")
+            elif sub == "account activeren":
+                accounts = openai_accounts()
+                if not accounts:
+                    print("Geen opgeslagen OpenAI-accounts")
+                    continue
                 use_openai_account(choose("OpenAI-account", accounts))
             elif sub == "huidige login opslaan":
                 save_openai_account()
         elif action == "provider/model kiezen":
-            provider = choose("Provider", ["openai", "opencode-go"])
+            provider = choose("Provider", ["openai", "opencode-go", "openrouter"])
             if provider == "openai":
                 accounts = openai_accounts()
                 if accounts:
                     use_openai_account(choose("OpenAI-account", accounts))
-            else:
+            elif provider == "opencode-go":
                 refresh_opencode_models(strict=False)
-            models = openai_models() if provider == "openai" else opencode_models()
-            default = "gpt-5.5" if provider == "openai" else DEFAULT_OPENCODE_MODEL
+            elif provider == "openrouter":
+                refresh_openrouter_models(strict=False)
+            if provider == "openai":
+                models = openai_models()
+                default = "gpt-5.5"
+            elif provider == "opencode-go":
+                models = opencode_models()
+                default = DEFAULT_OPENCODE_MODEL
+            else:
+                models = openrouter_models()
+                default = OPENROUTER_FALLBACK_MODELS[0]
             ordered = [default] + [m for m in models if m != default]
             model = choose("Model", ordered)
             validate_provider_model(provider, model)
@@ -644,6 +806,7 @@ def interactive() -> None:
             update_codex_config(provider, model, effort)
         elif action == "modellen verversen":
             refresh_opencode_models()
+            refresh_openrouter_models(strict=False)
         elif action == "auth":
             auth()
         elif action == "status":
@@ -655,7 +818,9 @@ def interactive() -> None:
 
 
 def usage() -> None:
-    print("""Gebruik:
+    print(f"""CodexSwitch Commander {VERSION}
+
+Gebruik:
   codexswitch                 Commander TUI
   codexswitch --version       toon versie
   codexswitch classic         klassiek tekstmenu
@@ -663,8 +828,9 @@ def usage() -> None:
   codexswitch refresh         ververs OpenCode Go-modellen
   codexswitch status          toon paden en huidige keuze
   codexswitch use PROVIDER MODEL [DENKSTAND]
-  codexswitch auth [openai|opencode-go]
+  codexswitch auth [openai|opencode-go|openrouter]
   codexswitch accounts
+  codexswitch account add
   codexswitch account save [EMAIL]
   codexswitch account use EMAIL
   codexswitch run [PROMPT...]
@@ -682,7 +848,7 @@ def main(argv: list[str]) -> int:
         usage()
         return 0
     if cmd in {"-v", "--version"}:
-        print("codexswitch 1.1.0")
+        print(f"codexswitch {VERSION}")
         return 0
     if cmd == "classic":
         interactive()
@@ -704,15 +870,18 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "account":
         if len(argv) < 2:
-            die("gebruik: codexswitch account save [EMAIL] | account use EMAIL")
+            die("gebruik: codexswitch account add | save [EMAIL] | use EMAIL")
         action = argv[1]
+        if action == "add" and len(argv) == 2:
+            auth("openai")
+            return 0
         if action == "save" and len(argv) in {2, 3}:
             save_openai_account(argv[2] if len(argv) == 3 else None)
             return 0
         if action == "use" and len(argv) == 3:
             use_openai_account(argv[2])
             return 0
-        die("gebruik: codexswitch account save [EMAIL] | account use EMAIL")
+        die("gebruik: codexswitch account add | save [EMAIL] | use EMAIL")
     if cmd == "use":
         if len(argv) not in {3, 4}:
             die("gebruik: codexswitch use PROVIDER MODEL [DENKSTAND]")

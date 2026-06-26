@@ -5,6 +5,7 @@ import importlib.util
 import json
 import os
 import tempfile
+import subprocess
 from pathlib import Path
 from unittest.mock import patch
 
@@ -20,6 +21,21 @@ _spec = importlib.util.spec_from_file_location(
 )
 cs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cs)
+
+
+def test_version_constant_is_release_version():
+    assert cs.VERSION == "0.5.1"
+
+
+def test_cli_version_output():
+    proc = subprocess.run(
+        [str(BIN_DIR / "codexswitch"), "--version"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    assert proc.stdout.strip() == "codexswitch 0.5.1"
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────
@@ -295,3 +311,189 @@ class TestRemoveTopLevel:
 
     def test_empty_lines(self):
         assert cs.remove_top_level([], 'model') == []
+
+
+class TestAccountSwitchSafety:
+    def test_refuses_to_replace_unidentifiable_active_auth(self, tmp_path, monkeypatch):
+        import pytest
+
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        accounts = switch_home / "openai-accounts"
+        codex_home.mkdir(parents=True)
+        accounts.mkdir(parents=True)
+        (codex_home / "auth.json").write_text(
+            json.dumps({"tokens": {"access_token": "opaque-active-token"}})
+        )
+        saved = {"tokens": {"id_token": make_jwt({"email": "saved@example.com"})}}
+        (accounts / "saved@example.com.json").write_text(json.dumps(saved))
+
+        monkeypatch.setattr(cs, "HOME", tmp_path)
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_home / "config.json")
+        monkeypatch.setattr(cs, "OPENAI_ACCOUNTS_DIR", accounts)
+
+        with pytest.raises(SystemExit):
+            cs.use_openai_account("saved@example.com")
+        assert json.loads((codex_home / "auth.json").read_text()) != saved
+
+    def test_auth_login_refuses_unidentifiable_active_auth(self, tmp_path, monkeypatch):
+        import pytest
+
+        codex_home = tmp_path / ".codex"
+        codex_home.mkdir(parents=True)
+        (codex_home / "auth.json").write_text(
+            json.dumps({"tokens": {"access_token": "opaque-active-token"}})
+        )
+        monkeypatch.setattr(cs, "HOME", tmp_path)
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "OPENAI_ACCOUNTS_DIR", tmp_path / "accounts")
+        monkeypatch.setattr(cs, "run", lambda *args, **kwargs: pytest.fail("login ran"))
+
+        with pytest.raises(SystemExit):
+            cs.auth("openai")
+
+
+class TestUpdateState:
+    def test_openai_without_effort_clears_saved_reasoning(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+        config.write_text(
+            'model = "old"\n'
+            'model_provider = "opencode-go"\n'
+            'model_reasoning_effort = "high"\n'
+        )
+        state_path.write_text(
+            json.dumps(
+                {
+                    "provider": "opencode-go",
+                    "model": "old",
+                    "reasoning_effort": "high",
+                    "openai_account": "saved@example.com",
+                }
+            )
+        )
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(cs, "openai_reasoning_choices", lambda model: [])
+
+        cs.update_codex_config("openai", "gpt-test")
+        state = json.loads(state_path.read_text())
+        assert "reasoning_effort" not in state
+        assert "model_reasoning_effort" not in config.read_text()
+
+    def test_opencode_clears_saved_openai_account(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+        config.write_text("")
+        state_path.write_text(json.dumps({"openai_account": "saved@example.com"}))
+        token_helper = tmp_path / "token-helper"
+        token_helper.write_text("")
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(cs, "TOKEN_HELPER", str(token_helper))
+        monkeypatch.setattr(cs, "ensure_proxy", lambda: None)
+        monkeypatch.setattr(cs, "reasoning_choices", lambda model: [("medium", "medium")])
+        monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
+
+        cs.update_codex_config("opencode-go", "model-x", "medium")
+        state = json.loads(state_path.read_text())
+        assert "openai_account" not in state
+
+    def test_openrouter_requires_api_key(self, tmp_path, monkeypatch):
+        import pytest
+
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", codex_home / "config.toml")
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_home / "config.json")
+        monkeypatch.setattr(cs, "OPENROUTER_AUTH", switch_home / "openrouter/auth.json")
+
+        with pytest.raises(SystemExit):
+            cs.update_codex_config("openrouter", "openrouter/auto")
+
+    def test_openrouter_config_uses_secret_helper_and_clears_openai_state(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+        config.write_text(
+            'model = "old"\n'
+            'model_provider = "openai"\n'
+            'model_reasoning_effort = "high"\n'
+        )
+        state_path.write_text(
+            json.dumps(
+                {
+                    "provider": "openai",
+                    "model": "old",
+                    "reasoning_effort": "high",
+                    "openai_account": "saved@example.com",
+                }
+            )
+        )
+        token_helper = tmp_path / "openrouter-token"
+        token_helper.write_text("")
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
+        monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
+
+        cs.update_codex_config("openrouter", "anthropic/claude-test", "medium")
+        text = config.read_text()
+        state = json.loads(state_path.read_text())
+        assert 'model_provider = "openrouter"' in text
+        assert 'base_url = "https://openrouter.ai/api/v1"' in text
+        assert f'command = "{token_helper}"' in text
+        assert "model_reasoning_effort" not in text
+        assert "openai_account" not in state
+        assert "reasoning_effort" not in state
+
+
+class TestOpenRouterCatalog:
+    def test_openrouter_models_from_catalog(self, monkeypatch):
+        monkeypatch.setattr(
+            cs,
+            "openrouter_model_catalog",
+            lambda refresh=False: {
+                "z/model": {"id": "z/model"},
+                "a/model": {"id": "a/model"},
+            },
+        )
+        assert cs.openrouter_models() == ["a/model", "z/model"]
+
+    def test_openrouter_models_fallback(self, monkeypatch):
+        monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: {})
+        assert cs.openrouter_models() == cs.OPENROUTER_FALLBACK_MODELS
+
+    def test_save_openrouter_key_is_secret_file(self, tmp_path, monkeypatch):
+        auth_path = tmp_path / "openrouter" / "auth.json"
+        monkeypatch.setattr(cs, "OPENROUTER_AUTH", auth_path)
+        cs.save_openrouter_key(" test-openrouter-key-not-secret ")
+        assert json.loads(auth_path.read_text()) == {"api_key": "test-openrouter-key-not-secret"}
+        assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
+        assert oct(auth_path.parent.stat().st_mode & 0o777) == "0o700"

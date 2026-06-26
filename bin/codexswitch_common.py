@@ -5,6 +5,7 @@ This module contains logic that is used by multiple entry points:
   - bin/codexswitch          (CLI backend)
   - bin/codex-opencode-go-proxy (Responses API proxy)
   - bin/opencode-go-token    (credential reader)
+  - bin/openrouter-token     (OpenRouter credential reader)
 
 Keeping it here avoids code duplication and ensures that a bugfix only
 needs to happen in one place.
@@ -16,6 +17,9 @@ import shutil
 import subprocess
 from pathlib import Path
 import pwd
+
+
+VERSION = "0.5.1"
 
 
 def user_home() -> Path:

@@ -18,6 +18,10 @@ tui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tui)
 
 
+def test_tui_subtitle_contains_version():
+    assert "v0.5.1" in tui.CodexSwitchApp.SUB_TITLE
+
+
 def test_tui_80x24():
     """Both panes, reasoning selector, status bar and function-key labels fit at 80x24."""
     app = tui.CodexSwitchApp()
@@ -54,5 +58,65 @@ def test_tui_120x40():
             bb = app.query_one("#buttonbar")
             bb_text = bb.render().plain
             assert len(bb_text) <= 120, f"buttonbar ({len(bb_text)}) exceeds 120 cols"
+
+    asyncio.run(run())
+
+
+def test_provider_switch_keeps_models_and_accounts_exclusive():
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            for _ in range(3):
+                await pilot.press("f2")
+                await pilot.pause()
+                source_ids = [
+                    option.id for option in app.query_one("#sources").options
+                ]
+
+                app.query_one("#sources").highlighted = source_ids.index("provider:opencode-go")
+                await pilot.pause()
+                assert app.provider == "opencode-go"
+                assert app.account is None
+                opencode_ids = [
+                    option.id for option in app.query_one("#models").options
+                ]
+                assert not any(
+                    model_id.startswith("model:gpt-")
+                    for model_id in opencode_ids
+                )
+
+                app.query_one("#sources").highlighted = source_ids.index("provider:openrouter")
+                await pilot.pause()
+                assert app.provider == "openrouter"
+                assert app.account is None
+                openrouter_ids = [
+                    option.id for option in app.query_one("#models").options
+                ]
+                assert any(
+                    model_id.startswith("model:openrouter/")
+                    or "/" in model_id.removeprefix("model:")
+                    for model_id in openrouter_ids
+                )
+                assert not any(
+                    model_id.startswith("model:gpt-")
+                    for model_id in openrouter_ids
+                )
+
+                app.query_one("#sources").highlighted = source_ids.index("provider:openai")
+                await pilot.pause()
+                assert app.provider == "openai"
+                openai_ids = [
+                    option.id for option in app.query_one("#models").options
+                ]
+                assert any(
+                    model_id.startswith("model:gpt-")
+                    for model_id in openai_ids
+                )
+                assert not any(
+                    model_id == "model:kimi-k2.6"
+                    for model_id in openai_ids
+                )
 
     asyncio.run(run())

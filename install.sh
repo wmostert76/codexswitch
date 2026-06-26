@@ -26,7 +26,7 @@ else
 fi
 
 sudo install -d -m 755 /usr/local/bin
-for command in codexswitch codex-opencode-go-proxy opencode-go-token; do
+for command in codexswitch codex-opencode-go-proxy opencode-go-token openrouter-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
 
@@ -54,6 +54,7 @@ EOF
 sudo install -m 644 "$service_file" /etc/systemd/system/codex-opencode-go-proxy.service
 sudo systemctl daemon-reload
 sudo systemctl enable --now codex-opencode-go-proxy.service
+sudo systemctl restart codex-opencode-go-proxy.service
 
 echo
 echo "Installed. Start with: codexswitch"

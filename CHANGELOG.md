@@ -1,0 +1,38 @@
+# Changelog
+
+All notable CodexSwitch changes are documented here.
+
+Versioning follows pragmatic semantic versioning:
+
+- Patch (`0.0.x`) for fixes and low-risk compatibility improvements.
+- Minor (`0.x.0`) for new user-visible features or provider support.
+- Major (`x.0.0`) for breaking command/config/auth behavior.
+
+## [0.5.1] - 2026-06-26
+
+### Added
+
+- OpenRouter provider support with model catalog refresh from the OpenRouter
+  models API.
+- OpenRouter API-key storage via `codexswitch auth openrouter` and TUI `F7`.
+- `openrouter-token` command helper so Codex reads the OpenRouter API key
+  through command authentication instead of storing it in `config.toml`.
+- OpenAI account add flow via device sign-in:
+  - CLI/classic: `codexswitch account add`
+  - TUI: `+ add OpenAI account` or `F7` while OpenAI is selected
+- GitHub release workflow for tags named `v*`.
+
+### Changed
+
+- `codexswitch auth openai` now uses Codex device authentication.
+- TUI provider/model isolation now covers OpenAI, OpenCode Go and OpenRouter.
+- Installer now installs `openrouter-token`.
+- Version is centralized and shown in CLI help, `--version`, classic mode and
+  the TUI subtitle.
+
+### Fixed
+
+- Prevent stale OpenAI account state from leaking into OpenCode Go/OpenRouter
+  selections.
+- OpenCode Go proxy tool conversion now handles custom, function, namespace and
+  proxy-local web-search flows more completely.

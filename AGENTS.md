@@ -3,7 +3,7 @@
 ## Project
 
 CodexSwitch Commander is a Python terminal application that configures Codex
-CLI for native OpenAI or OpenCode Go models.
+CLI for native OpenAI, OpenCode Go or OpenRouter models.
 
 The repository contains:
 
@@ -11,6 +11,7 @@ The repository contains:
 - `bin/codexswitch-tui`: Textual Commander-style interface
 - `bin/codex-opencode-go-proxy`: Responses API compatibility proxy
 - `bin/opencode-go-token`: Reads the existing OpenCode Go credential
+- `bin/openrouter-token`: Reads the saved OpenRouter API key
 - `install.sh`: Reproducible local installation
 
 ## Safety
@@ -19,6 +20,7 @@ The repository contains:
 - Never print token values during tests.
 - Treat `~/.codex/auth.json` and
   `~/.local/share/opencode/auth.json` as secrets.
+- Treat `~/.config/codexswitch/openrouter/auth.json` as a secret.
 - Preserve permissions `0700` for account directories and `0600` for account
   files.
 - Do not delete or overwrite saved accounts unless explicitly requested.
@@ -47,7 +49,7 @@ configuration logic in the TUI.
 Run before committing:
 
 ```bash
-python3 -m py_compile bin/codexswitch bin/codex-opencode-go-proxy bin/opencode-go-token bin/codexswitch_common.py
+python3 -m py_compile bin/codexswitch bin/codex-opencode-go-proxy bin/opencode-go-token bin/openrouter-token bin/codexswitch_common.py
 .venv/bin/python -m py_compile bin/codexswitch-tui
 bash -n install.sh uninstall.sh
 .venv/bin/python -m pytest tests/ -v
@@ -76,14 +78,12 @@ For provider integration tests:
 
 ## Known Issues
 
-- **apply_patch tool via OpenCode Go proxy**: The proxy correctly converts
-  custom tool calls (type `custom_tool_call`) to and from the upstream chat
-  completions format, and unwraps/re-wraps the `{"input": "..."}` envelope.
-  However, Codex CLI still rejects apply_patch payloads with
-  "incompatible payload" when using OpenCode Go models (GLM-5.2, DeepSeek V4).
-  This appears to be a Codex-side issue with how it validates custom tool call
-  responses from non-OpenAI providers. The `exec_command` and `write_stdin`
-  tools work correctly. This needs further investigation — check whether a
-  newer Codex version fixes it, or whether the SSE event sequence for custom
-  tool calls needs adjustment (e.g. `response.custom_tool_call.output_text.delta`
-  instead of `response.function_call_arguments.delta`).
+- Native provider image generation cannot be implemented by the Chat
+  Completions compatibility layer. Responses `web_search` is implemented as a
+  proxy-local fallback using GitHub Search for GitHub-oriented queries and
+  DuckDuckGo Instant Answer otherwise. Function, custom and namespace tools are
+  translated locally.
+- Model behavior still determines whether a model chooses `apply_patch` rather
+  than a shell fallback. The proxy emits the correct custom-tool input fields
+  and streaming events, and provider activation warms the Codex model catalog
+  so freeform tool metadata is available on the first run.

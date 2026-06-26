@@ -1,6 +1,7 @@
 """Tests for the proxy ThinkFilter and response conversion logic."""
 import importlib.machinery
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -134,6 +135,25 @@ class TestResponsesInputToMessages:
         assert msgs[0]["role"] == "user"
         assert msgs[0]["content"] == "plain string"
 
+    def test_image_input_is_preserved(self):
+        body = {
+            "input": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "inspect"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,abc",
+                        },
+                    ],
+                }
+            ]
+        }
+        msgs = proxy.responses_input_to_messages(body)
+        assert msgs[0]["content"][0] == {"type": "text", "text": "inspect"}
+        assert msgs[0]["content"][1]["type"] == "image_url"
+
 
 class TestResponsesToolsToChat:
     def test_function_tool(self):
@@ -178,6 +198,128 @@ class TestResponsesToolsToChat:
         tools = proxy.responses_tools_to_chat(body)
         assert tools[0]["function"]["strict"] is True
 
+    def test_custom_tool_state_is_request_local(self):
+        custom_context = proxy.ToolContext()
+        proxy.responses_tools_to_chat(
+            {"tools": [{"type": "custom", "name": "shared"}]},
+            custom_context,
+        )
+        normal_context = proxy.ToolContext()
+        proxy.responses_tools_to_chat(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "shared",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ]
+            },
+            normal_context,
+        )
+        result = proxy.chat_tool_calls(
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {"name": "shared", "arguments": "{}"},
+                    }
+                ]
+            },
+            normal_context,
+        )
+        assert result[0]["type"] == "function_call"
+
+    def test_namespace_tools_are_flattened_and_reversible(self):
+        context = proxy.ToolContext()
+        tools = proxy.responses_tools_to_chat(
+            {
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "agents",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "spawn",
+                                "parameters": {"type": "object", "properties": {}},
+                            }
+                        ],
+                    }
+                ]
+            },
+            context,
+        )
+        upstream_name = tools[0]["function"]["name"]
+        assert upstream_name == "agents__spawn"
+        result = proxy.chat_tool_calls(
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {"name": upstream_name, "arguments": "{}"},
+                    }
+                ]
+            },
+            context,
+        )
+        assert result[0]["name"] == "agents.spawn"
+
+    def test_custom_tool_uses_input_field(self):
+        context = proxy.ToolContext()
+        proxy.responses_tools_to_chat(
+            {"tools": [{"type": "custom", "name": "apply_patch"}]},
+            context,
+        )
+        result = proxy.chat_tool_calls(
+            {
+                "tool_calls": [
+                    {
+                        "id": "call_1",
+                        "function": {
+                            "name": "apply_patch",
+                            "arguments": json.dumps({"input": "*** Begin Patch"}),
+                        },
+                    }
+                ]
+            },
+            context,
+        )
+        assert result[0]["type"] == "custom_tool_call"
+        assert result[0]["input"] == "*** Begin Patch"
+        assert "arguments" not in result[0]
+
+    def test_aliases_do_not_collide(self):
+        context = proxy.ToolContext()
+        first = context.alias("agents.spawn")
+        second = context.alias("agents__spawn")
+        assert first != second
+        assert context.response_name(first) == "agents.spawn"
+        assert context.response_name(second) == "agents__spawn"
+
+    def test_explicit_tool_choice_uses_upstream_alias(self):
+        context = proxy.ToolContext()
+        proxy.responses_tools_to_chat(
+            {
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "agents.spawn",
+                        "parameters": {"type": "object", "properties": {}},
+                    }
+                ]
+            },
+            context,
+        )
+        result = proxy.responses_tool_choice_to_chat(
+            {"type": "function", "name": "agents.spawn"},
+            context,
+        )
+        assert result == {
+            "type": "function",
+            "function": {"name": "agents__spawn"},
+        }
+
 
 class TestModelReasoning:
     def test_none_thinking_variants(self):
@@ -204,3 +346,194 @@ class TestModelReasoning:
         default, levels, mapped = proxy.model_reasoning("test", meta)
         assert default == "medium"
         assert len(levels) == 1
+
+
+class FakeUpstream:
+    def __init__(self, chunks):
+        self.chunks = chunks
+
+    def __enter__(self):
+        return iter(self.chunks)
+
+    def __exit__(self, *args):
+        return False
+
+
+class TestHandler:
+    def make_handler(self):
+        handler = object.__new__(proxy.Handler)
+        handler.headers = {}
+        handler.path = "/v1/responses"
+        handler.rfile = io.BytesIO()
+        handler.wfile = io.BytesIO()
+        handler.close_connection = False
+        handler.send_response = lambda *args: None
+        handler.send_header = lambda *args: None
+        handler.end_headers = lambda: None
+        return handler
+
+    def test_malformed_json_returns_400(self):
+        handler = self.make_handler()
+        raw = b"{bad json"
+        handler.headers = {"content-length": str(len(raw))}
+        handler.rfile = io.BytesIO(raw)
+        captured = {}
+        handler.send_json = lambda status, payload: captured.update(
+            status=status, payload=payload
+        )
+        handler.do_POST()
+        assert captured["status"] == 400
+        assert "invalid JSON" in captured["payload"]["error"]
+
+    def test_oversized_request_returns_413(self, monkeypatch):
+        handler = self.make_handler()
+        monkeypatch.setattr(proxy, "MAX_REQUEST_BYTES", 4)
+        handler.headers = {"content-length": "5"}
+        captured = {}
+        handler.send_json = lambda status, payload: captured.update(
+            status=status, payload=payload
+        )
+        handler.do_POST()
+        assert captured["status"] == 413
+
+    def test_proxy_token_also_accepts_opencode_credential(self, monkeypatch):
+        handler = self.make_handler()
+        monkeypatch.setattr(proxy, "PROXY_TOKEN", "dedicated-token")
+        monkeypatch.setattr(proxy, "opencode_key", lambda: "opencode-token")
+        handler.headers = {"authorization": "Bearer opencode-token"}
+        assert handler._check_auth()
+
+    def test_custom_stream_uses_custom_input_events(self, monkeypatch):
+        handler = self.make_handler()
+        events = []
+        handler.sse = lambda event, payload: events.append((event, payload))
+        patch_text = "*** Begin Patch\n*** End Patch\n"
+        chunks = [
+            (
+                "data: "
+                + json.dumps(
+                    {
+                        "choices": [
+                            {
+                                "delta": {
+                                    "tool_calls": [
+                                        {
+                                            "index": 0,
+                                            "id": "call_patch",
+                                            "function": {
+                                                "name": "apply_patch",
+                                                "arguments": json.dumps(
+                                                    {"input": patch_text}
+                                                ),
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ]
+                    }
+                )
+                + "\n"
+            ).encode(),
+            b"data: [DONE]\n",
+        ]
+        def fake_upstream(body, context=None):
+            proxy.responses_tools_to_chat(body, context)
+            return FakeUpstream(chunks)
+
+        monkeypatch.setattr(proxy, "upstream_chat", fake_upstream)
+        handler.handle_stream(
+            {
+                "model": "test",
+                "stream": True,
+                "tools": [{"type": "custom", "name": "apply_patch"}],
+            }
+        )
+        names = [event for event, _ in events]
+        assert "response.custom_tool_call_input.delta" in names
+        assert "response.custom_tool_call_input.done" in names
+        assert "response.function_call_arguments.delta" not in names
+        completed = next(
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed"
+        )
+        assert completed["output"][0]["input"] == patch_text
+
+    def test_web_search_is_executed_inside_proxy(self, monkeypatch):
+        handler = self.make_handler()
+        events = []
+        handler.sse = lambda event, payload: events.append((event, payload))
+        calls = []
+
+        def fake_upstream(body, context=None):
+            proxy.responses_tools_to_chat(body, context)
+            calls.append(body)
+            if len(calls) == 1:
+                chunks = [
+                    (
+                        "data: "
+                        + json.dumps(
+                            {
+                                "choices": [
+                                    {
+                                        "delta": {
+                                            "tool_calls": [
+                                                {
+                                                    "index": 0,
+                                                    "id": "call_search",
+                                                    "function": {
+                                                        "name": "web_search",
+                                                        "arguments": json.dumps(
+                                                            {"query": "codexswitch"}
+                                                        ),
+                                                    },
+                                                }
+                                            ]
+                                        }
+                                    }
+                                ]
+                            }
+                        )
+                        + "\n"
+                    ).encode(),
+                    b"data: [DONE]\n",
+                ]
+            else:
+                assert any(
+                    item.get("type") == "function_call_output"
+                    and "search-result" in item.get("output", "")
+                    for item in body["input"]
+                )
+                chunks = [
+                    b'data: {"choices":[{"delta":{"content":"found it"}}]}\n',
+                    b"data: [DONE]\n",
+                ]
+            return FakeUpstream(chunks)
+
+        monkeypatch.setattr(proxy, "upstream_chat", fake_upstream)
+        monkeypatch.setattr(
+            proxy,
+            "execute_internal_tool",
+            lambda name, arguments: "search-result",
+        )
+        handler.handle_stream(
+            {
+                "model": "test",
+                "stream": True,
+                "tools": [{"type": "web_search"}],
+                "input": "search for codexswitch",
+            }
+        )
+        assert len(calls) == 2
+        assert not any(
+            payload.get("item", {}).get("name") == "web_search"
+            for event, payload in events
+            if event == "response.output_item.added"
+        )
+        completed = next(
+            payload["response"]
+            for event, payload in events
+            if event == "response.completed"
+        )
+        assert completed["output"][0]["content"][0]["text"] == "found it"

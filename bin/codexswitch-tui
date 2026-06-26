@@ -53,7 +53,7 @@ Press Escape or F1 to close.
 
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
-    SUB_TITLE = "Provider and model control center"
+    SUB_TITLE = f"v{BACKEND['VERSION']} · Provider and model control center"
 
     CSS = """
     Screen {
@@ -264,13 +264,20 @@ class CodexSwitchApp(App):
         self.provider = state.get("provider", "openai")
         self.model = state.get("model")
         auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
-        self.account = BACKEND["openai_auth_email"](auth)
+        if self.provider not in {"openai", "opencode-go", "openrouter"}:
+            self.provider = "openai"
+        self.account = (
+            BACKEND["openai_auth_email"](auth)
+            if self.provider == "openai"
+            else None
+        )
         self.catalog = BACKEND["opencode_model_catalog"]()
         self.openai_metadata = BACKEND["openai_model_catalog"]()
 
-    def load_sources(self) -> None:
+    def source_options(self) -> list[Option]:
         openai_active = self.provider == "openai"
         opencode_active = self.provider == "opencode-go"
+        openrouter_active = self.provider == "openrouter"
         options = [
             Option(
                 Text.from_markup(
@@ -281,11 +288,14 @@ class CodexSwitchApp(App):
         ]
         accounts = BACKEND["openai_accounts"]()
         for index, email in enumerate(accounts):
-            branch = "└─" if index == len(accounts) - 1 else "├─"
+            branch = "├─"
             marker = "●" if openai_active and email == self.account else "○"
             options.append(
                 Option(f"  {branch} {marker} {email}", id=f"account:{email}")
             )
+        options.append(
+            Option("  └─ + add OpenAI account", id="action:add-openai-account")
+        )
         options.append(
             Option(
                 Text.from_markup(
@@ -294,10 +304,21 @@ class CodexSwitchApp(App):
                 id="provider:opencode-go",
             )
         )
+        options.append(
+            Option(
+                Text.from_markup(
+                    f"[b]{'●' if openrouter_active else '○'} OPENROUTER[/]"
+                ),
+                id="provider:openrouter",
+            )
+        )
+        return options
+
+    def load_sources(self) -> None:
         sources = self.query_one("#sources", OptionList)
         self.loading_sources = True
         try:
-            sources.set_options(options)
+            sources.set_options(self.source_options())
             target = f"account:{self.account}" if self.provider == "openai" and self.account else f"provider:{self.provider}"
             for index, option in enumerate(sources.options):
                 if option.id == target:
@@ -306,23 +327,34 @@ class CodexSwitchApp(App):
         finally:
             self.loading_sources = False
 
+    def update_source_markers(self) -> None:
+        sources = self.query_one("#sources", OptionList)
+        replacement = self.source_options()
+        if len(replacement) != len(sources.options):
+            self.load_sources()
+            return
+        for index, option in enumerate(replacement):
+            sources.replace_option_prompt_at_index(index, option.prompt)
+
     def load_models(self) -> None:
-        models = (
-            BACKEND["openai_models"]()
-            if self.provider == "openai"
-            else BACKEND["opencode_models"]()
-        )
+        if self.provider == "openai":
+            models = BACKEND["openai_models"]()
+        elif self.provider == "opencode-go":
+            models = BACKEND["opencode_models"]()
+        else:
+            models = BACKEND["openrouter_models"]()
         options = []
         for model in models:
             marker = "●" if model == self.model else "○"
             options.append(Option(f" {marker}  {model}", id=f"model:{model}"))
         model_list = self.query_one("#models", OptionList)
         model_list.set_options(options)
-        default_model = (
-            "gpt-5.5"
-            if self.provider == "openai"
-            else BACKEND["DEFAULT_OPENCODE_MODEL"]
-        )
+        if self.provider == "openai":
+            default_model = "gpt-5.5"
+        elif self.provider == "opencode-go":
+            default_model = BACKEND["DEFAULT_OPENCODE_MODEL"]
+        else:
+            default_model = BACKEND["OPENROUTER_FALLBACK_MODELS"][0]
         selected_index = 0
         for index, option in enumerate(model_list.options):
             if option.id == f"model:{self.model or default_model}":
@@ -362,7 +394,7 @@ class CodexSwitchApp(App):
                 f"Input: {', '.join(modalities) or 'text'}   Tools: "
                 f"{'yes' if capabilities.get('toolcall') else 'no'}"
             )
-        else:
+        elif self.provider == "openai":
             meta = self.openai_metadata.get(self.model, {})
             choices = BACKEND["openai_reasoning_choices"](self.model) or [
                 ("model-default", "medium")
@@ -373,6 +405,19 @@ class CodexSwitchApp(App):
                 f"Context: {meta.get('context_window', '?'):,}   "
                 f"Default reasoning: {meta.get('default_reasoning_level', 'medium')}\n"
                 f"Account: {self.account or 'not detected'}"
+            )
+        else:
+            meta = BACKEND["openrouter_model_catalog"]().get(self.model, {})
+            architecture = meta.get("architecture", {}) if isinstance(meta, dict) else {}
+            context = meta.get("context_length", "?") if isinstance(meta, dict) else "?"
+            context_display = f"{context:,}" if isinstance(context, int) else str(context)
+            input_modalities = architecture.get("input_modalities", ["text"]) if isinstance(architecture, dict) else ["text"]
+            choices = [("model-default", "medium")]
+            detail.update(
+                f"[bold #ffff00]{meta.get('name', self.model) if isinstance(meta, dict) else self.model}[/]  "
+                f"[#5fd7ff]OpenRouter[/]\n"
+                f"Context: {context_display}   Input: {', '.join(input_modalities)}\n"
+                f"Auth: {'ok' if BACKEND['openrouter_key_present']() else 'missing'}"
             )
 
         state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
@@ -396,21 +441,32 @@ class CodexSwitchApp(App):
 
     def select_source(self, option_id: str) -> None:
         kind, value = option_id.split(":", 1)
+        if kind == "action":
+            return
         if kind == "account":
             self.provider = "openai"
             self.account = value
         else:
             self.provider = value
+            if value == "openai":
+                auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
+                self.account = BACKEND["openai_auth_email"](auth)
+            else:
+                self.account = None
         self.model = None
-        self.load_sources()
+        self.update_source_markers()
         self.load_models()
         self.set_status(f"Selected {self.provider}")
 
     def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
         if event.option_list.id == "sources" and event.option.id and not self.loading_sources:
             kind, value = event.option.id.split(":", 1)
+            if kind == "action":
+                return
             selected_provider = "openai" if kind == "account" else value
-            selected_account = value if kind == "account" else self.account
+            selected_account = value if kind == "account" else (
+                self.account if selected_provider == "openai" else None
+            )
             if selected_provider != self.provider or selected_account != self.account:
                 self.select_source(event.option.id)
         elif event.option_list.id == "models" and event.option.id:
@@ -423,7 +479,18 @@ class CodexSwitchApp(App):
         if not event.option.id:
             return
         if event.option_list.id == "sources":
-            self.select_source(event.option.id)
+            kind, value = event.option.id.split(":", 1)
+            if kind == "action" and value == "add-openai-account":
+                self.provider = "openai"
+                self.account = None
+                self.action_auth()
+                return
+            selected_provider = "openai" if kind == "account" else value
+            selected_account = value if kind == "account" else (
+                self.account if selected_provider == "openai" else None
+            )
+            if selected_provider != self.provider or selected_account != self.account:
+                self.select_source(event.option.id)
             self.query_one("#models", OptionList).focus()
         elif event.option_list.id == "models":
             self.model = event.option.id.split(":", 1)[1]
@@ -464,15 +531,20 @@ class CodexSwitchApp(App):
             )
 
     def action_refresh(self) -> None:
-        self.set_status("Refreshing OpenCode Go catalog...")
-        result, output = self.capture(BACKEND["refresh_opencode_models"])
+        if self.provider == "openrouter":
+            self.set_status("Refreshing OpenRouter catalog...")
+            result, output = self.capture(BACKEND["refresh_openrouter_models"])
+        else:
+            self.set_status("Refreshing OpenCode Go catalog...")
+            result, output = self.capture(BACKEND["refresh_opencode_models"])
         if isinstance(result, SystemExit):
             self.set_status(
                 output or "Model refresh failed; existing cache retained",
                 error=True,
             )
             return
-        self.catalog = BACKEND["opencode_model_catalog"]()
+        if self.provider == "opencode-go":
+            self.catalog = BACKEND["opencode_model_catalog"]()
         self.load_models()
         self.set_status(output.splitlines()[-1] if output else "Catalog refreshed")
 

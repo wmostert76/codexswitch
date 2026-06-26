@@ -1,19 +1,21 @@
 #!/usr/bin/env python3
 import json
 import os
+import hmac
+import hashlib
+import re
 import sys
 import time
 import tomllib
 import urllib.error
 import urllib.request
-from urllib.parse import urlparse
+from urllib.parse import quote_plus, urlencode, urlparse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codexswitch_common import (
     user_home,
-    parse_opencode_catalog,
     opencode_catalog_from_binary,
     opencode_catalog_from_cache,
 )
@@ -24,16 +26,38 @@ AUTH_PATH = HOME / ".local/share/opencode/auth.json"
 CONFIG_PATH = HOME / ".config/opencode/opencode.json"
 MODELS_CACHE_PATH = HOME / ".cache/opencode/models.json"
 CODEX_CONFIG_PATH = HOME / ".codex/config.toml"
-UPSTREAM = "https://opencode.ai/zen/go/v1"
+UPSTREAM = os.environ.get("CODEX_OPENCODE_UPSTREAM", "https://opencode.ai/zen/go/v1")
 HOST = os.environ.get("CODEX_OPENCODE_PROXY_HOST", "127.0.0.1")
 PORT = int(os.environ.get("CODEX_OPENCODE_PROXY_PORT", "14555"))
 # Optional bearer token for proxy authentication. When set, clients must
 # send "Authorization: Bearer <token>". Unset = no auth (loopback only).
 PROXY_TOKEN = os.environ.get("CODEX_OPENCODE_PROXY_TOKEN", "")
-# Tool names that were "custom" type in the Responses API request.
-# Their arguments must be unwrapped from {"input": "..."} back to the
-# raw string when converting upstream chat tool_calls back to Responses format.
-_CUSTOM_TOOLS: set[str] = set()
+MAX_REQUEST_BYTES = int(os.environ.get("CODEX_OPENCODE_PROXY_MAX_REQUEST_BYTES", str(16 * 1024 * 1024)))
+
+
+class ToolContext:
+    def __init__(self):
+        self.custom_names: set[str] = set()
+        self.internal_names: set[str] = set()
+        self.response_names: dict[str, str] = {}
+
+    def alias(self, response_name: str) -> str:
+        alias = re.sub(r"[^A-Za-z0-9_-]", "__", response_name)
+        if len(alias) > 64:
+            digest = hashlib.sha256(response_name.encode()).hexdigest()[:10]
+            alias = f"{alias[:53]}_{digest}"
+        existing = self.response_names.get(alias)
+        if existing is not None and existing != response_name:
+            digest = hashlib.sha256(response_name.encode()).hexdigest()[:10]
+            alias = f"{alias[:53]}_{digest}"
+        self.response_names[alias] = response_name
+        return alias
+
+    def response_name(self, upstream_name: str) -> str:
+        return self.response_names.get(upstream_name, upstream_name)
+
+    def is_internal(self, response_name: str) -> bool:
+        return response_name in self.internal_names
 
 
 def opencode_key() -> str:
@@ -124,28 +148,53 @@ def opencode_models() -> list[dict]:
     return output
 
 
-def content_to_text(content) -> str:
+def content_to_chat(content):
     if isinstance(content, str):
         return content
     if isinstance(content, list):
         parts = []
         for item in content:
             if isinstance(item, dict):
-                parts.append(str(item.get("text") or item.get("content") or ""))
+                item_type = item.get("type")
+                if item_type in {"input_image", "image"}:
+                    image_url = item.get("image_url")
+                    if isinstance(image_url, dict):
+                        image_url = image_url.get("url")
+                    if not image_url:
+                        raise ValueError("image input requires image_url")
+                    parts.append(
+                        {
+                            "type": "image_url",
+                            "image_url": {
+                                "url": str(image_url),
+                                **(
+                                    {"detail": item["detail"]}
+                                    if item.get("detail")
+                                    else {}
+                                ),
+                            },
+                        }
+                    )
+                    continue
+                text = item.get("text") or item.get("content")
+                if text:
+                    parts.append({"type": "text", "text": str(text)})
             else:
-                parts.append(str(item))
-        return "\n".join(part for part in parts if part)
+                parts.append({"type": "text", "text": str(item)})
+        if all(part.get("type") == "text" for part in parts):
+            return "\n".join(part["text"] for part in parts)
+        return parts
     return str(content)
 
 
-def _wrap_tool_arguments(name: str, arguments: str) -> str:
+def _wrap_tool_arguments(name: str, arguments: str, context: ToolContext) -> str:
     """Wrap raw string arguments as {"input": "..."} for custom tools.
 
     The upstream chat completions API requires function arguments to be valid
     JSON.  Custom tools (like apply_patch) use a plain string as their input,
     so we must wrap it in a JSON object before sending it upstream.
     """
-    if name not in _CUSTOM_TOOLS:
+    if name not in context.custom_names:
         return arguments
     # If already a JSON object, pass through unchanged.
     try:
@@ -157,15 +206,16 @@ def _wrap_tool_arguments(name: str, arguments: str) -> str:
     return json.dumps({"input": arguments})
 
 
-def append_tool_call(messages: list[dict], item: dict) -> None:
+def append_tool_call(messages: list[dict], item: dict, context: ToolContext) -> None:
     name = item.get("name", "")
     raw_args = item.get("arguments") or item.get("input") or ""
+    upstream_name = context.alias(name)
     tool_call = {
         "id": item.get("call_id") or item.get("id"),
         "type": "function",
         "function": {
-            "name": name,
-            "arguments": _wrap_tool_arguments(name, raw_args),
+            "name": upstream_name,
+            "arguments": _wrap_tool_arguments(name, raw_args, context),
         },
     }
     if messages and messages[-1].get("role") == "assistant" and messages[-1].get("tool_calls"):
@@ -174,7 +224,8 @@ def append_tool_call(messages: list[dict], item: dict) -> None:
     messages.append({"role": "assistant", "content": None, "tool_calls": [tool_call]})
 
 
-def responses_input_to_messages(body: dict) -> list[dict]:
+def responses_input_to_messages(body: dict, context: ToolContext | None = None) -> list[dict]:
+    context = context or ToolContext()
     messages = []
     instructions = body.get("instructions")
     if instructions:
@@ -192,14 +243,14 @@ def responses_input_to_messages(body: dict) -> list[dict]:
                 continue
             item_type = item.get("type")
             if item_type in {"function_call", "custom_tool_call"}:
-                append_tool_call(messages, item)
+                append_tool_call(messages, item, context)
                 continue
             if item_type in {"function_call_output", "custom_tool_call_output"}:
                 messages.append(
                     {
                         "role": "tool",
                         "tool_call_id": item.get("call_id"),
-                        "content": content_to_text(item.get("output", "")),
+                        "content": content_to_chat(item.get("output", "")),
                     }
                 )
                 continue
@@ -207,31 +258,43 @@ def responses_input_to_messages(body: dict) -> list[dict]:
             if role == "developer":
                 role = "system"
             content = item.get("content", "")
-            messages.append({"role": role, "content": content_to_text(content)})
+            messages.append({"role": role, "content": content_to_chat(content)})
     return messages or [{"role": "user", "content": ""}]
 
 
-def responses_tools_to_chat(body: dict) -> list[dict]:
+def _append_function_tool(
+    tools: list[dict],
+    tool: dict,
+    context: ToolContext,
+    response_name: str,
+) -> None:
+    upstream_name = context.alias(response_name)
+    function = {
+        "name": upstream_name,
+        "description": tool.get("description", ""),
+        "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
+    }
+    if "strict" in tool:
+        function["strict"] = tool["strict"]
+    tools.append({"type": "function", "function": function})
+
+
+def responses_tools_to_chat(body: dict, context: ToolContext | None = None) -> list[dict]:
+    context = context or ToolContext()
     tools = []
     for tool in body.get("tools", []):
         if not isinstance(tool, dict):
             continue
         if tool.get("type") == "function" and tool.get("name"):
-            function = {
-                "name": tool["name"],
-                "description": tool.get("description", ""),
-                "parameters": tool.get("parameters", {"type": "object", "properties": {}}),
-            }
-            if "strict" in tool:
-                function["strict"] = tool["strict"]
-            tools.append({"type": "function", "function": function})
+            _append_function_tool(tools, tool, context, tool["name"])
         elif tool.get("type") == "custom" and tool.get("name"):
-            _CUSTOM_TOOLS.add(tool["name"])
+            context.custom_names.add(tool["name"])
+            upstream_name = context.alias(tool["name"])
             tools.append(
                 {
                     "type": "function",
                     "function": {
-                        "name": tool["name"],
+                        "name": upstream_name,
                         "description": tool.get("description", ""),
                         "parameters": {
                             "type": "object",
@@ -242,12 +305,57 @@ def responses_tools_to_chat(body: dict) -> list[dict]:
                     },
                 }
             )
+        elif tool.get("type") == "namespace" and tool.get("name"):
+            namespace = tool["name"]
+            for nested in tool.get("tools", []):
+                if isinstance(nested, dict) and nested.get("type") == "function" and nested.get("name"):
+                    _append_function_tool(
+                        tools,
+                        nested,
+                        context,
+                        f"{namespace}.{nested['name']}",
+                    )
+        elif tool.get("type") == "web_search":
+            context.internal_names.add("web_search")
+            _append_function_tool(
+                tools,
+                {
+                    "description": (
+                        "Search the web. Use for current public information, "
+                        "GitHub repositories/issues/code, documentation, and links."
+                    ),
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "query": {
+                                "type": "string",
+                                "description": "Search query",
+                            }
+                        },
+                        "required": ["query"],
+                        "additionalProperties": False,
+                    },
+                },
+                context,
+                "web_search",
+            )
     return tools
 
 
-def _unwrap_tool_arguments(name: str, arguments: str) -> str:
+def responses_tool_choice_to_chat(choice, context: ToolContext):
+    if not isinstance(choice, dict):
+        return choice
+    if choice.get("type") == "function" and choice.get("name"):
+        return {
+            "type": "function",
+            "function": {"name": context.alias(choice["name"])},
+        }
+    return choice
+
+
+def _unwrap_tool_arguments(name: str, arguments: str, context: ToolContext) -> str:
     """For custom tools, unwrap {"input": "..."} back to the raw string."""
-    if name not in _CUSTOM_TOOLS:
+    if name not in context.custom_names:
         return arguments
     try:
         parsed = json.loads(arguments)
@@ -258,23 +366,145 @@ def _unwrap_tool_arguments(name: str, arguments: str) -> str:
     return arguments
 
 
-def chat_tool_calls(message: dict) -> list[dict]:
+def chat_tool_calls(message: dict, context: ToolContext | None = None) -> list[dict]:
+    context = context or ToolContext()
     output = []
     for index, tool_call in enumerate(message.get("tool_calls") or []):
         function = tool_call.get("function") or {}
         call_id = tool_call.get("id") or f"call_{index}"
-        name = function.get("name", "")
-        is_custom = name in _CUSTOM_TOOLS
-        output.append(
-            {
-                "id": f"fc_{call_id}",
-                "type": "custom_tool_call" if is_custom else "function_call",
-                "call_id": call_id,
-                "name": name,
-                "arguments": _unwrap_tool_arguments(name, function.get("arguments", "")),
-            }
+        name = context.response_name(function.get("name", ""))
+        is_custom = name in context.custom_names
+        item = {
+            "id": f"fc_{call_id}",
+            "type": "custom_tool_call" if is_custom else "function_call",
+            "call_id": call_id,
+            "name": name,
+        }
+        arguments = _unwrap_tool_arguments(
+            name, function.get("arguments", ""), context
         )
+        item["input" if is_custom else "arguments"] = arguments
+        output.append(item)
     return output
+
+
+def response_input_as_list(input_value) -> list:
+    if isinstance(input_value, list):
+        return list(input_value)
+    if isinstance(input_value, str):
+        return [{"type": "message", "role": "user", "content": input_value}]
+    return [{"type": "message", "role": "user", "content": str(input_value)}]
+
+
+def web_search(query: str, limit: int = 5) -> str:
+    query = (query or "").strip()
+    if not query:
+        return "No query provided."
+    providers = []
+    if any(term in query.lower() for term in ("github", "repo", "repository", "issue", "pull request", "code")):
+        providers.append(("GitHub repositories", github_search_repositories))
+        providers.append(("GitHub issues", github_search_issues))
+    providers.append(("DuckDuckGo instant answer", duckduckgo_instant_answer))
+
+    sections = []
+    for title, provider in providers:
+        try:
+            result = provider(query, limit)
+        except Exception as exc:
+            result = f"{title} failed: {exc}"
+        if result:
+            sections.append(f"{title}:\n{result}")
+    return "\n\n".join(sections) if sections else "No search results found."
+
+
+def github_request(path: str, params: dict) -> dict:
+    query = urlencode(params)
+    req = urllib.request.Request(
+        f"https://api.github.com{path}?{query}",
+        headers={
+            "accept": "application/vnd.github+json",
+            "user-agent": "codexswitch-opencode-proxy",
+        },
+    )
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token:
+        req.add_header("authorization", f"Bearer {token}")
+    with urllib.request.urlopen(req, timeout=15) as response:
+        return json.loads(response.read())
+
+
+def github_search_repositories(query: str, limit: int) -> str:
+    data = github_request("/search/repositories", {"q": query, "per_page": min(limit, 10)})
+    lines = []
+    for item in data.get("items", [])[:limit]:
+        lines.append(
+            f"- {item.get('full_name')}: {item.get('html_url')} — "
+            f"{item.get('description') or 'no description'}"
+        )
+    return "\n".join(lines)
+
+
+def github_search_issues(query: str, limit: int) -> str:
+    data = github_request("/search/issues", {"q": query, "per_page": min(limit, 10)})
+    lines = []
+    for item in data.get("items", [])[:limit]:
+        lines.append(
+            f"- {item.get('title')}: {item.get('html_url')} — "
+            f"{item.get('state', 'unknown')}"
+        )
+    return "\n".join(lines)
+
+
+def flatten_duckduckgo_topics(topics: list, limit: int) -> list[str]:
+    lines = []
+    for topic in topics:
+        if len(lines) >= limit:
+            break
+        if "Topics" in topic and isinstance(topic["Topics"], list):
+            lines.extend(flatten_duckduckgo_topics(topic["Topics"], limit - len(lines)))
+            continue
+        text = topic.get("Text")
+        url = topic.get("FirstURL")
+        if text and url:
+            lines.append(f"- {text}: {url}")
+    return lines
+
+
+def duckduckgo_instant_answer(query: str, limit: int) -> str:
+    params = urlencode({"q": query, "format": "json", "no_html": 1, "skip_disambig": 1})
+    req = urllib.request.Request(
+        f"https://api.duckduckgo.com/?{params}",
+        headers={"user-agent": "codexswitch-opencode-proxy"},
+    )
+    with urllib.request.urlopen(req, timeout=15) as response:
+        data = json.loads(response.read())
+    lines = []
+    heading = data.get("Heading")
+    abstract = data.get("AbstractText")
+    abstract_url = data.get("AbstractURL")
+    if heading or abstract:
+        lines.append(f"- {heading or query}: {abstract or 'no summary'} {abstract_url or ''}".strip())
+    lines.extend(flatten_duckduckgo_topics(data.get("RelatedTopics", []), limit - len(lines)))
+    if not lines and data.get("Redirect"):
+        lines.append(f"- Redirect: {data['Redirect']}")
+    if not lines:
+        lines.append(f"- Search URL: https://duckduckgo.com/?q={quote_plus(query)}")
+    return "\n".join(lines[:limit])
+
+
+def parse_tool_arguments(arguments: str) -> dict:
+    try:
+        parsed = json.loads(arguments or "{}")
+    except json.JSONDecodeError:
+        return {"query": arguments}
+    return parsed if isinstance(parsed, dict) else {"query": str(parsed)}
+
+
+def execute_internal_tool(name: str, arguments: str) -> str:
+    if name == "web_search":
+        parsed = parse_tool_arguments(arguments)
+        return web_search(str(parsed.get("query") or parsed.get("q") or ""))
+    return f"Unsupported internal tool: {name}"
 
 
 def configured_reasoning_effort(model_id: str) -> str | None:
@@ -330,19 +560,22 @@ class ThinkFilter:
         return output
 
 
-def upstream_chat(body: dict):
+def upstream_chat(body: dict, context: ToolContext | None = None):
     reasoning = body.get("reasoning")
-    # Process tools first so _CUSTOM_TOOLS is populated before
+    context = context or ToolContext()
+    # Process tools first so custom tool metadata is populated before
     # responses_input_to_messages needs it to wrap custom tool arguments.
-    tools = responses_tools_to_chat(body)
+    tools = responses_tools_to_chat(body, context)
     payload = {
         "model": body.get("model"),
-        "messages": responses_input_to_messages(body),
+        "messages": responses_input_to_messages(body, context),
         "stream": bool(body.get("stream", True)),
     }
     if tools:
         payload["tools"] = tools
-        payload["tool_choice"] = body.get("tool_choice", "auto")
+        payload["tool_choice"] = responses_tool_choice_to_chat(
+            body.get("tool_choice", "auto"), context
+        )
         payload["parallel_tool_calls"] = body.get("parallel_tool_calls", True)
     if body.get("temperature") is not None:
         payload["temperature"] = body["temperature"]
@@ -401,7 +634,15 @@ class Handler(BaseHTTPRequestHandler):
         if not PROXY_TOKEN:
             return True
         auth = self.headers.get("authorization", "")
-        return auth == f"Bearer {PROXY_TOKEN}"
+        candidates = [PROXY_TOKEN]
+        try:
+            candidates.append(opencode_key())
+        except Exception:
+            pass
+        return any(
+            hmac.compare_digest(auth, f"Bearer {candidate}")
+            for candidate in candidates
+        )
 
     def send_json(self, status: int, payload: dict):
         body = json.dumps(payload).encode()
@@ -433,8 +674,22 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(404, {"error": f"not found: {self.path}"})
             return
 
-        length = int(self.headers.get("content-length", "0"))
-        body = json.loads(self.rfile.read(length) or b"{}")
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            self.send_json(400, {"error": "invalid content-length"})
+            return
+        if length < 0 or length > MAX_REQUEST_BYTES:
+            self.send_json(413, {"error": "request body too large"})
+            return
+        try:
+            body = json.loads(self.rfile.read(length) or b"{}")
+        except json.JSONDecodeError as exc:
+            self.send_json(400, {"error": f"invalid JSON: {exc.msg}"})
+            return
+        if not isinstance(body, dict):
+            self.send_json(400, {"error": "request body must be a JSON object"})
+            return
         if not body.get("stream", True):
             self.handle_non_stream(body)
             return
@@ -442,7 +697,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def handle_non_stream(self, body: dict):
         try:
-            with upstream_chat({**body, "stream": False}) as upstream:
+            context = ToolContext()
+            with upstream_chat({**body, "stream": False}, context) as upstream:
                 data = json.loads(upstream.read())
             message = data.get("choices", [{}])[0].get("message", {})
             text = message.get("content") or ""
@@ -455,7 +711,7 @@ class Handler(BaseHTTPRequestHandler):
                         "content": [{"type": "output_text", "text": text}],
                     }
                 )
-            output.extend(chat_tool_calls(message))
+            output.extend(chat_tool_calls(message, context))
             rid = f"resp_{int(time.time() * 1000)}"
             self.send_json(
                 200,
@@ -481,9 +737,6 @@ class Handler(BaseHTTPRequestHandler):
     def handle_stream(self, body: dict):
         rid = f"resp_{int(time.time() * 1000)}"
         item_id = "msg_0"
-        full_text = []
-        tool_calls = {}
-        output = []
         self.send_response(200)
         self.send_header("content-type", "text/event-stream")
         self.send_header("cache-control", "no-cache")
@@ -491,134 +744,162 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
 
         response_base = {"id": rid, "object": "response", "created_at": int(time.time()), "status": "in_progress", "model": body.get("model"), "output": []}
-        think_filter = ThinkFilter()
-        text_started = False
-        text_output_index = None
         self.sse("response.created", {"type": "response.created", "response": response_base})
 
         try:
-            with upstream_chat({**body, "stream": True}) as upstream:
-                for raw in upstream:
-                    line = raw.decode(errors="replace").strip()
-                    if not line.startswith("data:"):
-                        continue
-                    data = line[5:].strip()
-                    if data == "[DONE]":
-                        break
-                    try:
-                        chunk = json.loads(data)
-                    except json.JSONDecodeError:
-                        continue
-                    choices = chunk.get("choices") or []
-                    if not choices:
-                        continue
-                    delta_obj = choices[0].get("delta", {})
-                    delta = delta_obj.get("content")
-                    if delta:
-                        delta = think_filter.feed(delta)
-                        if not text_started:
-                            delta = delta.lstrip()
-                        if delta:
-                            if not text_started:
-                                text_started = True
-                                text_output_index = len(output)
-                                output.append(None)
-                                self.sse("response.output_item.added", {"type": "response.output_item.added", "output_index": text_output_index, "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
-                                self.sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": ""}})
-                            full_text.append(delta)
-                            self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "delta": delta})
+            request_body = {**body, "stream": True}
+            request_input = response_input_as_list(body.get("input", ""))
+            for _ in range(5):
+                context = ToolContext()
+                full_text = []
+                tool_calls = {}
+                think_filter = ThinkFilter()
 
-                    for tool_delta in delta_obj.get("tool_calls") or []:
-                        index = tool_delta.get("index", 0)
-                        state = tool_calls.setdefault(
-                            index,
-                            {
-                                "call_id": tool_delta.get("id") or f"call_{index}",
-                                "name": "",
-                                "arguments": [],
-                                "started": False,
-                                "output_index": None,
-                            },
-                        )
-                        if tool_delta.get("id"):
-                            state["call_id"] = tool_delta["id"]
-                        function = tool_delta.get("function") or {}
-                        if function.get("name"):
-                            state["name"] += function["name"]
-                        arguments = function.get("arguments") or ""
-                        if not state["started"] and state["name"]:
-                            state["started"] = True
-                            state["output_index"] = len(output)
-                            output.append(None)
-                            is_custom = state["name"] in _CUSTOM_TOOLS
-                            self.sse(
-                                "response.output_item.added",
+                with upstream_chat(request_body, context) as upstream:
+                    for raw in upstream:
+                        line = raw.decode(errors="replace").strip()
+                        if not line.startswith("data:"):
+                            continue
+                        data = line[5:].strip()
+                        if data == "[DONE]":
+                            break
+                        try:
+                            chunk = json.loads(data)
+                        except json.JSONDecodeError:
+                            continue
+                        choices = chunk.get("choices") or []
+                        if not choices:
+                            continue
+                        delta_obj = choices[0].get("delta", {})
+                        delta = delta_obj.get("content")
+                        if delta:
+                            filtered = think_filter.feed(delta)
+                            if filtered:
+                                full_text.append(filtered)
+                        for tool_delta in delta_obj.get("tool_calls") or []:
+                            index = tool_delta.get("index", 0)
+                            state = tool_calls.setdefault(
+                                index,
                                 {
-                                    "type": "response.output_item.added",
-                                    "output_index": state["output_index"],
-                                    "item": {
-                                        "id": f"fc_{state['call_id']}",
-                                        "type": "custom_tool_call" if is_custom else "function_call",
-                                        "call_id": state["call_id"],
-                                        "name": state["name"],
-                                        "arguments": "",
-                                    },
+                                    "call_id": tool_delta.get("id") or f"call_{index}",
+                                    "name": "",
+                                    "arguments": [],
                                 },
                             )
-                        if arguments:
-                            state["arguments"].append(arguments)
-                            if state["started"]:
-                                self.sse(
-                                    "response.function_call_arguments.delta",
-                                    {
-                                        "type": "response.function_call_arguments.delta",
-                                        "item_id": f"fc_{state['call_id']}",
-                                        "output_index": state["output_index"],
-                                        "delta": arguments,
-                                    },
-                                )
+                            if tool_delta.get("id"):
+                                state["call_id"] = tool_delta["id"]
+                            function = tool_delta.get("function") or {}
+                            if function.get("name"):
+                                state["name"] += function["name"]
+                            if function.get("arguments"):
+                                state["arguments"].append(function["arguments"])
 
-            final_delta = think_filter.finish()
-            if final_delta:
-                if not text_started:
-                    final_delta = final_delta.lstrip()
-                if final_delta and not text_started:
-                    text_started = True
+                final_delta = think_filter.finish()
+                if final_delta:
+                    full_text.append(final_delta)
+
+                resolved_calls = []
+                for state in tool_calls.values():
+                    if not state["name"]:
+                        continue
+                    response_name = context.response_name(state["name"])
+                    arguments = _unwrap_tool_arguments(
+                        response_name, "".join(state["arguments"]), context
+                    )
+                    resolved_calls.append(
+                        {
+                            "call_id": state["call_id"],
+                            "name": response_name,
+                            "arguments": arguments,
+                            "custom": response_name in context.custom_names,
+                            "internal": context.is_internal(response_name),
+                        }
+                    )
+
+                internal_calls = [call for call in resolved_calls if call["internal"]]
+                external_calls = [call for call in resolved_calls if not call["internal"]]
+                if internal_calls and not external_calls:
+                    for call in internal_calls:
+                        request_input.append(
+                            {
+                                "type": "function_call",
+                                "call_id": call["call_id"],
+                                "name": call["name"],
+                                "arguments": call["arguments"],
+                            }
+                        )
+                        request_input.append(
+                            {
+                                "type": "function_call_output",
+                                "call_id": call["call_id"],
+                                "output": execute_internal_tool(
+                                    call["name"], call["arguments"]
+                                ),
+                            }
+                        )
+                    request_body = {**body, "input": request_input, "stream": True}
+                    continue
+
+                output = []
+                text = "".join(full_text).lstrip()
+                if text:
                     text_output_index = len(output)
                     output.append(None)
                     self.sse("response.output_item.added", {"type": "response.output_item.added", "output_index": text_output_index, "item": {"id": item_id, "type": "message", "role": "assistant", "content": []}})
                     self.sse("response.content_part.added", {"type": "response.content_part.added", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": ""}})
-                full_text.append(final_delta)
-                self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "delta": final_delta})
-            text = "".join(full_text)
-            if text_started:
-                message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
-                output[text_output_index] = message
-                self.sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "text": text})
-                self.sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": text}})
-                self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": text_output_index, "item": message})
-            for state in tool_calls.values():
-                if not state["started"]:
-                    continue
-                arguments = _unwrap_tool_arguments(state["name"], "".join(state["arguments"]))
-                is_custom = state["name"] in _CUSTOM_TOOLS
-                item = {
-                    "id": f"fc_{state['call_id']}",
-                    "type": "custom_tool_call" if is_custom else "function_call",
-                    "call_id": state["call_id"],
-                    "name": state["name"],
-                    "arguments": arguments,
-                }
-                output[state["output_index"]] = item
-                self.sse("response.function_call_arguments.done", {"type": "response.function_call_arguments.done", "item_id": item["id"], "output_index": state["output_index"], "arguments": arguments})
-                self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": state["output_index"], "item": item})
-            if not output:
-                message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": ""}]}
-                output.append(message)
+                    self.sse("response.output_text.delta", {"type": "response.output_text.delta", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "delta": text})
+                    message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": text}]}
+                    output[text_output_index] = message
+                    self.sse("response.output_text.done", {"type": "response.output_text.done", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "text": text})
+                    self.sse("response.content_part.done", {"type": "response.content_part.done", "item_id": item_id, "output_index": text_output_index, "content_index": 0, "part": {"type": "output_text", "text": text}})
+                    self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": text_output_index, "item": message})
+
+                for call in external_calls:
+                    output_index = len(output)
+                    is_custom = call["custom"]
+                    item = {
+                        "id": f"fc_{call['call_id']}",
+                        "type": "custom_tool_call" if is_custom else "function_call",
+                        "call_id": call["call_id"],
+                        "name": call["name"],
+                        **({"input": call["arguments"]} if is_custom else {"arguments": call["arguments"]}),
+                    }
+                    output.append(item)
+                    self.sse(
+                        "response.output_item.added",
+                        {
+                            "type": "response.output_item.added",
+                            "output_index": output_index,
+                            "item": {
+                                **item,
+                                **({"input": ""} if is_custom else {"arguments": ""}),
+                            },
+                        },
+                    )
+                    if is_custom and call["arguments"]:
+                        self.sse("response.custom_tool_call_input.delta", {"type": "response.custom_tool_call_input.delta", "item_id": item["id"], "call_id": call["call_id"], "output_index": output_index, "delta": call["arguments"]})
+                    done_type = "response.custom_tool_call_input.done" if is_custom else "response.function_call_arguments.done"
+                    done_payload = {"type": done_type, "item_id": item["id"], "call_id": call["call_id"], "output_index": output_index, ("input" if is_custom else "arguments"): call["arguments"]}
+                    self.sse(done_type, done_payload)
+                    self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": output_index, "item": item})
+
+                if not output:
+                    message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": ""}]}
+                    output.append(message)
+                self.sse("response.completed", {"type": "response.completed", "response": {"id": rid, "object": "response", "created_at": int(time.time()), "status": "completed", "model": body.get("model"), "output": output}})
+                self.wfile.write(b"data: [DONE]\n\n")
+                self.wfile.flush()
+                return
+
+            message = {"id": item_id, "type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "web_search did not complete"}]}
+            output = [message]
+            self.sse("response.output_item.done", {"type": "response.output_item.done", "output_index": 0, "item": message})
             self.sse("response.completed", {"type": "response.completed", "response": {"id": rid, "object": "response", "created_at": int(time.time()), "status": "completed", "model": body.get("model"), "output": output}})
             self.wfile.write(b"data: [DONE]\n\n")
             self.wfile.flush()
         except Exception as exc:
+            if isinstance(exc, (BrokenPipeError, ConnectionResetError)):
+                return
             message = str(exc)
             if isinstance(exc, urllib.error.HTTPError):
                 try:
@@ -628,7 +909,10 @@ class Handler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
             print(f"upstream stream failed: {message}", flush=True)
-            self.sse("response.failed", {"type": "response.failed", "response": {"id": rid, "status": "failed"}, "error": {"message": message}})
+            try:
+                self.sse("response.failed", {"type": "response.failed", "response": {"id": rid, "status": "failed"}, "error": {"message": message}})
+            except (BrokenPipeError, ConnectionResetError):
+                pass
         finally:
             self.close_connection = True
 

@@ -1,0 +1,72 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements.txt
+          python -m pip install pytest
+
+      - name: Validate version matches tag
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          version="$(python -c 'import sys; sys.path.insert(0, "bin"); from codexswitch_common import VERSION; print(VERSION)')"
+          test "$version" = "$tag"
+
+      - name: Compile Python entry points
+        run: |
+          python -m py_compile \
+            bin/codexswitch \
+            bin/codexswitch-tui \
+            bin/codex-opencode-go-proxy \
+            bin/opencode-go-token \
+            bin/openrouter-token \
+            bin/codexswitch_common.py
+
+      - name: Validate shell scripts
+        run: bash -n install.sh uninstall.sh
+
+      - name: Run test suite
+        run: python -m pytest tests/ -v
+
+      - name: Extract changelog section
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          awk -v version="$tag" '
+            $0 ~ "^## \\[" version "\\]" { capture=1; next }
+            capture && /^## \[/ { exit }
+            capture { print }
+          ' CHANGELOG.md > release-notes.md
+          if ! test -s release-notes.md; then
+            echo "No CHANGELOG.md section found for $tag" >&2
+            exit 1
+          fi
+
+      - name: Create GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "CodexSwitch $GITHUB_REF_NAME" \
+            --notes-file release-notes.md \
+            --verify-tag

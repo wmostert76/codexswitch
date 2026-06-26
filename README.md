@@ -5,17 +5,18 @@ A Midnight Commander-inspired terminal control center for Codex CLI.
 ![CodexSwitch Commander](docs/codexswitch-commander.svg)
 
 CodexSwitch provides a mouse-aware dual-pane TUI for switching between native
-OpenAI accounts/models and OpenCode Go models. It discovers model-specific
-reasoning modes, refreshes the OpenCode catalog and keeps normal `codex` usage
-unchanged after a selection is applied.
+OpenAI accounts/models, OpenCode Go models and OpenRouter models. It discovers
+model-specific reasoning modes, refreshes remote catalogs and keeps normal
+`codex` usage unchanged after a selection is applied.
 
 ## Features
 
 - Commander-style interface using Midnight Commander's `classic-dark` palette
 - OpenAI account switching without repeatedly overwriting `~/.codex/auth.json`
-- OpenAI and OpenCode Go model selection
+- OpenAI, OpenCode Go and OpenRouter model selection
 - Model-aware reasoning modes, including effort levels and thinking toggles
 - Live OpenCode Go model refresh
+- OpenRouter model refresh via the OpenRouter models API
 - Function-key workflow and mouse support
 - Secure account storage with `0700` directories and `0600` files
 - Automatic synchronization of rotated OpenAI refresh tokens when switching
@@ -26,6 +27,7 @@ unchanged after a selection is applied.
 - Linux with Python 3.11 or newer
 - Codex CLI
 - OpenCode CLI for OpenCode Go support
+- OpenRouter API key for OpenRouter support
 - `systemd` for the background compatibility proxy
 - `sudo` for installation into `/usr/local/bin`
 
@@ -44,8 +46,9 @@ codexswitch
 ```
 
 The installer creates an isolated `.venv`, installs Textual, adds command
-symlinks under `/usr/local/bin` and installs the proxy as a user-scoped system
-service running under the account that invoked the installer.
+symlinks under `/usr/local/bin` and installs a system service that runs the
+proxy under the account that invoked the installer. Re-running the installer
+restarts the proxy so updated code becomes active immediately.
 
 ## Keys
 
@@ -74,13 +77,16 @@ codexswitch refresh
 codexswitch status
 codexswitch auth openai
 codexswitch auth opencode-go
+codexswitch auth openrouter
 codexswitch accounts
+codexswitch account add
 codexswitch account save
 codexswitch account use user@example.com
 codexswitch use openai gpt-5.5
 codexswitch use opencode-go deepseek-v4-pro max
 codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
+codexswitch use openrouter openrouter/auto
 codexswitch run [PROMPT...]
 codexswitch --version
 ```
@@ -92,21 +98,36 @@ CodexSwitch does not invent a second authentication format:
 - Active OpenAI auth: `~/.codex/auth.json`, managed by `codex login`
 - Saved OpenAI accounts: `~/.config/codexswitch/openai-accounts/`
 - OpenCode Go auth: `~/.local/share/opencode/auth.json`, managed by OpenCode
+- OpenRouter auth: `~/.config/codexswitch/openrouter/auth.json`, managed by
+  `codexswitch auth openrouter`
+
+`codexswitch auth openai` and `codexswitch account add` use Codex device
+authentication, then save the resulting OpenAI account in the CodexSwitch
+account store. In the TUI, select `+ add OpenAI account` or press `F7` while
+OpenAI is selected.
+
+For OpenRouter, press `F7` while OpenRouter is selected in the TUI, or run
+`codexswitch auth openrouter` in classic/CLI mode. The API key is read without
+terminal echo and is never written to `~/.codex/config.toml`; Codex receives it
+through the installed `openrouter-token` helper.
 
 No credentials are stored in this repository.
 
 ## Proxy Authentication
 
 The compatibility proxy listens on `127.0.0.1:14555`. By default it
-accepts any local connection. To require a bearer token, set the
-`CODEX_OPENCODE_PROXY_TOKEN` environment variable before starting
-the service:
+accepts any local connection. To additionally require authentication for
+manual clients, set `CODEX_OPENCODE_PROXY_TOKEN` for the service:
 
 ```bash
 sudo systemctl edit codex-opencode-go-proxy.service
 # Add: Environment=CODEX_OPENCODE_PROXY_TOKEN=your-secret
 sudo systemctl restart codex-opencode-go-proxy.service
 ```
+
+CodexSwitch itself continues to authenticate with the existing OpenCode Go
+credential, which the proxy also accepts. Manual clients may use either that
+credential or the optional dedicated proxy token.
 
 The proxy retries transient upstream errors (5xx, connection resets) up
 to three times with exponential backoff.
