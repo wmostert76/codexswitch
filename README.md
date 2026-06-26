@@ -175,6 +175,12 @@ trigger the GitHub Release workflow.
 The uninstaller removes installed commands and the proxy service. It leaves
 Codex, OpenCode and CodexSwitch user configuration untouched.
 
+## Credits
+
+Idea, product direction and maintenance: by WAM-Software since (c) 1988
+
+AI-assisted implementation: OpenAI Codex
+
 ## License
 
 MIT
