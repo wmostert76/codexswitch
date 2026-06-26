@@ -19,7 +19,8 @@ _spec.loader.exec_module(tui)
 
 
 def test_tui_subtitle_contains_version():
-    assert "v0.5.1" in tui.CodexSwitchApp.SUB_TITLE
+    assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
+    assert "v0.5.2" in tui.CodexSwitchApp.SUB_TITLE
 
 
 def test_tui_80x24():

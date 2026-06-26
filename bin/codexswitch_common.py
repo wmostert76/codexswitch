@@ -19,7 +19,7 @@ from pathlib import Path
 import pwd
 
 
-VERSION = "0.5.1"
+VERSION = "0.5.2"
 
 
 def user_home() -> Path:

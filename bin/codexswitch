@@ -35,6 +35,8 @@ OPENROUTER_TOKEN_HELPER = shutil.which("openrouter-token") or str(PROJECT_ROOT /
 PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
 TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
 TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
+APP_NAME = "CodexSwitch"
+APP_TITLE = f"{APP_NAME} Commander"
 
 
 def user_home() -> Path:
@@ -706,6 +708,15 @@ def status() -> None:
         print("opencode-go auth: ontbreekt")
 
 
+def current_selection_line() -> str:
+    state = read_json(SWITCH_CONFIG, {})
+    provider = state.get("provider", "?")
+    model = state.get("model", "?")
+    effort = state.get("reasoning_effort")
+    suffix = f" / denken={effort}" if effort else ""
+    return f"{provider} / {model}{suffix}"
+
+
 def list_models() -> None:
     print("OpenAI:")
     for model in openai_models():
@@ -718,16 +729,68 @@ def list_models() -> None:
         print(f"  {model}")
 
 
-def choose(title: str, options: list[str]) -> str:
+def terminal_width(default: int = 88) -> int:
+    try:
+        return shutil.get_terminal_size((default, 24)).columns
+    except OSError:
+        return default
+
+
+def line(char: str = "─") -> str:
+    return char * min(max(terminal_width(), 60), 100)
+
+
+def banner(subtitle: str | None = None) -> None:
+    print()
+    print(f"{APP_TITLE} {VERSION}")
+    if subtitle:
+        print(subtitle)
+    print(line())
+
+
+def option_matches(option: str, query: str) -> bool:
+    haystack = option.lower()
+    needles = [part for part in query.lower().split() if part]
+    return all(part in haystack for part in needles)
+
+
+def choose(title: str, options: list[str], descriptions: dict[str, str] | None = None) -> str:
     if not options:
         die(f"geen opties voor {title}")
-    print(f"\n{title}")
-    for idx, option in enumerate(options, 1):
-        print(f"  {idx}. {option}")
+    descriptions = descriptions or {}
+    query = ""
+    page_size = max(8, min(20, terminal_width() - 52))
     while True:
-        raw = input("Keuze: ").strip()
-        if raw.isdigit() and 1 <= int(raw) <= len(options):
-            return options[int(raw) - 1]
+        filtered = [option for option in options if option_matches(option, query)]
+        visible = filtered[:page_size]
+        print()
+        print(f"┌─ {title}")
+        if query:
+            print(f"│  filter: {query}  ({len(filtered)}/{len(options)})")
+        elif len(options) > page_size:
+            print(f"│  typ tekst om te filteren, nummer om te kiezen ({len(options)} opties)")
+        else:
+            print("│  typ nummer om te kiezen, of tekst om te filteren")
+        for idx, option in enumerate(visible, 1):
+            description = descriptions.get(option)
+            suffix = f" — {description}" if description else ""
+            print(f"│  {idx:>2}. {option}{suffix}")
+        if len(filtered) > page_size:
+            print(f"│      … {len(filtered) - page_size} meer; verfijn je zoektekst")
+        if not filtered:
+            print("│      geen matches; druk Enter om filter te wissen")
+        print("└─")
+        raw = input("Keuze/zoek: ").strip()
+        if raw == "" and query:
+            query = ""
+            continue
+        if raw.isdigit() and visible:
+            index = int(raw)
+            if 1 <= index <= len(visible):
+                return visible[index - 1]
+        if raw:
+            query = raw
+            continue
         print("Ongeldige keuze")
 
 
@@ -755,20 +818,33 @@ def auth(provider: str | None = None) -> None:
 
 
 def interactive() -> None:
-    print(f"CodexSwitch Commander {VERSION}")
+    banner(f"Actief: {current_selection_line()}")
     while True:
+        action_descriptions = {
+            "provider/model kiezen": "zoekbare modelpicker",
+            "OpenAI-accounts": "toevoegen, opslaan of activeren",
+            "modellen verversen": "OpenCode Go + OpenRouter catalogus",
+            "auth": "login/API-key per provider",
+            "status": "paden en actieve configuratie",
+            "modellen tonen": "alle bekende modellen",
+            "stop": "sluit classic af",
+        }
         action = choose(
-            "codexswitch",
+            "Hoofdmenu",
             ["provider/model kiezen", "OpenAI-accounts", "modellen verversen", "auth", "status", "modellen tonen", "stop"],
+            action_descriptions,
         )
         if action == "OpenAI-accounts":
             accounts = openai_accounts()
-            if not accounts:
-                print("Geen opgeslagen OpenAI-accounts. Gebruik \"codexswitch auth openai\" om in te loggen.")
-                continue
             sub = choose(
                 "OpenAI-accounts",
                 ["account toevoegen via device sign-in", "account activeren", "huidige login opslaan", "terug"],
+                {
+                    "account toevoegen via device sign-in": "start Codex browser/device login",
+                    "account activeren": f"{len(accounts)} opgeslagen account(s)",
+                    "huidige login opslaan": "sync actieve Codex login",
+                    "terug": "naar hoofdmenu",
+                },
             )
             if sub == "account toevoegen via device sign-in":
                 auth("openai")
@@ -781,7 +857,15 @@ def interactive() -> None:
             elif sub == "huidige login opslaan":
                 save_openai_account()
         elif action == "provider/model kiezen":
-            provider = choose("Provider", ["openai", "opencode-go", "openrouter"])
+            provider = choose(
+                "Provider",
+                ["openai", "opencode-go", "openrouter"],
+                {
+                    "openai": "native Codex/OpenAI accounts",
+                    "opencode-go": "via lokale compatibility proxy",
+                    "openrouter": "API-key via openrouter-token",
+                },
+            )
             if provider == "openai":
                 accounts = openai_accounts()
                 if accounts:
@@ -800,7 +884,7 @@ def interactive() -> None:
                 models = openrouter_models()
                 default = OPENROUTER_FALLBACK_MODELS[0]
             ordered = [default] + [m for m in models if m != default]
-            model = choose("Model", ordered)
+            model = choose(f"{provider} model", ordered)
             validate_provider_model(provider, model)
             effort = None
             if provider == "opencode-go":
@@ -825,22 +909,35 @@ def interactive() -> None:
 
 
 def usage() -> None:
-    print(f"""CodexSwitch Commander {VERSION}
+    print(f"""{APP_TITLE} {VERSION}
 
-Gebruik:
-  codexswitch                 Commander TUI
-  codexswitch --version       toon versie
-  codexswitch classic         klassiek tekstmenu
-  codexswitch list            toon modellen
-  codexswitch refresh         ververs OpenCode Go-modellen
-  codexswitch status          toon paden en huidige keuze
-  codexswitch use PROVIDER MODEL [DENKSTAND]
+Usage:
+  codexswitch                        start Commander TUI
+  codexswitch classic                start searchable classic picker
+  codexswitch use PROVIDER MODEL [REASONING]
   codexswitch auth [openai|opencode-go|openrouter]
-  codexswitch accounts
+  codexswitch account add            add OpenAI account with device sign-in
+  codexswitch account save [EMAIL]   save current OpenAI login
+  codexswitch account use EMAIL      activate saved OpenAI account
+  codexswitch refresh                refresh OpenCode Go and OpenRouter models
+  codexswitch list                   list known models
+  codexswitch status                 show active config and auth status
+  codexswitch run [PROMPT...]        run codex with active config
+  codexswitch --version              print version
+
+Providers:
+  openai                             native Codex/OpenAI account flow
+  opencode-go                        OpenCode Go through local Responses proxy
+  openrouter                         OpenRouter API key through openrouter-token
+
+Examples:
+  codexswitch
+  codexswitch classic
   codexswitch account add
-  codexswitch account save [EMAIL]
-  codexswitch account use EMAIL
-  codexswitch run [PROMPT...]
+  codexswitch auth openrouter
+  codexswitch use openai gpt-5.5
+  codexswitch use opencode-go glm-5.2 high
+  codexswitch use openrouter anthropic/claude-sonnet-4.5
 """)
 
 
@@ -855,7 +952,7 @@ def main(argv: list[str]) -> int:
         usage()
         return 0
     if cmd in {"-v", "--version"}:
-        print(f"codexswitch {VERSION}")
+        print(f"{Path(sys.argv[0]).name} {VERSION}")
         return 0
     if cmd == "classic":
         interactive()
@@ -865,6 +962,7 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "refresh":
         refresh_opencode_models()
+        refresh_openrouter_models(strict=False)
         return 0
     if cmd == "status":
         status()

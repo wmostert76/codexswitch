@@ -29,6 +29,7 @@ sudo install -d -m 755 /usr/local/bin
 for command in codexswitch codex-opencode-go-proxy opencode-go-token openrouter-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
+sudo rm -f /usr/local/bin/openswitch
 
 service_file=$(mktemp)
 trap 'rm -f "$service_file"' EXIT

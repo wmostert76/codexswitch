@@ -24,7 +24,7 @@ _spec.loader.exec_module(cs)
 
 
 def test_version_constant_is_release_version():
-    assert cs.VERSION == "0.5.1"
+    assert cs.VERSION == "0.5.2"
 
 
 def test_cli_version_output():
@@ -35,7 +35,13 @@ def test_cli_version_output():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.1"
+    assert proc.stdout.strip() == "codexswitch 0.5.2"
+
+
+def test_choose_filters_before_selecting(monkeypatch):
+    answers = iter(["router", "1"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    assert cs.choose("Provider", ["openai", "opencode-go", "openrouter"]) == "openrouter"
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────

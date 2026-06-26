@@ -8,6 +8,24 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.2] - 2026-06-26
+
+### Changed
+
+- Restored the product title to **CodexSwitch Commander** while keeping the
+  `codexswitch` command lowercase.
+- Reworked `--help` into a clearer app-style command overview.
+- Polished classic mode with a searchable provider/model picker inspired by
+  modern terminal model selectors.
+- Rebuilt the README with a clearer quickstart, provider table, auth/storage
+  overview and release documentation.
+
+### Fixed
+
+- Installer removes the temporary `openswitch` alias and points users back to
+  `codexswitch`.
+- `codexswitch refresh` now refreshes both OpenCode Go and OpenRouter catalogs.
+
 ## [0.5.1] - 2026-06-26
 
 ### Added
