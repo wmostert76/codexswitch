@@ -18,6 +18,18 @@ from textual.widgets.option_list import Option
 PROJECT = Path(__file__).resolve().parents[1]
 BACKEND_PATH = PROJECT / "bin/codexswitch"
 BACKEND = runpy.run_path(str(BACKEND_PATH))
+BUTTON_BAR = (
+    "[reverse bold]1[/]Help  "
+    "[reverse bold]2[/]Prov  "
+    "[reverse bold]3[/]Model "
+    "[reverse bold]4[/]Think "
+    "[reverse bold]5[/]Fresh "
+    "[reverse bold]6[/]Apply "
+    "[reverse bold]7[/]Auth  "
+    "[reverse bold]8[/]Stat  "
+    "[reverse bold]9[/]Codex "
+    "[reverse bold]10[/]Quit"
+)
 
 
 class HelpScreen(ModalScreen):
@@ -209,7 +221,8 @@ class CodexSwitchApp(App):
         height: 1;
         background: #00afaf;
         color: #000000;
-        text-align: center;
+        text-align: left;
+        text-style: bold;
     }
 
     HelpScreen {
@@ -290,14 +303,7 @@ class CodexSwitchApp(App):
             f" {BACKEND['CREDITS_OWNER']} · {BACKEND['CREDITS_AI']}",
             id="status",
         )
-        yield Static(
-            "[reverse bold]1[/]Help [reverse bold]2[/]Prov "
-            "[reverse bold]3[/]Model [reverse bold]4[/]Think "
-            "[reverse bold]5[/]Refsh [reverse bold]6[/]Apply "
-            "[reverse bold]7[/]Auth [reverse bold]8[/]Status "
-            "[reverse bold]9[/]Codex [reverse bold]10[/]Quit",
-            id="buttonbar",
-        )
+        yield Static(BUTTON_BAR, id="buttonbar")
 
     def on_mount(self) -> None:
         self.load_state()

@@ -4,6 +4,7 @@ import importlib.machinery
 import importlib.util
 from pathlib import Path
 
+from rich.text import Text
 from textual.geometry import Size
 
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
@@ -22,6 +23,15 @@ def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
     assert "v0.5.3" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
+
+
+def test_button_bar_is_compact_commander_style():
+    plain = Text.from_markup(tui.BUTTON_BAR).plain
+    assert plain == (
+        "1Help  2Prov  3Model 4Think 5Fresh 6Apply 7Auth  "
+        "8Stat  9Codex 10Quit"
+    )
+    assert len(plain) <= 80
 
 
 def test_tui_80x24():
