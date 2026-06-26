@@ -567,10 +567,14 @@ class CodexSwitchApp(App):
             variants = BACKEND["reasoning_choices"](self.model)
             choices = variants or [("model-default", "medium")]
             status = meta.get("status", "active")
+            ctx = limits.get("context", "?")
+            out = limits.get("output", "?")
+            ctx_display = f"{ctx:,}" if isinstance(ctx, int) else str(ctx)
+            out_display = f"{out:,}" if isinstance(out, int) else str(out)
             detail.update(
                 f"[bold #ffff00]{meta.get('name', self.model)}[/]  "
                 f"[#5fd7ff]{meta.get('family', 'unknown')}[/]\n"
-                f"Context: {limits.get('context', '?'):,}   Output: {limits.get('output', '?'):,}   "
+                f"Context: {ctx_display}   Output: {out_display}   "
                 f"Status: {status}\n"
                 f"Input: {', '.join(modalities) or 'text'}   Tools: "
                 f"{'yes' if capabilities.get('toolcall') else 'no'}"
