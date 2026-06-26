@@ -8,6 +8,15 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.6] - 2026-06-26
+
+### Changed
+
+- Added CodexSwitch ASCII branding with `C O M M A N D E R` to the README and
+  CLI help shown by plain `codexswitch`.
+- TUI startup now shows a Commander-style splash popup with the ASCII branding,
+  WAM-Software credit and AI-assisted implementation credit.
+
 ## [0.5.5] - 2026-06-26
 
 ### Changed

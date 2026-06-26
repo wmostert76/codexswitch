@@ -19,10 +19,32 @@ tui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tui)
 
 
+async def dismiss_splash(pilot) -> None:
+    await pilot.pause()
+    await pilot.press("enter")
+    await pilot.pause()
+
+
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.5" in tui.CodexSwitchApp.SUB_TITLE
+    assert "v0.5.6" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
+
+
+def test_startup_splash_contains_ascii_branding_and_credits():
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            dialog = app.screen.query_one("#splash-dialog")
+            plain = dialog.render().plain
+            assert "C O M M A N D E R" in plain
+            assert "CodexSwitch Commander v0.5.6" in plain
+            assert "by WAM-Software since (c) 1988" in plain
+            assert "AI-assisted implementation: OpenAI Codex" in plain
+
+    asyncio.run(run())
 
 
 def test_codex_launch_argv_uses_resume_bypass_and_search():
@@ -49,7 +71,7 @@ def test_tui_80x24():
 
     async def run():
         async with app.run_test(size=(80, 24)) as pilot:
-            await pilot.pause()
+            await dismiss_splash(pilot)
             assert app.query_one("#models") is not None
             assert app.query_one("#sources") is not None
             assert app.query_one("#reasoning") is not None
@@ -70,7 +92,7 @@ def test_tui_120x40():
 
     async def run():
         async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
+            await dismiss_splash(pilot)
             assert app.query_one("#models") is not None
             assert app.query_one("#sources") is not None
             assert app.query_one("#reasoning") is not None
@@ -89,7 +111,7 @@ def test_openai_auth_opens_device_sign_in_modal():
 
     async def run():
         async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
+            await dismiss_splash(pilot)
             assert app.provider == "openai"
             await pilot.press("f7")
             await pilot.pause()
@@ -105,7 +127,7 @@ def test_provider_switch_keeps_models_and_accounts_exclusive():
 
     async def run():
         async with app.run_test(size=(120, 40)) as pilot:
-            await pilot.pause()
+            await dismiss_splash(pilot)
             for _ in range(3):
                 await pilot.press("f2")
                 await pilot.pause()

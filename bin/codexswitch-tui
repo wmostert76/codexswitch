@@ -37,6 +37,28 @@ BUTTON_BAR = (
 )
 
 
+class SplashScreen(ModalScreen):
+    BINDINGS = [
+        ("enter", "dismiss", "Continue"),
+        ("escape", "dismiss", "Continue"),
+        ("space", "dismiss", "Continue"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            f"""{BACKEND['ASCII_LOGO']}
+{BACKEND['COMMANDER_SPACED']}
+
+CodexSwitch Commander v{BACKEND['VERSION']}
+{BACKEND['CREDITS_OWNER']}
+{BACKEND['CREDITS_AI']}
+
+Enter / Space / Esc to continue
+""",
+            id="splash-dialog",
+        )
+
+
 class HelpScreen(ModalScreen):
     BINDINGS = [("escape", "dismiss", "Close"), ("f1", "dismiss", "Close")]
 
@@ -230,6 +252,11 @@ class CodexSwitchApp(App):
         text-style: bold;
     }
 
+    SplashScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.65);
+    }
+
     HelpScreen {
         align: center middle;
         background: rgba(0, 0, 0, 0.65);
@@ -238,6 +265,16 @@ class CodexSwitchApp(App):
     OpenAIAuthScreen {
         align: center middle;
         background: rgba(0, 0, 0, 0.65);
+    }
+
+    #splash-dialog {
+        width: 64;
+        height: 14;
+        border: double #ffffff;
+        background: #000000;
+        color: #00ffff;
+        padding: 1 2;
+        text-style: bold;
     }
 
     #help-dialog {
@@ -315,6 +352,7 @@ class CodexSwitchApp(App):
         self.load_sources()
         self.load_models()
         self.query_one("#models", OptionList).focus()
+        self.push_screen(SplashScreen())
 
     def capture(self, function, *args):
         output = io.StringIO()

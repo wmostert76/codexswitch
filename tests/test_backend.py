@@ -24,9 +24,12 @@ _spec.loader.exec_module(cs)
 
 
 def test_version_constant_is_release_version():
-    assert cs.VERSION == "0.5.5"
+    assert cs.VERSION == "0.5.6"
     assert cs.CREDITS_OWNER == "by WAM-Software since (c) 1988"
     assert cs.CREDITS_AI == "AI-assisted implementation: OpenAI Codex"
+    assert "/ __|___" in cs.ASCII_LOGO
+    assert r"\___\___" in cs.ASCII_LOGO
+    assert cs.COMMANDER_SPACED == "C O M M A N D E R"
 
 
 def test_cli_version_output():
@@ -37,7 +40,7 @@ def test_cli_version_output():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.5"
+    assert proc.stdout.strip() == "codexswitch 0.5.6"
 
 
 def test_cli_dash_version_still_works_as_compatibility_alias():
@@ -48,7 +51,7 @@ def test_cli_dash_version_still_works_as_compatibility_alias():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.5"
+    assert proc.stdout.strip() == "codexswitch 0.5.6"
 
 
 def test_cli_help_contains_credits_and_tui_command():
@@ -61,6 +64,8 @@ def test_cli_help_contains_credits_and_tui_command():
     )
     assert "by WAM-Software since (c) 1988" in proc.stdout
     assert "AI-assisted implementation: OpenAI Codex" in proc.stdout
+    assert cs.ASCII_LOGO in proc.stdout
+    assert "C O M M A N D E R" in proc.stdout
     assert "codexswitch tui" in proc.stdout
     assert "codexswitch version" in proc.stdout
     assert "codexswitch --version" not in proc.stdout
@@ -76,6 +81,8 @@ def test_cli_without_args_shows_help_not_tui():
         check=True,
     )
     assert "CodexSwitch Commander" in proc.stdout
+    assert cs.ASCII_LOGO in proc.stdout
+    assert "C O M M A N D E R" in proc.stdout
     assert "Usage:" in proc.stdout
     assert "codexswitch tui" in proc.stdout
     assert "codexswitch commander" not in proc.stdout
