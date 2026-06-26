@@ -23,17 +23,17 @@ CODEX_TUI_LAUNCH_ARGS = (
     "--dangerously-bypass-approvals-and-sandbox",
     "--search",
 )
-BUTTON_BAR = (
-    "[reverse bold]1[/]Help  "
-    "[reverse bold]2[/]Prov  "
-    "[reverse bold]3[/]Model "
-    "[reverse bold]4[/]Think "
-    "[reverse bold]5[/]Fresh "
-    "[reverse bold]6[/]Apply "
-    "[reverse bold]7[/]Auth  "
-    "[reverse bold]8[/]Stat  "
-    "[reverse bold]9[/]Codex "
-    "[reverse bold]10[/]Quit"
+FUNCTION_KEYS = (
+    ("1", "Help"),
+    ("2", "Prov"),
+    ("3", "Model"),
+    ("4", "Think"),
+    ("5", "Fresh"),
+    ("6", "Apply"),
+    ("7", "Auth"),
+    ("8", "Stat"),
+    ("9", "Codex"),
+    ("10", "Quit"),
 )
 
 
@@ -252,6 +252,15 @@ class CodexSwitchApp(App):
         height: 1;
         background: #00afaf;
         color: #000000;
+        text-align: center;
+        text-style: bold;
+    }
+
+    .fkey {
+        width: 1fr;
+        height: 1;
+        background: #00afaf;
+        color: #000000;
         text-align: left;
         text-style: bold;
     }
@@ -346,7 +355,13 @@ class CodexSwitchApp(App):
                 yield Label("┤ REASONING ├", classes="lower-title")
                 yield OptionList(id="reasoning")
         yield Static(" Ready · F1 Help · F6 Apply · F9 Codex", id="status")
-        yield Static(BUTTON_BAR, id="buttonbar")
+        with Horizontal(id="buttonbar"):
+            for number, label in FUNCTION_KEYS:
+                yield Static(
+                    f"[reverse bold]{number:>2}[/] {label}",
+                    classes="fkey",
+                    markup=True,
+                )
 
     def on_mount(self) -> None:
         self.load_state()

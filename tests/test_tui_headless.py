@@ -4,7 +4,6 @@ import importlib.machinery
 import importlib.util
 from pathlib import Path
 
-from rich.text import Text
 from textual.geometry import Size
 
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
@@ -27,7 +26,7 @@ async def dismiss_splash(pilot) -> None:
 
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.9" in tui.CodexSwitchApp.SUB_TITLE
+    assert "v0.5.10" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
 
 
@@ -40,7 +39,7 @@ def test_startup_splash_contains_ascii_branding_and_credits():
             dialog = app.screen.query_one("#splash-dialog")
             plain = dialog.render().plain
             assert "                    C O M M A N D E R" in plain
-            assert "CodexSwitch Commander v0.5.9" in plain
+            assert "CodexSwitch Commander v0.5.10" in plain
             assert "by WAM-Software since (c) 1988" in plain
             assert "AI-assisted implementation: OpenAI Codex" in plain
 
@@ -56,13 +55,19 @@ def test_codex_launch_argv_uses_resume_bypass_and_search():
     ]
 
 
-def test_button_bar_is_compact_commander_style():
-    plain = Text.from_markup(tui.BUTTON_BAR).plain
-    assert plain == (
-        "1Help  2Prov  3Model 4Think 5Fresh 6Apply 7Auth  "
-        "8Stat  9Codex 10Quit"
+def test_button_bar_is_segmented_commander_style():
+    assert tui.FUNCTION_KEYS == (
+        ("1", "Help"),
+        ("2", "Prov"),
+        ("3", "Model"),
+        ("4", "Think"),
+        ("5", "Fresh"),
+        ("6", "Apply"),
+        ("7", "Auth"),
+        ("8", "Stat"),
+        ("9", "Codex"),
+        ("10", "Quit"),
     )
-    assert len(plain) <= 80
 
 
 def test_tui_80x24():
@@ -82,8 +87,20 @@ def test_tui_80x24():
             assert "Ready · F1 Help · F6 Apply · F9 Codex" in status
             assert "WAM-Software" not in status
             bb = app.query_one("#buttonbar")
-            bb_text = bb.render().plain
-            assert len(bb_text) <= 80, f"buttonbar ({len(bb_text)}) exceeds 80 cols"
+            keys = list(bb.query(".fkey"))
+            assert len(keys) == 10
+            assert [key.render().plain.strip() for key in keys] == [
+                "1 Help",
+                "2 Prov",
+                "3 Model",
+                "4 Think",
+                "5 Fresh",
+                "6 Apply",
+                "7 Auth",
+                "8 Stat",
+                "9 Codex",
+                "10 Quit",
+            ]
 
     asyncio.run(run())
 
@@ -102,8 +119,7 @@ def test_tui_120x40():
             assert app.query_one("#status") is not None
             assert app.query_one("#buttonbar") is not None
             bb = app.query_one("#buttonbar")
-            bb_text = bb.render().plain
-            assert len(bb_text) <= 120, f"buttonbar ({len(bb_text)}) exceeds 120 cols"
+            assert len(list(bb.query(".fkey"))) == 10
 
     asyncio.run(run())
 

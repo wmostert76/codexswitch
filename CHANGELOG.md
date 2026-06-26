@@ -8,6 +8,13 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.10] - 2026-06-26
+
+### Changed
+
+- Reworked the TUI function-key bar into ten equal-width Commander-style
+  segments across the full terminal width.
+
 ## [0.5.9] - 2026-06-26
 
 ### Changed
