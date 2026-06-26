@@ -10,6 +10,13 @@ All notable CodexSwitch changes are documented here.
   installing, runs a safe `git pull --ff-only`, fetches tags and restarts
   itself when the installer changed. This makes re-running `./install.sh` a
   normal update path on existing hosts.
+- The TUI now verifies Codex runtime directories before launching Codex, so
+  root-owned session, log, temp or shell snapshot paths are repaired before
+  they can trigger transcript save permission errors.
+- TUI model details now show token limits consistently across OpenAI,
+  OpenCode Go and OpenRouter catalogs, and no longer invent a `medium`
+  reasoning choice for models that only expose provider defaults or
+  model-managed reasoning.
 
 ## [0.6.0] - 2026-06-26
 
