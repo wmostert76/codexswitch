@@ -601,19 +601,42 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "CODEX_CONFIG", config)
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(
+            cs,
+            "OPENROUTER_CODEX_MODELS",
+            switch_home / "openrouter/codex-models.json",
+        )
         monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(
+            cs,
+            "openrouter_model_catalog",
+            lambda refresh=False: {
+                "anthropic/claude-test": {
+                    "id": "anthropic/claude-test",
+                    "name": "Claude Test",
+                    "context_length": 200000,
+                }
+            },
+        )
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 
         cs.update_codex_config("openrouter", "anthropic/claude-test", "medium")
         text = config.read_text()
         state = json.loads(state_path.read_text())
         assert 'model_provider = "openrouter"' in text
+        assert f'model_catalog_json = "{switch_home}/openrouter/codex-models.json"' in text
         assert 'base_url = "https://openrouter.ai/api/v1"' in text
         assert f'command = "{token_helper}"' in text
         assert "model_reasoning_effort" not in text
+        assert "api_key" not in text
         assert "openai_account" not in state
         assert "reasoning_effort" not in state
+        codex_catalog = json.loads(
+            (switch_home / "openrouter/codex-models.json").read_text()
+        )
+        assert codex_catalog["models"][0]["slug"] == "anthropic/claude-test"
+        assert "api_key" not in json.dumps(codex_catalog)
 
     def test_openrouter_all_catalog_models_can_apply_without_secret_or_provider_leak(self, tmp_path, monkeypatch):
         codex_home = tmp_path / ".codex"
@@ -635,6 +658,11 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "CODEX_CONFIG", config)
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(
+            cs,
+            "OPENROUTER_CODEX_MODELS",
+            switch_home / "openrouter/codex-models.json",
+        )
         monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
@@ -666,6 +694,33 @@ class TestOpenRouterCatalog:
     def test_openrouter_models_fallback(self, monkeypatch):
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: {})
         assert cs.openrouter_models() == cs.OPENROUTER_FALLBACK_MODELS
+
+    def test_openrouter_codex_model_entry_contains_metadata(self, monkeypatch):
+        catalog = {
+            "qwen/qwen3.7-max": {
+                "id": "qwen/qwen3.7-max",
+                "name": "Qwen: Qwen3.7 Max",
+                "description": "test model",
+                "context_length": 1000000,
+                "architecture": {"input_modalities": ["text"]},
+                "reasoning": {"supported_efforts": ["max", "high", "medium"]},
+            }
+        }
+        monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
+
+        entry = cs.openrouter_codex_model_entry(
+            "qwen/qwen3.7-max", catalog["qwen/qwen3.7-max"]
+        )
+
+        assert entry["slug"] == "qwen/qwen3.7-max"
+        assert entry["display_name"] == "Qwen: Qwen3.7 Max"
+        assert entry["max_context_window"] == 1000000
+        assert entry["context_window"] == 1000000
+        assert entry["auto_compact_token_limit"] == 800000
+        assert entry["default_reasoning_level"] == "medium"
+        assert {"effort": "xhigh", "description": "xhigh reasoning"} in entry[
+            "supported_reasoning_levels"
+        ]
 
     def test_save_openrouter_key_is_secret_file(self, tmp_path, monkeypatch):
         auth_path = tmp_path / "openrouter" / "auth.json"

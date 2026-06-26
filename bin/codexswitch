@@ -65,6 +65,7 @@ SWITCH_CONFIG = SWITCH_HOME / "config.json"
 OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
 OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
 OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
+OPENROUTER_CODEX_MODELS = SWITCH_HOME / "openrouter/codex-models.json"
 OPENCODE_GO_AUTH = SWITCH_HOME / "opencode-go/auth.json"
 OPENCODE_GO_MODELS_CACHE = SWITCH_HOME / "opencode-go/models.json"
 OPENCODE_CONFIG = HOME / ".config/opencode/opencode.json"
@@ -645,6 +646,83 @@ def openrouter_reasoning_choices(model: str) -> list[tuple[str, str]]:
     return choices
 
 
+def openrouter_codex_model_entry(model: str, meta: dict) -> dict:
+    entry = {
+        "slug": model,
+        "display_name": meta.get("name") if isinstance(meta.get("name"), str) else model,
+        "description": (
+            meta.get("description") if isinstance(meta.get("description"), str) else ""
+        ),
+        "default_reasoning_level": None,
+        "supported_reasoning_levels": [],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supports_reasoning_summaries": False,
+        "support_verbosity": False,
+        "default_verbosity": None,
+        "supports_image_detail_original": False,
+        "supports_parallel_tool_calls": True,
+        "supported_in_api": True,
+        "priority": 0,
+        "additional_speed_tiers": [],
+        "service_tiers": [],
+        "default_service_tier": None,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "",
+        "model_messages": None,
+        "default_reasoning_summary": "auto",
+        "apply_patch_tool_type": None,
+        "web_search_tool_type": "text",
+        "truncation_policy": {"mode": "bytes", "limit": 10000},
+        "comp_hash": None,
+        "effective_context_window_percent": 95,
+        "experimental_supported_tools": [],
+        "supports_search_tool": False,
+        "use_responses_lite": False,
+        "auto_review_model_override": None,
+        "input_modalities": ["text"],
+        "max_context_window": 128000,
+        "context_window": 128000,
+        "auto_compact_token_limit": 102400,
+    }
+    architecture = meta.get("architecture", {})
+    if isinstance(architecture, dict):
+        input_modalities = architecture.get("input_modalities")
+        if isinstance(input_modalities, list):
+            entry["input_modalities"] = [
+                item for item in input_modalities if item in {"text", "image"}
+            ]
+            if not entry["input_modalities"]:
+                entry["input_modalities"] = ["text"]
+    context_length = meta.get("context_length")
+    if isinstance(context_length, int) and context_length > 0:
+        entry["max_context_window"] = context_length
+        entry["context_window"] = context_length
+        entry["auto_compact_token_limit"] = max(1, int(context_length * 0.8))
+    choices = openrouter_reasoning_choices(model)
+    if choices:
+        entry["supported_reasoning_levels"] = [
+            {"effort": effort, "description": f"{effort} reasoning"}
+            for _, effort in choices
+        ]
+        entry["default_reasoning_level"] = default_reasoning_effort(model)
+    return entry
+
+
+def write_openrouter_codex_model_catalog(selected_model: str) -> Path:
+    catalog = openrouter_model_catalog()
+    if selected_model not in catalog:
+        return OPENROUTER_CODEX_MODELS
+    models = [
+        openrouter_codex_model_entry(model, meta)
+        for model, meta in sorted(catalog.items())
+        if isinstance(meta, dict)
+    ]
+    write_json(OPENROUTER_CODEX_MODELS, {"models": models})
+    return OPENROUTER_CODEX_MODELS
+
+
 def opencode_models() -> list[str]:
     catalog = opencode_model_catalog()
     return sorted(catalog) if catalog else sorted(OPENCODE_GO_FALLBACK_CATALOG)
@@ -928,6 +1006,13 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 reasoning_effort = None
     elif provider == "openai":
         lines = remove_top_level(lines, "model_reasoning_effort")
+
+    if provider == "openrouter":
+        catalog_path = write_openrouter_codex_model_catalog(model)
+        if catalog_path.exists():
+            lines = set_top_level(lines, "model_catalog_json", str(catalog_path))
+    else:
+        lines = remove_top_level(lines, "model_catalog_json")
 
     if provider == "opencode-go":
         if not Path(TOKEN_HELPER).exists():

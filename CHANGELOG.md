@@ -2,6 +2,17 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.7.1] - 2026-06-26
+
+### Changed
+
+- OpenRouter activation now writes a Codex-compatible model catalog from the
+  OpenRouter cache and points Codex at it with `model_catalog_json`, preventing
+  known models such as `qwen/qwen3.7-max` from falling back to generic metadata.
+- `codexswitch update` now checks `origin/main` when the installed checkout is
+  on `main`, so commits published after the latest GitHub release are no
+  longer hidden behind an unchanged release tag.
+
 ## [0.7.0] - 2026-06-26
 
 ### Fixed
@@ -36,9 +47,6 @@ All notable CodexSwitch changes are documented here.
 
 ### Changed
 
-- `codexswitch update` now checks `origin/main` when the installed checkout is
-  on `main`, so commits published after the latest GitHub release are no
-  longer hidden behind an unchanged release tag.
 - The TUI now verifies Codex runtime directories before launching Codex, so
   root-owned session, log, temp or shell snapshot paths are repaired before
   they can trigger transcript save permission errors.
