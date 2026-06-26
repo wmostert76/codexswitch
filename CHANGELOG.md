@@ -8,6 +8,14 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.9] - 2026-06-26
+
+### Changed
+
+- TUI startup splash now uses colored centered text below the ASCII logo.
+- Removed the WAM-Software credit from the TUI bottom status bar because it is
+  already visible in the header/splash/help.
+
 ## [0.5.8] - 2026-06-26
 
 ### Changed

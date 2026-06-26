@@ -37,6 +37,10 @@ BUTTON_BAR = (
 )
 
 
+def splash_line(text: str) -> str:
+    return text.center(BACKEND["ASCII_LOGO_WIDTH"])
+
+
 class SplashScreen(ModalScreen):
     BINDINGS = [
         ("enter", "dismiss", "Continue"),
@@ -46,15 +50,16 @@ class SplashScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"""{BACKEND['BRAND_BANNER']}
+            f"""[bold cyan]{BACKEND['BRAND_BANNER']}[/]
 
-CodexSwitch Commander v{BACKEND['VERSION']}
-{BACKEND['CREDITS_OWNER']}
-{BACKEND['CREDITS_AI']}
+[bold yellow]{splash_line(f"CodexSwitch Commander v{BACKEND['VERSION']}")}[/]
+[bold white]{splash_line(BACKEND['CREDITS_OWNER'])}[/]
+[green]{splash_line(BACKEND['CREDITS_AI'])}[/]
 
-Enter / Space / Esc to continue
+[dim]{splash_line("Enter / Space / Esc to continue")}[/]
 """,
             id="splash-dialog",
+            markup=True,
         )
 
 
@@ -269,9 +274,9 @@ class CodexSwitchApp(App):
     #splash-dialog {
         width: 64;
         height: 14;
-        border: double #ffffff;
-        background: #000000;
-        color: #00ffff;
+        border: double #ffff00;
+        background: #00005f;
+        color: #ffffff;
         padding: 1 2;
         text-style: bold;
     }
@@ -340,10 +345,7 @@ class CodexSwitchApp(App):
             with Vertical(id="reason-box"):
                 yield Label("┤ REASONING ├", classes="lower-title")
                 yield OptionList(id="reasoning")
-        yield Static(
-            f" {BACKEND['CREDITS_OWNER']} · {BACKEND['CREDITS_AI']}",
-            id="status",
-        )
+        yield Static(" Ready · F1 Help · F6 Apply · F9 Codex", id="status")
         yield Static(BUTTON_BAR, id="buttonbar")
 
     def on_mount(self) -> None:

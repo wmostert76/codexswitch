@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codexswitch_common import (
     ASCII_LOGO,
+    ASCII_LOGO_WIDTH,
     BRAND_BANNER,
     COMMANDER_CENTERED,
     COMMANDER_SPACED,
