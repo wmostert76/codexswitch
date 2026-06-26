@@ -102,7 +102,8 @@ class HelpScreen(ModalScreen):
 [b]NAVIGATION[/]
   Tab · Shift+Tab   Switch panel
   ↑ ↓               Move selection
-  Enter             Open or activate
+  Enter on model    Move to reasoning
+  Enter on reason   Apply and start Codex
 
 [b]FUNCTION KEYS[/]
   F1  Help          This screen
@@ -110,7 +111,7 @@ class HelpScreen(ModalScreen):
   F3  Models        Focus model panel
   F4  Reasoning     Focus reasoning modes
   F5  Refresh       Refresh OpenCode Go catalog
-  F6  Apply         Activate selection
+  F6  Apply         Activate selection without starting Codex
   F7  Auth          Login to selected provider
   F8  Status        Reload active configuration
   F9  Codex         Resume Codex with bypass sandbox and search
@@ -664,7 +665,10 @@ class CodexSwitchApp(App):
             self.model = event.option.id.split(":", 1)[1]
             self.update_details()
         elif event.option_list.id == "reasoning" and event.option.id:
-            self.mark_reasoning(event.option.id.split(":", 1)[1])
+            selected = event.option.id.split(":", 1)[1]
+            self.mark_reasoning(selected)
+            if event.option_list.has_focus:
+                self.show_ready_to_start(selected)
 
     def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
         if not event.option.id:
@@ -687,8 +691,9 @@ class CodexSwitchApp(App):
             self.model = event.option.id.split(":", 1)[1]
             self.update_details()
             self.query_one("#reasoning", OptionList).focus()
+            self.show_ready_to_start(self.selected_reasoning())
         elif event.option_list.id == "reasoning":
-            self.action_apply()
+            self.action_codex()
 
     def action_help(self) -> None:
         self.push_screen(HelpScreen())
@@ -720,6 +725,14 @@ class CodexSwitchApp(App):
             reasoning.replace_option_prompt_at_index(
                 index, f" {marker}  {label}"
             )
+
+    def show_ready_to_start(self, effort: str | None = None) -> None:
+        if not self.model:
+            return
+        suffix = f" / {effort}" if effort else ""
+        self.set_status(
+            f"Ready: {self.provider} / {self.model}{suffix} — Enter starts Codex"
+        )
 
     def action_refresh(self) -> None:
         if self.provider == "openrouter":

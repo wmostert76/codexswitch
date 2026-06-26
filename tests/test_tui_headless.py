@@ -163,6 +163,28 @@ def test_tui_panes_share_commander_grid_at_common_sizes():
     asyncio.run(check((120, 40)))
 
 
+def test_reasoning_enter_starts_codex_and_status_previews_selection(monkeypatch):
+    app = tui.CodexSwitchApp()
+    started = {"codex": False}
+
+    def fake_action_codex():
+        started["codex"] = True
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            monkeypatch.setattr(app, "action_codex", fake_action_codex)
+            await pilot.press("enter")
+            await pilot.pause()
+            assert app.query_one("#reasoning").has_focus
+            assert "Enter starts Codex" in app.query_one("#status").render().plain
+            await pilot.press("enter")
+            await pilot.pause()
+            assert started["codex"] is True
+
+    asyncio.run(run())
+
+
 def test_openai_auth_opens_device_sign_in_modal():
     app = tui.CodexSwitchApp()
 

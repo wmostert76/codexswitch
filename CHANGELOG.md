@@ -2,6 +2,15 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.15] - 2026-06-26
+
+### Changed
+
+- TUI keyboard flow now finishes from the reasoning pane: `Enter` on a selected
+  reasoning mode applies the selection and starts Codex, matching `F9`.
+- The TUI status bar previews the provider/model/reasoning that will be started
+  before the final `Enter`.
+
 ## [0.5.14] - 2026-06-26
 
 ### Changed

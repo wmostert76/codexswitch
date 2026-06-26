@@ -77,7 +77,7 @@ every install so updated proxy code is active immediately.
 | `F3` | Model panel |
 | `F4` | Reasoning selector |
 | `F5` | Refresh current catalog |
-| `F6` | Apply selected provider/model |
+| `F6` | Apply selected provider/model without starting Codex |
 | `F7` | Authenticate selected provider |
 | `F8` | Reload active status |
 | `F9` | Resume Codex with sandbox bypass and search |
@@ -106,6 +106,10 @@ From the TUI, `F9` applies the current selection and then starts Codex as:
 ```bash
 codex resume --dangerously-bypass-approvals-and-sandbox --search
 ```
+
+In the normal keyboard flow, choose a model, press `Enter` to move to
+reasoning, choose the reasoning mode, then press `Enter` again to apply and
+start Codex the same way as `F9`.
 
 Examples:
 

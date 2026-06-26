@@ -31,7 +31,7 @@
 
   <rect class="bar" x="18" y="44" width="1446" height="33"/>
   <text class="txt-black" x="36" y="69">◉</text>
-  <text class="txt-black" text-anchor="middle" x="741" y="69">CodexSwitch Commander — v0.5.14 · by WAM-Software since (c) 1988</text>
+  <text class="txt-black" text-anchor="middle" x="741" y="69">CodexSwitch Commander — v0.5.15 · by WAM-Software since (c) 1988</text>
   <text class="txt-black" text-anchor="end" x="1444" y="69">11:58:44</text>
 
   <rect class="panel-active" x="32" y="98" width="930" height="620"/>
