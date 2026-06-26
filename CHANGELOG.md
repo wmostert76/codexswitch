@@ -8,6 +8,13 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.7] - 2026-06-26
+
+### Changed
+
+- Refined the CodexSwitch ASCII branding to a more compact draw-set logo in
+  README, CLI help and TUI startup splash.
+
 ## [0.5.6] - 2026-06-26
 
 ### Changed

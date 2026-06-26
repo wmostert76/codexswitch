@@ -19,13 +19,14 @@ from pathlib import Path
 import pwd
 
 
-VERSION = "0.5.6"
+VERSION = "0.5.7"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
-ASCII_LOGO = r"""  ___        _          ___       _ _      _
- / __|___ __| |_____ __/ __|_ __ (_) |_ __| |_
-| (__/ _ / _` / -_) \ /\__ \ '  \| |  _/ _| ' \
- \___\___\__,_\___/_\_\|___/_|_|_|_|\__\__|_||_|"""
+ASCII_LOGO = r"""   ___          _            __          _ _       _
+  / __\___   __| | _____  __/ _\_      _(_) |_ ___| |__
+ / /  / _ \ / _` |/ _ \ \/ /\ \\ \ /\ / / | __/ __| '_ \
+/ /__| (_) | (_| |  __/>  < _\ \\ V  V /| | || (__| | | |
+\____/\___/ \__,_|\___/_/\_\\__/ \_/\_/ |_|\__\___|_| |_|"""
 COMMANDER_SPACED = "C O M M A N D E R"
 
 

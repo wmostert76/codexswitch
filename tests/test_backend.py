@@ -24,11 +24,11 @@ _spec.loader.exec_module(cs)
 
 
 def test_version_constant_is_release_version():
-    assert cs.VERSION == "0.5.6"
+    assert cs.VERSION == "0.5.7"
     assert cs.CREDITS_OWNER == "by WAM-Software since (c) 1988"
     assert cs.CREDITS_AI == "AI-assisted implementation: OpenAI Codex"
-    assert "/ __|___" in cs.ASCII_LOGO
-    assert r"\___\___" in cs.ASCII_LOGO
+    assert r"/ __\___" in cs.ASCII_LOGO
+    assert r"\____/\___/" in cs.ASCII_LOGO
     assert cs.COMMANDER_SPACED == "C O M M A N D E R"
 
 
@@ -40,7 +40,7 @@ def test_cli_version_output():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.6"
+    assert proc.stdout.strip() == "codexswitch 0.5.7"
 
 
 def test_cli_dash_version_still_works_as_compatibility_alias():
@@ -51,7 +51,7 @@ def test_cli_dash_version_still_works_as_compatibility_alias():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.6"
+    assert proc.stdout.strip() == "codexswitch 0.5.7"
 
 
 def test_cli_help_contains_credits_and_tui_command():
