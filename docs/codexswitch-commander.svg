@@ -31,7 +31,7 @@
 
   <rect class="bar" x="18" y="44" width="1446" height="33"/>
   <text class="txt-black" x="36" y="69">◉</text>
-  <text class="txt-black" text-anchor="middle" x="741" y="69">CodexSwitch Commander — v0.5.13 · by WAM-Software since (c) 1988</text>
+  <text class="txt-black" text-anchor="middle" x="741" y="69">CodexSwitch Commander — v0.5.14 · by WAM-Software since (c) 1988</text>
   <text class="txt-black" text-anchor="end" x="1444" y="69">11:58:44</text>
 
   <rect class="panel-active" x="32" y="98" width="930" height="620"/>
@@ -60,18 +60,18 @@
   <text class="txt-black" x="1006" y="368">● OPENCODE GO</text>
   <text class="txt" x="1006" y="410">○ OPENROUTER</text>
 
-  <rect class="panel" x="32" y="748" width="1040" height="168"/>
+  <rect class="panel" x="32" y="748" width="930" height="168"/>
   <rect class="title-bg" x="57" y="765" width="238" height="34"/>
   <text class="txt-black" x="68" y="791">┤ MODEL DETAILS ├</text>
   <text class="txt-yellow" x="70" y="840">OpenRouter Auto</text>
   <text class="txt-cyan" x="330" y="840">OpenRouter</text>
   <text class="txt" x="70" y="882">Context: dynamic   Input: text   Auth: ok</text>
 
-  <rect class="panel" x="1090" y="748" width="340" height="168"/>
-  <rect class="title-bg" x="1115" y="765" width="170" height="34"/>
-  <text class="txt-black" x="1126" y="791">┤ REASONING ├</text>
-  <text class="txt" x="1126" y="840"> ●  medium</text>
-  <text class="txt" x="1126" y="882"> ○  high</text>
+  <rect class="panel" x="980" y="748" width="450" height="168"/>
+  <rect class="title-bg" x="1005" y="765" width="170" height="34"/>
+  <text class="txt-black" x="1017" y="791">┤ REASONING ├</text>
+  <text class="txt" x="1017" y="840"> ●  medium</text>
+  <text class="txt" x="1017" y="882"> ○  high</text>
 
   <rect class="status" x="32" y="936" width="1398" height="31"/>
   <text class="txt-white" x="52" y="961">Ready</text>

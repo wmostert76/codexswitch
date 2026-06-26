@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.14] - 2026-06-26
+
+### Changed
+
+- Aligned the TUI panes on a consistent Commander grid: the top provider pane
+  and lower reasoning pane now share the same right-column width and vertical
+  split, while status/function bars keep their intended Commander placement.
+
 ## [0.5.13] - 2026-06-26
 
 ### Fixed

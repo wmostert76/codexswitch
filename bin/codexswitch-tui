@@ -181,7 +181,7 @@ class CodexSwitchApp(App):
 
     #workspace {
         height: 1fr;
-        padding: 0 1;
+        margin: 0 1;
     }
 
     .pane {
@@ -244,12 +244,12 @@ class CodexSwitchApp(App):
     }
 
     #detail-box {
-        width: 2fr;
+        width: 1fr;
         padding: 0 1;
     }
 
     #reason-box {
-        width: 30;
+        width: 38;
     }
 
     .lower-title {

@@ -135,6 +135,34 @@ def test_tui_120x40():
     asyncio.run(run())
 
 
+def test_tui_panes_share_commander_grid_at_common_sizes():
+    """Top and lower right panes should line up like a Commander split view."""
+
+    async def check(size):
+        app = tui.CodexSwitchApp()
+        async with app.run_test(size=size) as pilot:
+            await dismiss_splash(pilot)
+            source = app.query_one("#source-pane").region
+            reason = app.query_one("#reason-box").region
+            model = app.query_one("#model-pane").region
+            detail = app.query_one("#detail-box").region
+            workspace = app.query_one("#workspace").region
+            lower = app.query_one("#lower-pane").region
+            status = app.query_one("#status").region
+            buttonbar = app.query_one("#buttonbar").region
+
+            assert source.x == reason.x
+            assert source.width == reason.width == 38
+            assert model.x == detail.x == workspace.x == lower.x == status.x
+            assert model.width == detail.width
+            assert status.width == workspace.width == lower.width
+            assert buttonbar.x == 0
+            assert buttonbar.width == size[0]
+
+    asyncio.run(check((80, 24)))
+    asyncio.run(check((120, 40)))
+
+
 def test_openai_auth_opens_device_sign_in_modal():
     app = tui.CodexSwitchApp()
 
