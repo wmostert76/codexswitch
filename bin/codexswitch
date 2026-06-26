@@ -44,6 +44,10 @@ TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
 TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
 APP_NAME = "CodexSwitch"
 APP_TITLE = f"{APP_NAME} Commander"
+GITHUB_REPOSITORY = "wmostert76/codexswitch"
+GITHUB_LATEST_RELEASE_API = (
+    f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
+)
 
 
 def user_home() -> Path:
@@ -74,6 +78,10 @@ def die(message: str, code: int = 1) -> None:
 
 def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, text=True, check=check)
+
+
+def command_output(cmd: list[str]) -> str:
+    return subprocess.check_output(cmd, text=True).strip()
 
 
 def read_json(path: Path, default):
@@ -134,6 +142,87 @@ def write_secret_json(path: Path, data) -> None:
         set_home_owner(path)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def parse_version(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+    if not match:
+        die(f"ongeldige versie: {value}")
+    return tuple(int(part) for part in match.groups())
+
+
+def latest_github_release() -> tuple[str, str]:
+    try:
+        req = urllib.request.Request(
+            GITHUB_LATEST_RELEASE_API,
+            headers={
+                "accept": "application/vnd.github+json",
+                "user-agent": f"codexswitch/{VERSION}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        die(f"kan GitHub release niet controleren: {exc}")
+    tag = payload.get("tag_name")
+    url = payload.get("html_url", "")
+    if not isinstance(tag, str) or not tag:
+        die("GitHub release response bevat geen tag_name")
+    return tag, url if isinstance(url, str) else ""
+
+
+def local_repo_is_dirty() -> bool:
+    try:
+        status = command_output(
+            ["git", "-C", str(PROJECT_ROOT), "status", "--porcelain"]
+        )
+    except subprocess.CalledProcessError:
+        die(f"{PROJECT_ROOT} is geen geldige git checkout")
+    return bool(status)
+
+
+def update_from_github(check_only: bool = False) -> bool:
+    latest_tag, latest_url = latest_github_release()
+    current_version = parse_version(VERSION)
+    latest_version = parse_version(latest_tag)
+    latest_display = latest_tag.lstrip("v")
+    if current_version >= latest_version:
+        if current_version == latest_version:
+            print(f"CodexSwitch is up-to-date: {VERSION}")
+        else:
+            print(
+                f"Lokale CodexSwitch versie is nieuwer dan GitHub latest: "
+                f"{VERSION} > {latest_display}"
+            )
+        if latest_url:
+            print(f"latest: {latest_url}")
+        return False
+
+    print(f"Nieuwe CodexSwitch release beschikbaar: {VERSION} -> {latest_display}")
+    if latest_url:
+        print(f"release: {latest_url}")
+    if check_only:
+        return True
+    if local_repo_is_dirty():
+        die(
+            "lokale repository heeft niet-gecommitte wijzigingen; "
+            "commit/stash eerst en draai daarna opnieuw: codexswitch update"
+        )
+    install_script = PROJECT_ROOT / "install.sh"
+    if not install_script.exists():
+        die(f"install script ontbreekt: {install_script}")
+
+    run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+    branch = command_output(
+        ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"]
+    )
+    if branch == "main":
+        run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+    else:
+        run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
+    run(["bash", str(install_script)])
+    print(f"CodexSwitch bijgewerkt naar {latest_display}")
+    return True
 
 
 def jwt_claims(token: str) -> dict:
@@ -979,6 +1068,7 @@ Usage:
   codexswitch account save [EMAIL]   save current OpenAI login
   codexswitch account use EMAIL      activate saved OpenAI account
   codexswitch refresh                refresh OpenCode Go and OpenRouter models
+  codexswitch update [--check]       update from latest GitHub release
   codexswitch list                   list known models
   codexswitch status                 show active config and auth status
   codexswitch run [PROMPT...]        run codex with active config
@@ -994,6 +1084,7 @@ Examples:
   codexswitch classic
   codexswitch account add
   codexswitch auth openrouter
+  codexswitch update --check
   codexswitch use openai gpt-5.5
   codexswitch use opencode-go glm-5.2 high
   codexswitch use openrouter anthropic/claude-sonnet-4.5
@@ -1024,6 +1115,11 @@ def main(argv: list[str]) -> int:
     if cmd == "refresh":
         refresh_opencode_models()
         refresh_openrouter_models(strict=False)
+        return 0
+    if cmd == "update":
+        if len(argv) > 2 or (len(argv) == 2 and argv[1] != "--check"):
+            die("gebruik: codexswitch update [--check]")
+        update_from_github(check_only=len(argv) == 2)
         return 0
     if cmd == "status":
         status()

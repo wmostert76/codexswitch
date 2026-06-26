@@ -95,6 +95,7 @@ codexswitch account add             # OpenAI device sign-in
 codexswitch account save [EMAIL]
 codexswitch account use user@example.com
 codexswitch refresh                 # OpenCode Go + OpenRouter catalogs
+codexswitch update [--check]        # update from latest GitHub release
 codexswitch list
 codexswitch status
 codexswitch run [PROMPT...]

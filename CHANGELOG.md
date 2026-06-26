@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.18] - 2026-06-26
+
+### Added
+
+- Added `codexswitch update [--check]` to compare the local version with the
+  latest GitHub release and update the local checkout/install when a newer
+  release is available.
+
 ## [0.5.17] - 2026-06-26
 
 ### Changed

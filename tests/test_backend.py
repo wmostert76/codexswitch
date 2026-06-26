@@ -75,6 +75,7 @@ def test_cli_help_contains_credits_and_tui_command():
     assert "AI-assisted implementation: OpenAI Codex" in proc.stdout
     assert cs.BRAND_BANNER in proc.stdout
     assert "codexswitch tui" in proc.stdout
+    assert "codexswitch update [--check]" in proc.stdout
     assert "codexswitch version" in proc.stdout
     assert "codexswitch --version" not in proc.stdout
     assert "codexswitch commander" not in proc.stdout
@@ -106,6 +107,39 @@ def test_banner_contains_credits(capsys):
     output = capsys.readouterr().out
     assert "by WAM-Software since (c) 1988" in output
     assert "AI-assisted implementation: OpenAI Codex" in output
+
+
+def test_parse_version_accepts_release_tags():
+    assert cs.parse_version("0.5.18") == (0, 5, 18)
+    assert cs.parse_version("v0.5.18") == (0, 5, 18)
+
+
+def test_update_check_reports_newer_release(monkeypatch, capsys):
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", "https://example.test/release"))
+
+    assert cs.update_from_github(check_only=True) is True
+
+    output = capsys.readouterr().out
+    assert f"{cs.VERSION} -> 9.9.9" in output
+    assert "https://example.test/release" in output
+
+
+def test_update_check_reports_up_to_date(monkeypatch, capsys):
+    monkeypatch.setattr(cs, "latest_github_release", lambda: (f"v{cs.VERSION}", ""))
+
+    assert cs.update_from_github(check_only=True) is False
+
+    assert f"up-to-date: {cs.VERSION}" in capsys.readouterr().out
+
+
+def test_update_refuses_dirty_repository(monkeypatch):
+    import pytest
+
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", ""))
+    monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: True)
+
+    with pytest.raises(SystemExit):
+        cs.update_from_github(check_only=False)
 
 
 def test_classic_from_opencode_to_openai_uses_only_openai_model_picker(tmp_path, monkeypatch, capsys):
