@@ -441,6 +441,14 @@ class CodexSwitchApp(App):
         status.update((" ERROR: " if error else " ") + message)
         status.styles.background = "#870000" if error else "#000000"
 
+    def selection_label(self, effort: str | None = None) -> str:
+        label = f"{self.provider} / {self.model}"
+        if effort:
+            label += f" / {effort}"
+        if self.provider == "openai" and self.account:
+            label += f" / acct: {self.account}"
+        return label
+
     def load_state(self) -> None:
         state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
         self.provider = state.get("provider", "openai")
@@ -729,9 +737,8 @@ class CodexSwitchApp(App):
     def show_ready_to_start(self, effort: str | None = None) -> None:
         if not self.model:
             return
-        suffix = f" / {effort}" if effort else ""
         self.set_status(
-            f"Ready: {self.provider} / {self.model}{suffix} — Enter starts Codex"
+            f"Ready: {self.selection_label(effort)} — Enter starts Codex"
         )
 
     def action_refresh(self) -> None:
@@ -791,10 +798,7 @@ class CodexSwitchApp(App):
             self.load_models()
             applied_state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
             active_effort = applied_state.get("reasoning_effort")
-            self.set_status(
-                f"Active: {self.provider} / {self.model}"
-                + (f" / {active_effort}" if active_effort else "")
-            )
+            self.set_status(f"Active: {self.selection_label(active_effort)}")
         except Exception as exc:
             self.set_status(str(exc) or "Could not activate selection", error=True)
 
@@ -847,10 +851,7 @@ class CodexSwitchApp(App):
         self.load_state()
         self.load_sources()
         self.load_models()
-        self.set_status(
-            f"Active: {self.provider} / {self.model}"
-            + (f" / {self.account}" if self.provider == "openai" and self.account else "")
-        )
+        self.set_status(f"Active: {self.selection_label()}")
 
     def selection_is_dirty(self) -> bool:
         """Check if current selection differs from the active config."""

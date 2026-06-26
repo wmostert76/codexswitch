@@ -185,6 +185,23 @@ def test_reasoning_enter_starts_codex_and_status_previews_selection(monkeypatch)
     asyncio.run(run())
 
 
+def test_openai_status_preview_shows_active_codex_account(monkeypatch):
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            app.provider = "openai"
+            app.account = "active@example.test"
+            app.model = "gpt-test"
+            app.show_ready_to_start("medium")
+            status = app.query_one("#status").render().plain
+            assert "Ready: openai / gpt-test / medium" in status
+            assert "acct: active@example.test" in status
+
+    asyncio.run(run())
+
+
 def test_openai_auth_opens_device_sign_in_modal():
     app = tui.CodexSwitchApp()
 

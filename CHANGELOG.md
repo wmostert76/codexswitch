@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.16] - 2026-06-26
+
+### Changed
+
+- TUI status preview, apply result and status refresh now include the active
+  Codex/OpenAI account when the OpenAI provider is selected.
+
 ## [0.5.15] - 2026-06-26
 
 ### Changed
