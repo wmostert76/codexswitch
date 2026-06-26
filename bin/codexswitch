@@ -929,7 +929,7 @@ Usage:
   codexswitch list                   list known models
   codexswitch status                 show active config and auth status
   codexswitch run [PROMPT...]        run codex with active config
-  codexswitch --version              print version
+  codexswitch version                print version
 
 Providers:
   openai                             native Codex/OpenAI account flow
@@ -955,7 +955,7 @@ def main(argv: list[str]) -> int:
     if cmd in {"-h", "--help", "help"}:
         usage()
         return 0
-    if cmd in {"-v", "--version"}:
+    if cmd in {"version", "-v", "--version"}:
         print(f"{Path(sys.argv[0]).name} {VERSION}")
         return 0
     if cmd == "tui":

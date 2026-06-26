@@ -89,7 +89,7 @@ codexswitch refresh                 # OpenCode Go + OpenRouter catalogs
 codexswitch list
 codexswitch status
 codexswitch run [PROMPT...]
-codexswitch --version
+codexswitch version
 ```
 
 From the TUI, `F9` applies the current selection and then starts Codex as:
@@ -166,7 +166,7 @@ credential.
 Current version is shown in all app surfaces:
 
 ```bash
-codexswitch --version
+codexswitch version
 codexswitch --help
 codexswitch classic
 ```

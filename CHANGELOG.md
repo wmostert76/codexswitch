@@ -8,12 +8,23 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.5] - 2026-06-26
+
+### Changed
+
+- CLI help and documentation now show `codexswitch version` as the primary
+  version command.
+- `codexswitch --version` remains available as a compatibility alias.
+- Added release hygiene guidance to keep last-minute standalone changes in the
+  changelog before tagging.
+
 ## [0.5.4] - 2026-06-26
 
 ### Changed
 
 - TUI `F9` now launches Codex as
   `codex resume --dangerously-bypass-approvals-and-sandbox --search`.
+- README documents the exact TUI Codex launch command.
 
 ## [0.5.3] - 2026-06-26
 

@@ -21,7 +21,7 @@ _spec.loader.exec_module(tui)
 
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.4" in tui.CodexSwitchApp.SUB_TITLE
+    assert "v0.5.5" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
 
 
