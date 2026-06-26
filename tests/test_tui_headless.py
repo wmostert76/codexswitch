@@ -217,6 +217,7 @@ def test_openai_auth_opens_device_sign_in_modal():
             dialog = app.screen.query_one("#openai-auth-dialog")
             assert "OPENAI DEVICE SIGN-IN" in dialog.render().plain
             assert "codex login --device-auth" in dialog.render().plain
+            assert not app.screen.query("#start-openai-auth")
 
     asyncio.run(run())
 

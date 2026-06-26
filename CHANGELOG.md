@@ -2,6 +2,15 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.17] - 2026-06-26
+
+### Changed
+
+- Restyled TUI modal popups with a cyan Commander dialog, black normal text,
+  bold white headings and no darkened screen overlay.
+- Removed the separate dangling auth button from the OpenAI device sign-in
+  popup; Enter now starts sign-in from inside the dialog flow.
+
 ## [0.5.16] - 2026-06-26
 
 ### Changed

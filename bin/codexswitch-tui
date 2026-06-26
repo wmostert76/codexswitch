@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Header, Label, OptionList, Static
+from textual.widgets import Header, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from textual.events import Click
@@ -75,13 +75,13 @@ class SplashScreen(ModalScreen):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"""[bold cyan]{BACKEND['BRAND_BANNER']}[/]
+            f"""[bold white]{BACKEND['BRAND_BANNER']}[/]
 
-[bold yellow]{splash_line(f"CodexSwitch Commander v{BACKEND['VERSION']}")}[/]
-[bold white]{splash_line(BACKEND['CREDITS_OWNER'])}[/]
-[green]{splash_line(BACKEND['CREDITS_AI'])}[/]
+[bold white]{splash_line(f"CodexSwitch Commander v{BACKEND['VERSION']}")}[/]
+[black]{splash_line(BACKEND['CREDITS_OWNER'])}[/]
+[black]{splash_line(BACKEND['CREDITS_AI'])}[/]
 
-[dim]{splash_line("Enter / Space / Esc / Click to continue")}[/]
+[black]{splash_line("Enter / Space / Esc / Click to continue")}[/]
 """,
             id="splash-dialog",
             markup=True,
@@ -97,15 +97,15 @@ class HelpScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         yield Static(
             """
-[bold #000087]CODEXSWITCH COMMANDER HELP[/]
+[bold white]CODEXSWITCH COMMANDER HELP[/]
 
-[b]NAVIGATION[/]
+[black]NAVIGATION[/]
   Tab · Shift+Tab   Switch panel
   ↑ ↓               Move selection
   Enter on model    Move to reasoning
   Enter on reason   Apply and start Codex
 
-[b]FUNCTION KEYS[/]
+FUNCTION KEYS
   F1  Help          This screen
   F2  Providers     Focus provider/account panel
   F3  Models        Focus model panel
@@ -117,7 +117,7 @@ class HelpScreen(ModalScreen):
   F9  Codex         Resume Codex with bypass sandbox and search
   F10 Quit          Close CodexSwitch
 
-[dim]Press Escape, F1 or click to close.[/]
+[black]Press Escape, F1 or click to close.[/]
 """,
             id="help-dialog",
             markup=True,
@@ -136,8 +136,9 @@ class OpenAIAuthScreen(ModalScreen):
     def compose(self) -> ComposeResult:
         yield Static(
             """
-[bold #000087]OPENAI DEVICE SIGN-IN[/]
+[bold white]OPENAI DEVICE SIGN-IN[/]
 
+[black]
 CodexSwitch will temporarily leave the TUI and start:
 
   codex login --device-auth
@@ -147,21 +148,15 @@ finish login in your browser, then return here. When Codex reports the
 login is complete, CodexSwitch verifies ~/.codex/auth.json, saves the
 account and refreshes the provider/account list.
 
-[b]Enter[/] Start sign-in    [b]Esc[/] Cancel
+[bold white]Enter[/] Start sign-in    [bold white]Esc[/] Cancel
 """,
             id="openai-auth-dialog",
             markup=True,
         )
-        yield Button("Start OpenAI sign-in", id="start-openai-auth")
 
     def action_start(self) -> None:
         self.dismiss()
         self.app.run_openai_device_auth()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-openai-auth":
-            self.action_start()
-
 
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
@@ -317,50 +312,44 @@ class CodexSwitchApp(App):
 
     SplashScreen {
         align: center middle;
-        background: rgba(0, 0, 0, 0.65);
+        background: transparent;
     }
 
     HelpScreen {
         align: center middle;
-        background: rgba(0, 0, 0, 0.65);
+        background: transparent;
     }
 
     OpenAIAuthScreen {
         align: center middle;
-        background: rgba(0, 0, 0, 0.65);
+        background: transparent;
     }
 
     #splash-dialog {
         width: 64;
         height: 14;
-        border: double #ffff00;
-        background: #00005f;
-        color: #ffffff;
+        border: double #000000;
+        background: #00afaf;
+        color: #000000;
         padding: 1 2;
-        text-style: bold;
     }
 
     #help-dialog {
         width: 66;
         height: 25;
-        border: double #ffffff;
-        background: #bcbcbc;
+        border: double #000000;
+        background: #00afaf;
         color: #000000;
         padding: 1 2;
     }
 
     #openai-auth-dialog {
         width: 72;
-        height: 19;
-        border: double #ffffff;
-        background: #bcbcbc;
+        height: 20;
+        border: double #000000;
+        background: #00afaf;
         color: #000000;
         padding: 1 2;
-    }
-
-    #start-openai-auth {
-        width: 28;
-        margin-top: 1;
     }
     """
 
