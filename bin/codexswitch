@@ -299,11 +299,15 @@ def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
     if _OPENAI_CATALOG_CACHE is not None and not refresh:
         return _OPENAI_CATALOG_CACHE
     try:
+        binary = shutil.which("codex")
+        if not binary:
+            _OPENAI_CATALOG_CACHE = {}
+            return {}
         with tempfile.TemporaryDirectory(prefix="codexswitch-models-") as temporary_home:
             env = os.environ.copy()
             env["CODEX_HOME"] = temporary_home
             proc = subprocess.run(
-                [codex_bin(), "debug", "models"],
+                [binary, "debug", "models"],
                 text=True,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
@@ -569,8 +573,11 @@ def cleanup_config_backups() -> None:
 
 def warm_codex_model_catalog() -> bool:
     try:
+        binary = shutil.which("codex")
+        if not binary:
+            return False
         proc = subprocess.run(
-            [codex_bin(), "debug", "models"],
+            [binary, "debug", "models"],
             text=True,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
