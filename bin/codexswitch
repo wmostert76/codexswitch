@@ -24,8 +24,11 @@ from codexswitch_common import (
     CREDITS_OWNER,
     VERSION,
     user_home as _common_user_home,
+    OPENCODE_GO_FALLBACK_CATALOG,
     opencode_catalog_from_binary as _common_catalog_from_binary,
     opencode_bin as _common_opencode_bin,
+    opencode_catalog_from_upstream as _common_catalog_from_upstream,
+    opencode_catalog_from_cache as _common_catalog_from_cache,
 )
 
 
@@ -62,6 +65,8 @@ SWITCH_CONFIG = SWITCH_HOME / "config.json"
 OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
 OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
 OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
+OPENCODE_GO_AUTH = SWITCH_HOME / "opencode-go/auth.json"
+OPENCODE_GO_MODELS_CACHE = SWITCH_HOME / "opencode-go/models.json"
 OPENCODE_CONFIG = HOME / ".config/opencode/opencode.json"
 OPENCODE_AUTH = HOME / ".local/share/opencode/auth.json"
 OPENCODE_MODELS_CACHE = HOME / ".cache/opencode/models.json"
@@ -345,6 +350,23 @@ def openrouter_key_present() -> bool:
     return bool(isinstance(data, dict) and data.get("api_key"))
 
 
+def save_opencode_go_key(key: str) -> None:
+    normalized = key.strip()
+    if not normalized:
+        die("OpenCode Go API-key is leeg")
+    write_secret_json(OPENCODE_GO_AUTH, {"api_key": normalized})
+    print("OpenCode Go API-key opgeslagen")
+
+
+def opencode_go_key_present() -> bool:
+    data = read_json(OPENCODE_GO_AUTH, {})
+    if isinstance(data, dict) and data.get("api_key"):
+        return True
+    legacy = read_json(OPENCODE_AUTH, {})
+    credential = legacy.get("opencode-go", {}) if isinstance(legacy, dict) else {}
+    return bool(isinstance(credential, dict) and credential.get("key"))
+
+
 def codex_bin() -> str:
     found = shutil.which("codex")
     if not found:
@@ -511,23 +533,7 @@ def openrouter_reasoning_choices(model: str) -> list[tuple[str, str]]:
 
 def opencode_models() -> list[str]:
     catalog = opencode_model_catalog()
-    if catalog:
-        return sorted(catalog)
-
-    cache = read_json(OPENCODE_MODELS_CACHE, {})
-    cached_models = cache.get("opencode-go", {}).get("models", {}) if isinstance(cache, dict) else {}
-    if isinstance(cached_models, dict) and cached_models:
-        return sorted(
-            model_id
-            for model_id, metadata in cached_models.items()
-            if not isinstance(metadata, dict) or metadata.get("status") != "deprecated"
-        )
-
-    data = read_json(OPENCODE_CONFIG, {})
-    models = data.get("provider", {}).get("opencode-go", {}).get("models", {})
-    if not isinstance(models, dict):
-        return []
-    return sorted(models.keys())
+    return sorted(catalog) if catalog else sorted(OPENCODE_GO_FALLBACK_CATALOG)
 
 
 def parse_opencode_catalog(output: str) -> dict[str, dict]:
@@ -547,9 +553,28 @@ def parse_opencode_catalog(output: str) -> dict[str, dict]:
 def refresh_opencode_models(strict: bool = True) -> bool:
     global _OPENCODE_CATALOG_CACHE
     print("OpenCode Go-modelcatalogus verversen...")
+    catalog = _common_catalog_from_upstream(OPENCODE_BASE_URL)
+    if catalog:
+        _OPENCODE_CATALOG_CACHE = catalog
+        write_json(
+            OPENCODE_GO_MODELS_CACHE,
+            {"models": catalog, "updated_at": int(time.time())},
+        )
+        print(f"OpenCode Go-modellen bijgewerkt: {len(catalog)} actief")
+        return True
+    binary = _common_opencode_bin()
+    if not binary:
+        _OPENCODE_CATALOG_CACHE = dict(OPENCODE_GO_FALLBACK_CATALOG)
+        if strict:
+            die("OpenCode Go model-refresh mislukt; upstream en OpenCode CLI niet beschikbaar")
+        print(
+            "warning: OpenCode Go model-refresh mislukt; ingebouwde fallback blijft actief",
+            file=sys.stderr,
+        )
+        return False
     try:
         proc = subprocess.run(
-            [opencode_bin(), "models", "opencode-go", "--refresh", "--verbose"],
+            [binary, "models", "opencode-go", "--refresh", "--verbose"],
             text=True,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -573,6 +598,10 @@ def refresh_opencode_models(strict: bool = True) -> bool:
         return False
 
     _OPENCODE_CATALOG_CACHE = parse_opencode_catalog(proc.stdout)
+    write_json(
+        OPENCODE_GO_MODELS_CACHE,
+        {"models": _OPENCODE_CATALOG_CACHE, "updated_at": int(time.time())},
+    )
     print(f"OpenCode Go-modellen bijgewerkt: {len(_OPENCODE_CATALOG_CACHE)} actief")
     return True
 
@@ -581,7 +610,24 @@ def opencode_model_catalog() -> dict[str, dict]:
     global _OPENCODE_CATALOG_CACHE
     if _OPENCODE_CATALOG_CACHE is not None:
         return _OPENCODE_CATALOG_CACHE
+    cached = read_json(OPENCODE_GO_MODELS_CACHE, {})
+    if isinstance(cached, dict) and isinstance(cached.get("models"), dict):
+        _OPENCODE_CATALOG_CACHE = cached["models"]
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = _common_catalog_from_upstream(OPENCODE_BASE_URL)
+    if _OPENCODE_CATALOG_CACHE:
+        write_json(
+            OPENCODE_GO_MODELS_CACHE,
+            {"models": _OPENCODE_CATALOG_CACHE, "updated_at": int(time.time())},
+        )
+        return _OPENCODE_CATALOG_CACHE
     _OPENCODE_CATALOG_CACHE = _common_catalog_from_binary()
+    if _OPENCODE_CATALOG_CACHE:
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = _common_catalog_from_cache(OPENCODE_MODELS_CACHE)
+    if _OPENCODE_CATALOG_CACHE:
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = dict(OPENCODE_GO_FALLBACK_CATALOG)
     return _OPENCODE_CATALOG_CACHE
 
 
@@ -628,9 +674,9 @@ def validate_provider_model(provider: str, model: str) -> None:
     if provider == "opencode-go":
         models = opencode_models()
         if not models:
-            die(f"geen OpenCode Go modellen gevonden in {OPENCODE_CONFIG}")
+            die("geen OpenCode Go modellen gevonden")
         if model not in models:
-            die(f"OpenCode Go model '{model}' bestaat niet in {OPENCODE_CONFIG}")
+            die(f"OpenCode Go model '{model}' staat niet in de huidige catalogus")
         return
     if provider == "openrouter":
         if model not in openrouter_models():
@@ -721,6 +767,8 @@ def warm_codex_model_catalog() -> bool:
 
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
     if provider == "opencode-go":
+        if not opencode_go_key_present():
+            die("OpenCode Go API-key ontbreekt; gebruik: codexswitch auth opencode-go")
         ensure_proxy()
     if provider == "openrouter" and not openrouter_key_present():
         die("OpenRouter API-key ontbreekt; gebruik: codexswitch auth openrouter")
@@ -835,19 +883,16 @@ def status() -> None:
     current_openai_account = openai_auth_email(read_json(CODEX_HOME / "auth.json", {}))
     print(f"codex:        {codex_bin()}")
     print(f"codex config: {CODEX_CONFIG}")
-    print(f"opencode:     {opencode_bin()}")
-    print(f"opencode cfg: {OPENCODE_CONFIG}")
-    print(f"opencode auth:{OPENCODE_AUTH}")
+    opencode_binary = _common_opencode_bin() or "niet nodig/niet gevonden"
+    print(f"opencode:     {opencode_binary}")
+    print(f"opencode cfg: {OPENCODE_CONFIG} (legacy)")
+    print(f"opencode auth:{OPENCODE_AUTH} (legacy)")
+    print(f"opencode-go auth: {'ok' if opencode_go_key_present() else 'ontbreekt'}")
     print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
     print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}")
     print(f"openai acct:  {current_openai_account or 'onbekend'}")
     print(f"accounts:     {len(openai_accounts())} opgeslagen")
-    if OPENCODE_AUTH.exists():
-        data = read_json(OPENCODE_AUTH, {})
-        print(f"opencode-go auth: {'ok' if data.get('opencode-go', {}).get('key') else 'mist key'}")
-    else:
-        print("opencode-go auth: ontbreekt")
 
 
 def current_selection_line() -> str:
@@ -950,8 +995,9 @@ def auth(provider: str | None = None) -> None:
         save_openai_account()
         return
     if provider == "opencode-go":
-        print("OpenCode auth login start. Kies/gebruik OpenCode Go als provider wanneer gevraagd.")
-        run([opencode_bin(), "auth", "login"], check=True)
+        key = getpass.getpass("OpenCode Go API-key: ")
+        save_opencode_go_key(key)
+        refresh_opencode_models(strict=False)
         return
     if provider == "openrouter":
         key = getpass.getpass("OpenRouter API-key: ")
@@ -1006,7 +1052,7 @@ def interactive() -> None:
                 ["openai", "opencode-go", "openrouter"],
                 {
                     "openai": "native Codex/OpenAI accounts",
-                    "opencode-go": "via lokale compatibility proxy",
+                    "opencode-go": "API-key via CodexSwitch store + lokale proxy",
                     "openrouter": "API-key via openrouter-token",
                 },
             )
@@ -1076,7 +1122,7 @@ Usage:
 
 Providers:
   openai                             native Codex/OpenAI account flow
-  opencode-go                        OpenCode Go through local Responses proxy
+  opencode-go                        OpenCode Go key through CodexSwitch store and local Responses proxy
   openrouter                         OpenRouter API key through openrouter-token
 
 Examples:

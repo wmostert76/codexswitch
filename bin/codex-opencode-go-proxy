@@ -18,12 +18,16 @@ from codexswitch_common import (
     user_home,
     opencode_catalog_from_binary,
     opencode_catalog_from_cache,
+    opencode_catalog_from_upstream,
+    OPENCODE_GO_FALLBACK_CATALOG,
 )
 
 
 HOME = user_home()
-AUTH_PATH = HOME / ".local/share/opencode/auth.json"
+AUTH_PATH = HOME / ".config/codexswitch/opencode-go/auth.json"
+LEGACY_AUTH_PATH = HOME / ".local/share/opencode/auth.json"
 CONFIG_PATH = HOME / ".config/opencode/opencode.json"
+SWITCH_MODELS_CACHE_PATH = HOME / ".config/codexswitch/opencode-go/models.json"
 MODELS_CACHE_PATH = HOME / ".cache/opencode/models.json"
 CODEX_CONFIG_PATH = HOME / ".codex/config.toml"
 UPSTREAM = os.environ.get("CODEX_OPENCODE_UPSTREAM", "https://opencode.ai/zen/go/v1")
@@ -61,18 +65,37 @@ class ToolContext:
 
 
 def opencode_key() -> str:
-    data = json.loads(AUTH_PATH.read_text())
-    key = data.get("opencode-go", {}).get("key")
+    try:
+        data = json.loads(AUTH_PATH.read_text())
+    except FileNotFoundError:
+        data = {}
+    key = data.get("api_key") if isinstance(data, dict) else None
+    if not key:
+        try:
+            legacy = json.loads(LEGACY_AUTH_PATH.read_text())
+        except FileNotFoundError:
+            legacy = {}
+        credential = legacy.get("opencode-go", {}) if isinstance(legacy, dict) else {}
+        key = credential.get("key") if isinstance(credential, dict) else None
     if not key:
         raise RuntimeError(f"missing opencode-go key in {AUTH_PATH}")
     return key
 
 
 def opencode_catalog() -> dict[str, dict]:
+    catalog = opencode_catalog_from_cache(SWITCH_MODELS_CACHE_PATH)
+    if catalog:
+        return catalog
+    catalog = opencode_catalog_from_upstream(UPSTREAM)
+    if catalog:
+        return catalog
     catalog = opencode_catalog_from_binary()
     if catalog:
         return catalog
-    return opencode_catalog_from_cache(MODELS_CACHE_PATH)
+    catalog = opencode_catalog_from_cache(MODELS_CACHE_PATH)
+    if catalog:
+        return catalog
+    return dict(OPENCODE_GO_FALLBACK_CATALOG)
 
 
 def model_reasoning(model_id: str, meta: dict) -> tuple[str, list[dict], dict[str, dict]]:

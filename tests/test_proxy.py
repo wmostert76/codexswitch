@@ -403,6 +403,26 @@ class TestHandler:
         handler.headers = {"authorization": "Bearer opencode-token"}
         assert handler._check_auth()
 
+    def test_opencode_key_reads_codexswitch_store_before_legacy(self, tmp_path, monkeypatch):
+        switch_auth = tmp_path / "switch-auth.json"
+        legacy_auth = tmp_path / "legacy-auth.json"
+        switch_auth.write_text(json.dumps({"api_key": "switch-token"}))
+        legacy_auth.write_text(json.dumps({"opencode-go": {"key": "legacy-token"}}))
+        monkeypatch.setattr(proxy, "AUTH_PATH", switch_auth)
+        monkeypatch.setattr(proxy, "LEGACY_AUTH_PATH", legacy_auth)
+
+        assert proxy.opencode_key() == "switch-token"
+
+    def test_opencode_catalog_uses_switch_cache(self, tmp_path, monkeypatch):
+        cache = tmp_path / "models.json"
+        cache.write_text(json.dumps({"models": {"switch-model": {"name": "Switch"}}}))
+        monkeypatch.setattr(proxy, "SWITCH_MODELS_CACHE_PATH", cache)
+        monkeypatch.setattr(proxy, "opencode_catalog_from_upstream", lambda base_url: {})
+        monkeypatch.setattr(proxy, "opencode_catalog_from_binary", lambda: {})
+        monkeypatch.setattr(proxy, "MODELS_CACHE_PATH", tmp_path / "missing.json")
+
+        assert proxy.opencode_catalog() == {"switch-model": {"name": "Switch"}}
+
     def test_custom_stream_uses_custom_input_events(self, monkeypatch):
         handler = self.make_handler()
         events = []

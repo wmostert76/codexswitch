@@ -217,7 +217,62 @@ def test_openai_auth_opens_device_sign_in_modal():
             dialog = app.screen.query_one("#openai-auth-dialog")
             assert "OPENAI DEVICE SIGN-IN" in dialog.render().plain
             assert "codex login --device-auth" in dialog.render().plain
+            assert "https://chatgpt.com/activate" in dialog.render().plain
             assert not app.screen.query("#start-openai-auth")
+
+    asyncio.run(run())
+
+
+def test_provider_api_key_popup_saves_openrouter_key(monkeypatch):
+    saved = {}
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "save_openrouter_key",
+        lambda key: saved.update({"openrouter": key}),
+    )
+    monkeypatch.setitem(tui.BACKEND, "refresh_openrouter_models", lambda strict=False: True)
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            app.provider = "openrouter"
+            app.action_auth()
+            await pilot.pause()
+            assert app.screen.query_one("#api-key-input")
+            await pilot.click("#api-key-input")
+            await pilot.press("o", "r", "-", "t", "e", "s", "t")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert saved == {"openrouter": "or-test"}
+
+    asyncio.run(run())
+
+
+def test_provider_api_key_popup_saves_opencode_go_key(monkeypatch):
+    saved = {}
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "save_opencode_go_key",
+        lambda key: saved.update({"opencode": key}),
+    )
+    monkeypatch.setitem(tui.BACKEND, "refresh_opencode_models", lambda strict=False: True)
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            app.provider = "opencode-go"
+            app.action_auth()
+            await pilot.pause()
+            assert app.screen.query_one("#api-key-input")
+            await pilot.click("#api-key-input")
+            await pilot.press("o", "c", "-", "t", "e", "s", "t")
+            await pilot.press("enter")
+            await pilot.pause()
+            assert saved == {"opencode": "oc-test"}
 
     asyncio.run(run())
 

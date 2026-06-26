@@ -14,6 +14,99 @@ if [[ -z "$TARGET_HOME" ]]; then
   exit 1
 fi
 
+SUDO=()
+if [[ $(id -u) -ne 0 ]]; then
+  SUDO=(sudo)
+fi
+
+detect_package_manager() {
+  for manager in apt-get dnf yum pacman zypper apk; do
+    if command -v "$manager" >/dev/null 2>&1; then
+      echo "$manager"
+      return 0
+    fi
+  done
+  return 1
+}
+
+install_packages() {
+  local manager=$1
+  shift
+  if [[ ${#SUDO[@]} -eq 1 ]] && ! command -v sudo >/dev/null 2>&1; then
+    echo "sudo is required to install missing dependencies" >&2
+    exit 1
+  fi
+  case "$manager" in
+    apt-get)
+      "${SUDO[@]}" apt-get update
+      "${SUDO[@]}" apt-get install -y "$@"
+      ;;
+    dnf)
+      "${SUDO[@]}" dnf install -y "$@"
+      ;;
+    yum)
+      "${SUDO[@]}" yum install -y "$@"
+      ;;
+    pacman)
+      "${SUDO[@]}" pacman -Sy --needed --noconfirm "$@"
+      ;;
+    zypper)
+      "${SUDO[@]}" zypper --non-interactive install "$@"
+      ;;
+    apk)
+      "${SUDO[@]}" apk add --no-cache "$@"
+      ;;
+  esac
+}
+
+ensure_system_dependencies() {
+  local manager packages=()
+  manager=$(detect_package_manager || true)
+  if [[ -z "$manager" ]]; then
+    echo "No supported package manager found; install python3, venv, nodejs and npm manually" >&2
+    exit 1
+  fi
+
+  if ! command -v python3 >/dev/null 2>&1 || ! python3 -m venv --help >/dev/null 2>&1; then
+    case "$manager" in
+      apt-get) packages+=(python3 python3-venv python3-pip) ;;
+      dnf|yum) packages+=(python3 python3-pip) ;;
+      pacman) packages+=(python python-pip python-virtualenv) ;;
+      zypper) packages+=(python3 python3-pip python3-venv) ;;
+      apk) packages+=(python3 py3-pip py3-virtualenv) ;;
+    esac
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    case "$manager" in
+      pacman|apk) packages+=(nodejs npm) ;;
+      *) packages+=(nodejs npm) ;;
+    esac
+  fi
+  if ! command -v curl >/dev/null 2>&1; then
+    packages+=(curl)
+  fi
+  if [[ ${#packages[@]} -gt 0 ]]; then
+    echo "Installing missing system dependencies: ${packages[*]}"
+    install_packages "$manager" "${packages[@]}"
+  fi
+}
+
+ensure_codex_cli() {
+  if command -v codex >/dev/null 2>&1; then
+    codex update || true
+    return
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required to install Codex CLI" >&2
+    exit 1
+  fi
+  echo "Installing Codex CLI via npm"
+  "${SUDO[@]}" npm install -g @openai/codex
+}
+
+ensure_system_dependencies
+ensure_codex_cli
+
 echo "Installing CodexSwitch for $TARGET_USER"
 if [[ $(id -u) -eq 0 && "$TARGET_USER" != "root" ]]; then
   sudo -u "$TARGET_USER" python3 -m venv "$VENV"

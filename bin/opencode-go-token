@@ -9,20 +9,30 @@ from codexswitch_common import user_home  # noqa: E402
 
 
 def main() -> int:
-    auth_path = user_home() / ".local/share/opencode/auth.json"
+    home = user_home()
+    auth_path = home / ".config/codexswitch/opencode-go/auth.json"
+    legacy_auth_path = home / ".local/share/opencode/auth.json"
     try:
         data = json.loads(auth_path.read_text())
     except FileNotFoundError:
-        print(f"OpenCode auth not found: {auth_path}", file=sys.stderr)
-        return 1
+        data = {}
     except json.JSONDecodeError as exc:
-        print(f"OpenCode auth is not valid JSON: {auth_path}: {exc}", file=sys.stderr)
+        print(f"OpenCode Go auth store is not valid JSON: {exc}", file=sys.stderr)
         return 1
 
-    credential = data.get("opencode-go") or {}
-    key = credential.get("key")
+    key = data.get("api_key") if isinstance(data, dict) else None
     if not key:
-        print("OpenCode Go API key not found in OpenCode auth store", file=sys.stderr)
+        try:
+            legacy = json.loads(legacy_auth_path.read_text())
+        except FileNotFoundError:
+            legacy = {}
+        except json.JSONDecodeError as exc:
+            print(f"Legacy OpenCode auth is not valid JSON: {exc}", file=sys.stderr)
+            return 1
+        credential = legacy.get("opencode-go") or {}
+        key = credential.get("key") if isinstance(credential, dict) else None
+    if not key:
+        print("OpenCode Go API key not found in CodexSwitch auth store", file=sys.stderr)
         return 1
 
     print(key)

@@ -110,8 +110,8 @@ def test_banner_contains_credits(capsys):
 
 
 def test_parse_version_accepts_release_tags():
-    assert cs.parse_version("0.5.18") == (0, 5, 18)
-    assert cs.parse_version("v0.5.18") == (0, 5, 18)
+    assert cs.parse_version("0.6.0") == (0, 6, 0)
+    assert cs.parse_version("v0.6.0") == (0, 6, 0)
 
 
 def test_update_check_reports_newer_release(monkeypatch, capsys):
@@ -559,6 +559,7 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
         monkeypatch.setattr(cs, "TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "ensure_proxy", lambda: None)
+        monkeypatch.setattr(cs, "opencode_go_key_present", lambda: True)
         monkeypatch.setattr(cs, "reasoning_choices", lambda model: [("medium", "medium")])
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 
@@ -684,3 +685,69 @@ class TestOpenRouterCatalog:
         assert json.loads(auth_path.read_text()) == {"api_key": "test-openrouter-key-not-secret"}
         assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
         assert oct(auth_path.parent.stat().st_mode & 0o777) == "0o700"
+
+
+class TestOpenCodeGoStore:
+    def test_save_opencode_go_key_is_secret_file(self, tmp_path, monkeypatch):
+        auth_path = tmp_path / "opencode-go" / "auth.json"
+        monkeypatch.setattr(cs, "OPENCODE_GO_AUTH", auth_path)
+
+        cs.save_opencode_go_key(" test-opencode-go-key-not-secret ")
+
+        assert json.loads(auth_path.read_text()) == {
+            "api_key": "test-opencode-go-key-not-secret"
+        }
+        assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
+        assert oct(auth_path.parent.stat().st_mode & 0o777) == "0o700"
+
+    def test_opencode_key_present_prefers_switch_store_and_falls_back_to_legacy(
+        self, tmp_path, monkeypatch
+    ):
+        switch_auth = tmp_path / "switch" / "auth.json"
+        legacy_auth = tmp_path / "legacy" / "auth.json"
+        monkeypatch.setattr(cs, "OPENCODE_GO_AUTH", switch_auth)
+        monkeypatch.setattr(cs, "OPENCODE_AUTH", legacy_auth)
+
+        assert cs.opencode_go_key_present() is False
+        legacy_auth.parent.mkdir(parents=True)
+        legacy_auth.write_text(json.dumps({"opencode-go": {"key": "legacy"}}))
+        assert cs.opencode_go_key_present() is True
+        cs.save_opencode_go_key("native")
+        assert cs.opencode_go_key_present() is True
+
+    def test_opencode_catalog_uses_switch_cache_before_legacy_or_cli(
+        self, tmp_path, monkeypatch
+    ):
+        cache = tmp_path / "opencode-go" / "models.json"
+        cache.parent.mkdir(parents=True)
+        cache.write_text(
+            json.dumps(
+                {
+                    "models": {
+                        "switch-model": {
+                            "name": "Switch Model",
+                            "variants": {"medium": {}},
+                        }
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(cs, "OPENCODE_GO_MODELS_CACHE", cache)
+        monkeypatch.setattr(cs, "_OPENCODE_CATALOG_CACHE", None)
+        monkeypatch.setattr(cs, "_common_catalog_from_upstream", lambda base_url: {})
+        monkeypatch.setattr(cs, "_common_catalog_from_binary", lambda: {})
+        monkeypatch.setattr(cs, "OPENCODE_MODELS_CACHE", tmp_path / "missing.json")
+
+        assert cs.opencode_models() == ["switch-model"]
+
+    def test_opencode_catalog_has_builtin_fallback_without_opencode_cli(
+        self, tmp_path, monkeypatch
+    ):
+        monkeypatch.setattr(cs, "OPENCODE_GO_MODELS_CACHE", tmp_path / "missing.json")
+        monkeypatch.setattr(cs, "_OPENCODE_CATALOG_CACHE", None)
+        monkeypatch.setattr(cs, "_common_catalog_from_upstream", lambda base_url: {})
+        monkeypatch.setattr(cs, "_common_catalog_from_binary", lambda: {})
+        monkeypatch.setattr(cs, "_common_catalog_from_cache", lambda path: {})
+
+        assert "kimi-k2.6" in cs.opencode_models()

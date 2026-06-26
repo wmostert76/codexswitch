@@ -12,7 +12,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Header, Label, OptionList, Static
+from textual.widgets import Button, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from textual.events import Click
@@ -139,14 +139,18 @@ class OpenAIAuthScreen(ModalScreen):
 [bold white]OPENAI DEVICE SIGN-IN[/]
 
 [black]
+Open the activation page when Codex shows the device code:
+
+  [bold white]https://chatgpt.com/activate[/]
+
 CodexSwitch will temporarily leave the TUI and start:
 
   codex login --device-auth
 
-Codex will show a URL and device code. Open the URL, enter the code,
-finish login in your browser, then return here. When Codex reports the
-login is complete, CodexSwitch verifies ~/.codex/auth.json, saves the
-account and refreshes the provider/account list.
+Codex will show the current device code. Enter that code on the page,
+finish login, then return here. When Codex reports the login is complete,
+CodexSwitch verifies ~/.codex/auth.json, saves the account and refreshes
+the provider/account list.
 
 [bold white]Enter[/] Start sign-in    [bold white]Esc[/] Cancel
 """,
@@ -157,6 +161,52 @@ account and refreshes the provider/account list.
     def action_start(self) -> None:
         self.dismiss()
         self.app.run_openai_device_auth()
+
+
+class ApiKeyScreen(ModalScreen):
+    BINDINGS = [
+        ("escape", "dismiss", "Cancel"),
+    ]
+
+    def __init__(self, provider: str):
+        super().__init__()
+        self.provider = provider
+        self.provider_label = {
+            "opencode-go": "OpenCode Go",
+            "openrouter": "OpenRouter",
+        }[provider]
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            f"[bold white]{self.provider_label.upper()} API KEY[/]\n\n"
+            "[black]Paste the API key below. It is stored in the CodexSwitch "
+            "secret store with 0600 file permissions.[/]",
+            id="api-key-title",
+            markup=True,
+        )
+        yield Input(password=True, placeholder=f"{self.provider_label} API key", id="api-key-input")
+        yield Button("Save / Renew", id="api-key-save", variant="primary")
+        yield Button("Cancel", id="api-key-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#api-key-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "api-key-cancel":
+            self.dismiss()
+            return
+        key = self.query_one("#api-key-input", Input).value.strip()
+        if not key:
+            self.app.set_status(f"{self.provider_label} API key is empty", error=True)
+            return
+        self.dismiss(key)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        key = event.value.strip()
+        if not key:
+            self.app.set_status(f"{self.provider_label} API key is empty", error=True)
+            return
+        self.dismiss(key)
 
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
@@ -325,6 +375,11 @@ class CodexSwitchApp(App):
         background: transparent;
     }
 
+    ApiKeyScreen {
+        align: center middle;
+        background: transparent;
+    }
+
     #splash-dialog {
         width: 64;
         height: 14;
@@ -345,11 +400,46 @@ class CodexSwitchApp(App):
 
     #openai-auth-dialog {
         width: 72;
-        height: 20;
+        height: 23;
         border: double #000000;
         background: #00afaf;
         color: #000000;
         padding: 1 2;
+    }
+
+    #api-key-title {
+        width: 66;
+        height: 6;
+        border-top: double #000000;
+        border-left: double #000000;
+        border-right: double #000000;
+        background: #00afaf;
+        color: #000000;
+        padding: 1 2;
+    }
+
+    #api-key-input {
+        width: 66;
+        height: 3;
+        background: #ffffff;
+        color: #000000;
+        border-left: double #000000;
+        border-right: double #000000;
+        padding: 0 2;
+    }
+
+    #api-key-save, #api-key-cancel {
+        width: 66;
+        height: 3;
+        border-left: double #000000;
+        border-right: double #000000;
+        background: #00afaf;
+        color: #000000;
+        text-style: bold;
+    }
+
+    #api-key-cancel {
+        border-bottom: double #000000;
     }
     """
 
@@ -484,12 +574,18 @@ class CodexSwitchApp(App):
             )
         )
         options.append(
+            Option("  └─ set/renew API key", id="action:auth-opencode-go")
+        )
+        options.append(
             Option(
                 Text.from_markup(
                     f"[b]{'●' if openrouter_active else '○'} OPENROUTER[/]"
                 ),
                 id="provider:openrouter",
             )
+        )
+        options.append(
+            Option("  └─ set/renew API key", id="action:auth-openrouter")
         )
         return options
 
@@ -574,6 +670,7 @@ class CodexSwitchApp(App):
                 f"[#5fd7ff]{meta.get('family', 'unknown')}[/]\n"
                 f"Context: {ctx_display}   Output: {out_display}   "
                 f"Status: {status}\n"
+                f"Auth: {'ok' if BACKEND['opencode_go_key_present']() else 'missing'}   "
                 f"Input: {', '.join(modalities) or 'text'}   Tools: "
                 f"{'yes' if capabilities.get('toolcall') else 'no'}"
             )
@@ -674,6 +771,16 @@ class CodexSwitchApp(App):
             kind, value = event.option.id.split(":", 1)
             if kind == "action" and value == "add-openai-account":
                 self.provider = "openai"
+                self.account = None
+                self.action_auth()
+                return
+            if kind == "action" and value == "auth-opencode-go":
+                self.provider = "opencode-go"
+                self.account = None
+                self.action_auth()
+                return
+            if kind == "action" and value == "auth-openrouter":
+                self.provider = "openrouter"
                 self.account = None
                 self.action_auth()
                 return
@@ -794,6 +901,10 @@ class CodexSwitchApp(App):
     def action_auth(self) -> None:
         if self.provider == "openai":
             return self.push_screen(OpenAIAuthScreen())
+        if self.provider in {"opencode-go", "openrouter"}:
+            return self.push_screen(
+                ApiKeyScreen(self.provider), self.store_api_key
+            )
         self.set_status(f"Starting {self.provider} authentication...")
         try:
             with self.suspend():
@@ -807,6 +918,32 @@ class CodexSwitchApp(App):
             self.set_status(f"{self.provider} authentication completed")
         except subprocess.CalledProcessError:
             self.set_status("Authentication was not completed", error=True)
+
+    def store_api_key(self, key: str | None) -> None:
+        if not key:
+            return
+        try:
+            if self.provider == "openrouter":
+                result, output = self.capture(BACKEND["save_openrouter_key"], key)
+                refresh_result, refresh_output = self.capture(
+                    BACKEND["refresh_openrouter_models"], False
+                )
+            elif self.provider == "opencode-go":
+                result, output = self.capture(BACKEND["save_opencode_go_key"], key)
+                refresh_result, refresh_output = self.capture(
+                    BACKEND["refresh_opencode_models"], False
+                )
+            else:
+                return
+            if isinstance(result, SystemExit):
+                self.set_status(output or "API key was not saved", error=True)
+                return
+            self.load_models()
+            refresh_message = refresh_output.splitlines()[-1] if refresh_output else ""
+            suffix = f"; {refresh_message}" if refresh_message and not isinstance(refresh_result, SystemExit) else ""
+            self.set_status(f"{self.provider} API key saved{suffix}")
+        except Exception as exc:
+            self.set_status(str(exc) or "API key was not saved", error=True)
 
     def run_openai_device_auth(self) -> None:
         self.set_status("Starting OpenAI device sign-in...")

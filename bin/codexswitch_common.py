@@ -15,11 +15,13 @@ import os
 import re
 import shutil
 import subprocess
+import urllib.error
+import urllib.request
 from pathlib import Path
 import pwd
 
 
-VERSION = "0.5.18"
+VERSION = "0.6.0"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -106,7 +108,11 @@ def opencode_catalog_from_cache(cache_path: Path) -> dict[str, dict]:
         data = json.loads(cache_path.read_text())
     except Exception:
         return {}
-    models = data.get("opencode-go", {}).get("models", {}) if isinstance(data, dict) else {}
+    if not isinstance(data, dict):
+        return {}
+    models = data.get("models")
+    if not isinstance(models, dict):
+        models = data.get("opencode-go", {}).get("models", {})
     if not isinstance(models, dict):
         return {}
     return {
@@ -114,3 +120,91 @@ def opencode_catalog_from_cache(cache_path: Path) -> dict[str, dict]:
         for model_id, meta in models.items()
         if not isinstance(meta, dict) or meta.get("status") != "deprecated"
     }
+
+
+OPENCODE_GO_BASE_URL = "https://opencode.ai/zen/go/v1"
+OPENCODE_GO_FALLBACK_CATALOG: dict[str, dict] = {
+    "kimi-k2.6": {
+        "name": "Kimi K2.6",
+        "family": "Moonshot",
+        "status": "active",
+        "limit": {"context": 128000, "output": 16000},
+        "capabilities": {"input": {"text": True}, "toolcall": True},
+        "variants": {"medium": {}},
+    },
+    "kimi-k2.7-code": {
+        "name": "Kimi K2.7 Code",
+        "family": "Moonshot",
+        "status": "active",
+        "limit": {"context": 128000, "output": 16000},
+        "capabilities": {"input": {"text": True}, "toolcall": True},
+        "variants": {"medium": {}},
+    },
+    "minimax-m3": {
+        "name": "MiniMax M3",
+        "family": "MiniMax",
+        "status": "active",
+        "limit": {"context": 128000, "output": 16000},
+        "capabilities": {"input": {"text": True}, "toolcall": True},
+        "variants": {"medium": {}},
+    },
+    "qwen3-coder": {
+        "name": "Qwen3 Coder",
+        "family": "Qwen",
+        "status": "active",
+        "limit": {"context": 128000, "output": 16000},
+        "capabilities": {"input": {"text": True}, "toolcall": True},
+        "variants": {"medium": {}},
+    },
+    "glm-4.6": {
+        "name": "GLM 4.6",
+        "family": "Z.ai",
+        "status": "active",
+        "limit": {"context": 128000, "output": 16000},
+        "capabilities": {"input": {"text": True}, "toolcall": True},
+        "variants": {"medium": {}},
+    },
+}
+
+
+def normalize_opencode_model(model_id: str, item: dict | None = None) -> dict:
+    """Return CodexSwitch metadata for an OpenCode Go /v1/models item."""
+    item = item or {}
+    fallback = OPENCODE_GO_FALLBACK_CATALOG.get(model_id, {})
+    name = item.get("name") if isinstance(item, dict) else None
+    return {
+        "name": name or fallback.get("name") or model_id,
+        "family": fallback.get("family", "OpenCode Go"),
+        "status": "active",
+        "limit": fallback.get("limit", {"context": 128000, "output": 16000}),
+        "capabilities": fallback.get(
+            "capabilities", {"input": {"text": True}, "toolcall": True}
+        ),
+        "variants": fallback.get("variants", {"medium": {}}),
+    }
+
+
+def opencode_catalog_from_upstream(
+    base_url: str = OPENCODE_GO_BASE_URL,
+) -> dict[str, dict]:
+    """Fetch OpenCode Go models from its OpenAI-compatible /models endpoint."""
+    try:
+        req = urllib.request.Request(
+            f"{base_url.rstrip('/')}/models",
+            headers={
+                "accept": "application/json",
+                "user-agent": "codexswitch/1.0",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        return {}
+    output: dict[str, dict] = {}
+    data = payload.get("data", []) if isinstance(payload, dict) else []
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("id"), str):
+            continue
+        model_id = item["id"]
+        output[model_id] = normalize_opencode_model(model_id, item)
+    return output

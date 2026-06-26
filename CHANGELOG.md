@@ -2,6 +2,30 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.6.0] - 2026-06-26
+
+### Added
+
+- Added a CodexSwitch-owned OpenCode Go secret store at
+  `~/.config/codexswitch/opencode-go/auth.json`, matching the OpenRouter key
+  flow and removing the hard dependency on the OpenCode CLI auth store.
+- Added TUI paste/renew popups for OpenCode Go and OpenRouter API keys from
+  the providers/accounts pane and `F7`.
+- Added direct OpenCode Go model discovery through the OpenAI-compatible
+  `/models` endpoint, plus CodexSwitch cache and built-in fallback models for
+  fresh systems.
+- Added installer dependency detection for common Linux package managers and
+  automatic Codex CLI install/update handling.
+
+### Changed
+
+- OpenCode Go activation now requires the CodexSwitch OpenCode Go key store or
+  a legacy OpenCode key fallback, and no longer starts `opencode auth login`.
+- The OpenAI device sign-in popup now shows a clickable activation URL before
+  handing over to the official Codex device-login flow.
+- README installation/auth documentation now reflects OpenCode Go independence
+  from OpenCode CLI.
+
 ## [0.5.18] - 2026-06-26
 
 ### Added

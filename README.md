@@ -28,7 +28,7 @@ It is built for three workflows:
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
-| OpenCode Go | Local Responses-compatible proxy, model catalog and reasoning variants |
+| OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
 | OpenRouter | API-key storage, model catalog refresh and Codex provider config |
 
 ## Highlights
@@ -36,20 +36,19 @@ It is built for three workflows:
 - Commander-style TUI with provider/account and model panes
 - Searchable classic model picker for minimal terminals
 - OpenAI multi-account management without losing rotated refresh tokens
-- OpenRouter API-key flow that never writes the key to `config.toml`
+- OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - OpenCode Go compatibility proxy with tool-call translation
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
-- Reproducible local install with a systemd proxy service
+- Reproducible local install with dependency detection and a systemd proxy service
 - GitHub releases generated from `CHANGELOG.md`
 
 ## Install
 
 Requirements:
 
-- Linux with Python 3.11+
-- Codex CLI
-- OpenCode CLI for OpenCode Go support
+- Linux with `sudo` and one of `apt`, `dnf`, `yum`, `pacman`, `zypper` or `apk`
 - OpenRouter API key for OpenRouter support
+- OpenCode Go API key for OpenCode Go support
 - `systemd` and `sudo` for installation into `/usr/local/bin`
 
 ```bash
@@ -64,9 +63,11 @@ Start the app:
 codexswitch tui
 ```
 
-The installer creates `.venv`, installs Textual, links commands into
-`/usr/local/bin`, installs the OpenCode Go proxy service and restarts it on
-every install so updated proxy code is active immediately.
+The installer detects missing Python/venv/npm dependencies on common Linux
+distros, installs or updates the Codex CLI when needed, creates `.venv`,
+installs Textual, links commands into `/usr/local/bin`, installs the OpenCode
+Go proxy service and restarts it on every install so updated proxy code is
+active immediately.
 
 ## Keyboard workflow
 
@@ -133,7 +134,7 @@ out of the repository.
 | --- | --- | --- |
 | Active OpenAI auth | `~/.codex/auth.json` | `codex login` |
 | Saved OpenAI accounts | `~/.config/codexswitch/openai-accounts/` | CodexSwitch |
-| OpenCode Go auth | `~/.local/share/opencode/auth.json` | OpenCode |
+| OpenCode Go key | `~/.config/codexswitch/opencode-go/auth.json` | CodexSwitch |
 | OpenRouter key | `~/.config/codexswitch/openrouter/auth.json` | CodexSwitch |
 
 Secret directories are written as `0700`; secret files are written as `0600`.
@@ -144,12 +145,13 @@ OpenAI account add uses Codex device authentication:
 codexswitch account add
 ```
 
-OpenRouter auth reads the API key without terminal echo. Codex receives it via
-the installed `openrouter-token` command helper, not via plain text in
-`~/.codex/config.toml`.
+OpenRouter and OpenCode Go auth read API keys without terminal echo in classic
+mode, or through a paste/renew popup in the TUI. Codex receives keys via
+installed token command helpers, not via plain text in `~/.codex/config.toml`.
 
 ```bash
 codexswitch auth openrouter
+codexswitch auth opencode-go
 ```
 
 ## OpenCode Go proxy
@@ -172,8 +174,10 @@ sudo systemctl edit codex-opencode-go-proxy.service
 sudo systemctl restart codex-opencode-go-proxy.service
 ```
 
-CodexSwitch itself can still authenticate with the existing OpenCode Go
-credential.
+CodexSwitch itself authenticates with
+`~/.config/codexswitch/opencode-go/auth.json`. Existing OpenCode auth is still
+accepted as a migration fallback, but OpenCode CLI is no longer required for a
+new installation.
 
 ## Releases
 
@@ -195,7 +199,7 @@ trigger the GitHub Release workflow.
 ```
 
 The uninstaller removes installed commands and the proxy service. It leaves
-Codex, OpenCode and CodexSwitch user configuration untouched.
+Codex and CodexSwitch user configuration untouched.
 
 ## Credits
 
