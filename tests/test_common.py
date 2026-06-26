@@ -83,3 +83,104 @@ class TestOpencodeCatalogFromCache:
         cache = tmp_path / "models.json"
         cache.write_text("not json at all")
         assert common.opencode_catalog_from_cache(cache) == {}
+
+
+class TestReasoningOptionsConversion:
+    """Tests for converting opencode cache reasoning_options to variants."""
+
+    def test_effort_values_converted(self):
+        meta = {
+            "reasoning_options": [{"type": "effort", "values": ["high", "max"]}],
+        }
+        result = common._reasoning_options_to_variants(meta)
+        assert "high" in result
+        assert "max" in result
+        assert result["high"] == {"reasoningEffort": "high"}
+
+    def test_empty_options(self):
+        assert common._reasoning_options_to_variants({}) == {}
+        assert common._reasoning_options_to_variants({"reasoning_options": []}) == {}
+
+    def test_non_effort_type_ignored(self):
+        meta = {"reasoning_options": [{"type": "other", "values": ["x"]}]}
+        assert common._reasoning_options_to_variants(meta) == {}
+
+
+class TestNormalizeCacheModel:
+    def test_variants_filled_from_reasoning_options(self):
+        meta = {
+            "name": "Test",
+            "limit": {"context": 1000000, "output": 65536},
+            "reasoning_options": [{"type": "effort", "values": ["high"]}],
+        }
+        result = common._normalize_cache_model("test", meta)
+        assert result["variants"] == {"high": {"reasoningEffort": "high"}}
+        assert result["limit"]["context"] == 1000000
+
+    def test_existing_variants_preserved(self):
+        meta = {
+            "name": "Test",
+            "variants": {"low": {}, "high": {}},
+            "reasoning_options": [{"type": "effort", "values": ["max"]}],
+        }
+        result = common._normalize_cache_model("test", meta)
+        assert result["variants"] == {"low": {}, "high": {}}
+
+    def test_no_variants_no_options(self):
+        meta = {"name": "Test", "limit": {"context": 128000, "output": 16000}}
+        result = common._normalize_cache_model("test", meta)
+        assert "variants" not in result or result["variants"] == {}
+
+
+class TestFallbackCatalog:
+    def test_fallback_has_real_context_limits(self):
+        # kimi-k2.6 should have 262144 context, not the old default 128000
+        meta = common.OPENCODE_GO_FALLBACK_CATALOG["kimi-k2.6"]
+        assert meta["limit"]["context"] == 262144
+
+    def test_fallback_minimax_m3_has_thinking_variants(self):
+        meta = common.OPENCODE_GO_FALLBACK_CATALOG["minimax-m3"]
+        assert "thinking" in meta["variants"]
+
+    def test_fallback_models_without_reasoning_have_empty_variants(self):
+        # Models that have no reasoning variants at all (like kimi, qwen,
+        # glm-5, minimax-m2.x) should have empty variants rather than the old
+        # forced {"medium": {}} default.
+        no_reasoning = [
+            mid for mid, meta in common.OPENCODE_GO_FALLBACK_CATALOG.items()
+            if not meta.get("variants")
+        ]
+        assert "kimi-k2.6" in no_reasoning
+        assert "glm-5" in no_reasoning
+        # Models WITH reasoning should not be empty
+        assert "deepseek-v4-flash" not in no_reasoning
+        assert "minimax-m3" not in no_reasoning
+
+
+class TestUpstreamMerge:
+    def test_upstream_merges_with_fallback(self, monkeypatch):
+        """opencode_catalog_from_upstream should include fallback models."""
+        import urllib.request
+        captured = {}
+
+        class FakeResponse:
+            def __init__(self, data):
+                self._data = data
+            def read(self):
+                return self._data
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        def fake_urlopen(req, timeout):
+            import json as _json
+            payload = _json.dumps({"data": [{"id": "new-model"}]}).encode()
+            return FakeResponse(payload)
+
+        monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+        result = common.opencode_catalog_from_upstream()
+        assert "new-model" in result
+        # Fallback models should also be present
+        assert "kimi-k2.6" in result
+        assert result["kimi-k2.6"]["limit"]["context"] == 262144

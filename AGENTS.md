@@ -38,8 +38,8 @@ python3 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 ```
 
-Keep the backend usable without Textual. `codexswitch classic` and all
-non-interactive subcommands must continue to work with the system Python.
+Keep the backend usable without Textual. All non-interactive subcommands
+must continue to work with the system Python.
 
 Prefer the existing backend functions over duplicating provider, account or
 configuration logic in the TUI.
@@ -92,3 +92,8 @@ For provider integration tests:
   than a shell fallback. The proxy emits the correct custom-tool input fields
   and streaming events, and provider activation warms the Codex model catalog
   so freeform tool metadata is available on the first run.
+Keep the backend usable without Textual. All non-interactive subcommands
+must continue to work with the system Python.
+
+Prefer the existing backend functions over duplicating provider, account or
+configuration logic in the TUI.

@@ -496,11 +496,22 @@ class CodexSwitchApp(App):
                 )
 
     def on_mount(self) -> None:
+        # Always refresh model catalogs from internet sources at startup so
+        # models, context limits and reasoning variants are current for both
+        # OpenCode Go and OpenRouter.  This works on fresh hosts without the
+        # opencode binary because refresh falls back to the upstream /models
+        # endpoint merged with the built-in catalog.
+        try:
+            self.capture(BACKEND["refresh_opencode_models"], False)
+            self.capture(BACKEND["refresh_openrouter_models"], False)
+        except Exception:
+            pass
         self.load_state()
         self.load_sources()
         self.load_models()
         self.query_one("#models", OptionList).focus()
         self.push_screen(SplashScreen())
+        self.set_status(" Ready")
 
     def on_click(self, event: Click) -> None:
         """Handle mouse clicks on function key labels."""
@@ -889,22 +900,24 @@ class CodexSwitchApp(App):
         )
 
     def action_refresh(self) -> None:
-        if self.provider == "openrouter":
-            self.set_status("Refreshing OpenRouter catalog...")
-            result, output = self.capture(BACKEND["refresh_openrouter_models"])
-        else:
-            self.set_status("Refreshing OpenCode Go catalog...")
-            result, output = self.capture(BACKEND["refresh_opencode_models"])
-        if isinstance(result, SystemExit):
+        # Always refresh both catalogs from internet sources so models,
+        # context limits and reasoning variants stay current regardless of
+        # which provider is currently active.
+        self.set_status("Refreshing OpenCode Go + OpenRouter catalogs...")
+        result1, output1 = self.capture(BACKEND["refresh_opencode_models"], False)
+        result2, output2 = self.capture(BACKEND["refresh_openrouter_models"], False)
+        if isinstance(result1, SystemExit) and isinstance(result2, SystemExit):
             self.set_status(
-                output or "Model refresh failed; existing cache retained",
+                output1 or output2 or "Model refresh failed; existing cache retained",
                 error=True,
             )
             return
-        if self.provider == "opencode-go":
-            self.catalog = BACKEND["opencode_model_catalog"]()
+        self.catalog = BACKEND["opencode_model_catalog"]()
         self.load_models()
-        self.set_status(output.splitlines()[-1] if output else "Catalog refreshed")
+        combined = " | ".join(
+            line for line in (output1, output2) if line
+        )
+        self.set_status(combined.splitlines()[-1] if combined else "Catalogs refreshed")
 
     def action_apply(self) -> None:
         if not self.model:

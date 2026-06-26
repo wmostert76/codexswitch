@@ -241,12 +241,73 @@ def local_repo_is_dirty() -> bool:
     return bool(status)
 
 
+def current_git_branch() -> str:
+    try:
+        return command_output(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"]
+        )
+    except subprocess.CalledProcessError:
+        die(f"{PROJECT_ROOT} is geen geldige git checkout")
+
+
+def local_git_revision(ref: str = "HEAD") -> str:
+    try:
+        return command_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", ref])
+    except subprocess.CalledProcessError:
+        die(f"kan lokale git revisie niet lezen: {ref}")
+
+
+def remote_git_revision(remote: str = "origin", branch: str = "main") -> str:
+    try:
+        output = command_output(
+            ["git", "-C", str(PROJECT_ROOT), "ls-remote", "--heads", remote, branch]
+        )
+    except subprocess.CalledProcessError:
+        die(f"kan remote git revisie niet lezen: {remote}/{branch}")
+    first_line = output.splitlines()[0] if output else ""
+    parts = first_line.split()
+    if len(parts) < 2:
+        die(f"remote branch niet gevonden: {remote}/{branch}")
+    return parts[0]
+
+
+def main_branch_update_available() -> tuple[bool, str, str]:
+    if current_git_branch() != "main":
+        return False, "", ""
+    local_rev = local_git_revision()
+    remote_rev = remote_git_revision("origin", "main")
+    return local_rev != remote_rev, local_rev, remote_rev
+
+
 def update_from_github(check_only: bool = False) -> bool:
     latest_tag, latest_url = latest_github_release()
     current_version = parse_version(VERSION)
     latest_version = parse_version(latest_tag)
     latest_display = latest_tag.lstrip("v")
     if current_version >= latest_version:
+        branch_update, local_rev, remote_rev = main_branch_update_available()
+        if branch_update:
+            print(
+                "Nieuwe CodexSwitch main-update beschikbaar: "
+                f"{local_rev[:7]} -> {remote_rev[:7]}"
+            )
+            if latest_url:
+                print(f"latest release: {latest_url}")
+            if check_only:
+                return True
+            if local_repo_is_dirty():
+                die(
+                    "lokale repository heeft niet-gecommitte wijzigingen; "
+                    "commit/stash eerst en draai daarna opnieuw: codexswitch update"
+                )
+            install_script = PROJECT_ROOT / "install.sh"
+            if not install_script.exists():
+                die(f"install script ontbreekt: {install_script}")
+            run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+            run(["bash", str(install_script), "--no-self-update"])
+            print("CodexSwitch main bijgewerkt")
+            return True
         if current_version == latest_version:
             print(f"CodexSwitch is up-to-date: {VERSION}")
         else:
@@ -273,9 +334,7 @@ def update_from_github(check_only: bool = False) -> bool:
         die(f"install script ontbreekt: {install_script}")
 
     run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
-    branch = command_output(
-        ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"]
-    )
+    branch = current_git_branch()
     if branch == "main":
         run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
     else:
@@ -608,17 +667,34 @@ def parse_opencode_catalog(output: str) -> dict[str, dict]:
 def refresh_opencode_models(strict: bool = True) -> bool:
     global _OPENCODE_CATALOG_CACHE
     print("OpenCode Go-modelcatalogus verversen...")
-    catalog = _common_catalog_from_upstream(OPENCODE_BASE_URL)
-    if catalog:
-        _OPENCODE_CATALOG_CACHE = catalog
-        write_json(
-            OPENCODE_GO_MODELS_CACHE,
-            {"models": catalog, "updated_at": int(time.time())},
-        )
-        print(f"OpenCode Go-modellen bijgewerkt: {len(catalog)} actief")
-        return True
+    # 1) Prefer the opencode binary --verbose output: it provides the richest
+    #    metadata (reasoning variants, context limits, capabilities).
     binary = _common_opencode_bin()
-    if not binary:
+    catalog: dict[str, dict] = {}
+    if binary:
+        try:
+            proc = subprocess.run(
+                [binary, "models", "opencode-go", "--refresh", "--verbose"],
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+                check=False,
+            )
+        except Exception as exc:
+            if strict:
+                die(f"model-refresh mislukt: {exc}")
+            print(f"warning: model-refresh mislukt; bestaande cache blijft actief: {exc}", file=sys.stderr)
+            return False
+        if proc.returncode == 0:
+            catalog = parse_opencode_catalog(proc.stdout)
+    # 2) Fall back to the upstream /models endpoint merged with the built-in
+    #    fallback catalog.  This works on a fresh host without the opencode
+    #    binary and still returns real context limits and reasoning variants
+    #    for known models.
+    if not catalog:
+        catalog = _common_catalog_from_upstream(OPENCODE_BASE_URL)
+    if not catalog:
         _OPENCODE_CATALOG_CACHE = dict(OPENCODE_GO_FALLBACK_CATALOG)
         if strict:
             die("OpenCode Go model-refresh mislukt; upstream en OpenCode CLI niet beschikbaar")
@@ -627,37 +703,13 @@ def refresh_opencode_models(strict: bool = True) -> bool:
             file=sys.stderr,
         )
         return False
-    try:
-        proc = subprocess.run(
-            [binary, "models", "opencode-go", "--refresh", "--verbose"],
-            text=True,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-            check=False,
-        )
-    except Exception as exc:
-        if strict:
-            die(f"model-refresh mislukt: {exc}")
-        print(f"warning: model-refresh mislukt; bestaande cache blijft actief: {exc}", file=sys.stderr)
-        return False
-    if proc.returncode != 0:
-        detail = (proc.stderr or proc.stdout).strip()
-        if strict:
-            die(f"model-refresh mislukt: {detail or f'exitcode {proc.returncode}'}")
-        print(
-            f"warning: model-refresh mislukt; bestaande cache blijft actief: "
-            f"{detail or f'exitcode {proc.returncode}'}",
-            file=sys.stderr,
-        )
-        return False
 
-    _OPENCODE_CATALOG_CACHE = parse_opencode_catalog(proc.stdout)
+    _OPENCODE_CATALOG_CACHE = catalog
     write_json(
         OPENCODE_GO_MODELS_CACHE,
-        {"models": _OPENCODE_CATALOG_CACHE, "updated_at": int(time.time())},
+        {"models": catalog, "updated_at": int(time.time())},
     )
-    print(f"OpenCode Go-modellen bijgewerkt: {len(_OPENCODE_CATALOG_CACHE)} actief")
+    print(f"OpenCode Go-modellen bijgewerkt: {len(catalog)} actief")
     return True
 
 
@@ -1062,95 +1114,6 @@ def auth(provider: str | None = None) -> None:
     die(f"onbekende auth provider: {provider}")
 
 
-def interactive() -> None:
-    banner(f"Actief: {current_selection_line()}")
-    while True:
-        action_descriptions = {
-            "provider/model kiezen": "zoekbare modelpicker",
-            "OpenAI-accounts": "toevoegen, opslaan of activeren",
-            "modellen verversen": "OpenCode Go + OpenRouter catalogus",
-            "auth": "login/API-key per provider",
-            "status": "paden en actieve configuratie",
-            "modellen tonen": "alle bekende modellen",
-            "stop": "sluit classic af",
-        }
-        action = choose(
-            "Hoofdmenu",
-            ["provider/model kiezen", "OpenAI-accounts", "modellen verversen", "auth", "status", "modellen tonen", "stop"],
-            action_descriptions,
-        )
-        if action == "OpenAI-accounts":
-            accounts = openai_accounts()
-            sub = choose(
-                "OpenAI-accounts",
-                ["account toevoegen via device sign-in", "account activeren", "huidige login opslaan", "terug"],
-                {
-                    "account toevoegen via device sign-in": "start Codex browser/device login",
-                    "account activeren": f"{len(accounts)} opgeslagen account(s)",
-                    "huidige login opslaan": "sync actieve Codex login",
-                    "terug": "naar hoofdmenu",
-                },
-            )
-            if sub == "account toevoegen via device sign-in":
-                auth("openai")
-            elif sub == "account activeren":
-                accounts = openai_accounts()
-                if not accounts:
-                    print("Geen opgeslagen OpenAI-accounts")
-                    continue
-                use_openai_account(choose("OpenAI-account", accounts))
-            elif sub == "huidige login opslaan":
-                save_openai_account()
-        elif action == "provider/model kiezen":
-            provider = choose(
-                "Provider",
-                ["openai", "opencode-go", "openrouter"],
-                {
-                    "openai": "native Codex/OpenAI accounts",
-                    "opencode-go": "API-key via CodexSwitch store + lokale proxy",
-                    "openrouter": "API-key via openrouter-token",
-                },
-            )
-            if provider == "openai":
-                accounts = openai_accounts()
-                if accounts:
-                    use_openai_account(choose("OpenAI-account", accounts))
-            elif provider == "opencode-go":
-                refresh_opencode_models(strict=False)
-            elif provider == "openrouter":
-                refresh_openrouter_models(strict=False)
-            if provider == "openai":
-                models = openai_models()
-                default = "gpt-5.5"
-            elif provider == "opencode-go":
-                models = opencode_models()
-                default = DEFAULT_OPENCODE_MODEL
-            else:
-                models = openrouter_models()
-                default = OPENROUTER_FALLBACK_MODELS[0]
-            ordered = [default] + [m for m in models if m != default]
-            model = choose(f"{provider} model", ordered)
-            validate_provider_model(provider, model)
-            effort = None
-            if provider == "opencode-go":
-                choices = reasoning_choices(model)
-                if choices:
-                    label = choose("Denkstand", [label for label, _ in choices])
-                    effort = dict(choices)[label]
-                else:
-                    print("Denkstand: vaste modeldefault")
-            update_codex_config(provider, model, effort)
-        elif action == "modellen verversen":
-            refresh_opencode_models()
-            refresh_openrouter_models(strict=False)
-        elif action == "auth":
-            auth()
-        elif action == "status":
-            status()
-        elif action == "modellen tonen":
-            list_models()
-        else:
-            return
 
 
 def usage() -> None:
@@ -1162,7 +1125,6 @@ def usage() -> None:
 
 Usage:
   codexswitch tui                    start Commander TUI
-  codexswitch classic                start searchable classic picker
   codexswitch use PROVIDER MODEL [REASONING]
   codexswitch auth [openai|opencode-go|openrouter]
   codexswitch account add            add OpenAI account with device sign-in
@@ -1182,7 +1144,6 @@ Providers:
 
 Examples:
   codexswitch tui
-  codexswitch classic
   codexswitch account add
   codexswitch auth openrouter
   codexswitch update --check
@@ -1207,9 +1168,6 @@ def main(argv: list[str]) -> int:
         if not Path(TUI_PYTHON).exists():
             die(f"TUI Python ontbreekt: {TUI_PYTHON}; draai ./install.sh")
         os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
-    if cmd == "classic":
-        interactive()
-        return 0
     if cmd == "list":
         list_models()
         return 0

@@ -34,7 +34,6 @@ It is built for three workflows:
 ## Highlights
 
 - Commander-style TUI with provider/account and model panes
-- Searchable classic model picker for minimal terminals
 - OpenAI multi-account management without losing rotated refresh tokens
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - OpenCode Go compatibility proxy with tool-call translation
@@ -97,7 +96,6 @@ codexswitch version
 ```bash
 codexswitch                         # show help
 codexswitch tui                     # start Commander TUI
-codexswitch classic                 # searchable classic picker
 codexswitch use PROVIDER MODEL [REASONING]
 codexswitch auth [openai|opencode-go|openrouter]
 codexswitch account add             # OpenAI device sign-in
@@ -153,8 +151,8 @@ OpenAI account add uses Codex device authentication:
 codexswitch account add
 ```
 
-OpenRouter and OpenCode Go auth read API keys without terminal echo in classic
-mode, or through a paste/renew popup in the TUI. Codex receives keys via
+OpenRouter and OpenCode Go auth read API keys without terminal echo, or
+through a paste/renew popup in the TUI. Codex receives keys via
 installed token command helpers, not via plain text in `~/.codex/config.toml`.
 
 ```bash
@@ -194,7 +192,6 @@ Current version is shown in all app surfaces:
 ```bash
 codexswitch version
 codexswitch --help
-codexswitch classic
 ```
 
 Release notes are maintained in [CHANGELOG.md](CHANGELOG.md). Tags named `v*`

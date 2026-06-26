@@ -131,6 +131,7 @@ def test_parse_version_accepts_release_tags():
 
 def test_update_check_reports_newer_release(monkeypatch, capsys):
     monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", "https://example.test/release"))
+    monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
 
     assert cs.update_from_github(check_only=True) is True
 
@@ -141,68 +142,41 @@ def test_update_check_reports_newer_release(monkeypatch, capsys):
 
 def test_update_check_reports_up_to_date(monkeypatch, capsys):
     monkeypatch.setattr(cs, "latest_github_release", lambda: (f"v{cs.VERSION}", ""))
+    monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
 
     assert cs.update_from_github(check_only=True) is False
 
     assert f"up-to-date: {cs.VERSION}" in capsys.readouterr().out
 
 
+def test_update_check_reports_main_branch_update(monkeypatch, capsys):
+    monkeypatch.setattr(
+        cs,
+        "latest_github_release",
+        lambda: (f"v{cs.VERSION}", "https://example.test/release"),
+    )
+    monkeypatch.setattr(
+        cs,
+        "main_branch_update_available",
+        lambda: (True, "1111111local", "2222222remote"),
+    )
+
+    assert cs.update_from_github(check_only=True) is True
+
+    output = capsys.readouterr().out
+    assert "Nieuwe CodexSwitch main-update beschikbaar: 1111111 -> 2222222" in output
+    assert "latest release: https://example.test/release" in output
+
+
 def test_update_refuses_dirty_repository(monkeypatch):
     import pytest
 
     monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", ""))
+    monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: True)
 
     with pytest.raises(SystemExit):
-        cs.update_from_github(check_only=False)
-
-
-def test_classic_from_opencode_to_openai_uses_only_openai_model_picker(tmp_path, monkeypatch, capsys):
-    codex_home = tmp_path / ".codex"
-    switch_home = tmp_path / ".config" / "codexswitch"
-    codex_home.mkdir(parents=True)
-    switch_home.mkdir(parents=True)
-    config = codex_home / "config.toml"
-    state_path = switch_home / "config.json"
-    config.write_text(
-        'model = "kimi-k2.6"\n'
-        'model_provider = "opencode-go"\n'
-        '\n'
-        '[model_providers.opencode-go]\n'
-        'base_url = "http://127.0.0.1:14555/v1"\n'
-    )
-    state_path.write_text(
-        json.dumps(
-            {
-                "provider": "opencode-go",
-                "model": "kimi-k2.6",
-                "reasoning_effort": "medium",
-            }
-        )
-    )
-
-    answers = iter(["1", "1", "1", "7"])
-    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
-    monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
-    monkeypatch.setattr(cs, "CODEX_CONFIG", config)
-    monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
-    monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
-    monkeypatch.setattr(cs, "openai_accounts", lambda: [])
-    monkeypatch.setattr(cs, "openai_models", lambda: ["gpt-5.5", "gpt-5.4-mini"])
-    monkeypatch.setattr(cs, "openai_reasoning_choices", lambda model: [])
-
-    cs.interactive()
-
-    output = capsys.readouterr().out
-    text = config.read_text()
-    state = json.loads(state_path.read_text())
-    assert "gpt-5.5" in output
-    assert "kimi-k2.6" not in output.split("┌─ openai model", 1)[1]
-    assert state["provider"] == "openai"
-    assert state["model"] == "gpt-5.5"
-    assert 'model_provider = "openai"' in text
-    assert 'model = "gpt-5.5"' in text
-    assert "[model_providers.opencode-go]" not in text
+       cs.update_from_github(check_only=False)
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────

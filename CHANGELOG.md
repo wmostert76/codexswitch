@@ -2,10 +2,43 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- OpenCode Go model metadata (reasoning variants and context limits) is now
+  read correctly from the `~/.cache/opencode/models.json` cache.  The cache
+  uses a `reasoning_options` schema rather than the `variants` dict emitted
+  by `opencode --verbose`; both schemas are now normalized so reasoning
+  choices and context windows reflect the real model capabilities instead of
+  defaulting every model to `medium` and 128K context.
+- The built-in OpenCode Go fallback catalog now carries real context limits
+  and reasoning variants for known models, so a fresh host without the
+  opencode binary still shows correct metadata.
+
+### Changed
+
+- `codexswitch refresh` and the TUI `F5` refresh now prefer the
+  `opencode --verbose` output when the binary is available and fall back to
+  the upstream `/models` endpoint merged with the built-in catalog.  This
+  works on new hosts where opencode is not installed.
+- The TUI now refreshes both OpenCode Go and OpenRouter model catalogs from
+  internet sources at startup, so models, context limits and reasoning
+  variants are always current.
+- The `codexswitch classic` command and the classic interactive picker have
+  been removed.  Use `codexswitch tui` for the interactive interface and
+  `codexswitch use` / `codexswitch refresh` / `codexswitch auth` for
+  non-interactive operations.
+- The upstream `/models` endpoint is now merged with the fallback catalog so
+  all known models appear even when the upstream omits them.
+
 ## [0.6.2] - 2026-06-26
 
 ### Changed
 
+- `codexswitch update` now checks `origin/main` when the installed checkout is
+  on `main`, so commits published after the latest GitHub release are no
+  longer hidden behind an unchanged release tag.
 - The TUI now verifies Codex runtime directories before launching Codex, so
   root-owned session, log, temp or shell snapshot paths are repaired before
   they can trigger transcript save permission errors.
