@@ -19,7 +19,7 @@ from pathlib import Path
 import pwd
 
 
-VERSION = "0.5.11"
+VERSION = "0.5.12"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _

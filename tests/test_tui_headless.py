@@ -17,6 +17,15 @@ _spec = importlib.util.spec_from_file_location(
 tui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tui)
 
+_backend = importlib.machinery.SourceFileLoader(
+    "codexswitch", str(BIN_DIR / "codexswitch")
+)
+_backend_spec = importlib.util.spec_from_file_location(
+    "codexswitch", BIN_DIR / "codexswitch", loader=_backend
+)
+cs = importlib.util.module_from_spec(_backend_spec)
+_backend_spec.loader.exec_module(cs)
+
 
 async def dismiss_splash(pilot) -> None:
     await pilot.pause()
@@ -26,7 +35,7 @@ async def dismiss_splash(pilot) -> None:
 
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.11" in tui.CodexSwitchApp.SUB_TITLE
+    assert f"v{cs.VERSION}" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
 
 
@@ -39,7 +48,7 @@ def test_startup_splash_contains_ascii_branding_and_credits():
             dialog = app.screen.query_one("#splash-dialog")
             plain = dialog.render().plain
             assert "                    C O M M A N D E R" in plain
-            assert "CodexSwitch Commander v0.5.11" in plain
+            assert f"CodexSwitch Commander v{cs.VERSION}" in plain
             assert "by WAM-Software since (c) 1988" in plain
             assert "AI-assisted implementation: OpenAI Codex" in plain
 
