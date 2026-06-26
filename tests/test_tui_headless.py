@@ -20,7 +20,8 @@ _spec.loader.exec_module(tui)
 
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.2" in tui.CodexSwitchApp.SUB_TITLE
+    assert "v0.5.3" in tui.CodexSwitchApp.SUB_TITLE
+    assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
 
 
 def test_tui_80x24():
@@ -36,6 +37,7 @@ def test_tui_80x24():
             assert app.query_one("#model-detail") is not None
             assert app.query_one("#status") is not None
             assert app.query_one("#buttonbar") is not None
+            assert "by WAM-Software" in app.query_one("#status").render().plain
             bb = app.query_one("#buttonbar")
             bb_text = bb.render().plain
             assert len(bb_text) <= 80, f"buttonbar ({len(bb_text)}) exceeds 80 cols"
@@ -59,6 +61,22 @@ def test_tui_120x40():
             bb = app.query_one("#buttonbar")
             bb_text = bb.render().plain
             assert len(bb_text) <= 120, f"buttonbar ({len(bb_text)}) exceeds 120 cols"
+
+    asyncio.run(run())
+
+
+def test_openai_auth_opens_device_sign_in_modal():
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await pilot.pause()
+            assert app.provider == "openai"
+            await pilot.press("f7")
+            await pilot.pause()
+            dialog = app.screen.query_one("#openai-auth-dialog")
+            assert "OPENAI DEVICE SIGN-IN" in dialog.render().plain
+            assert "codex login --device-auth" in dialog.render().plain
 
     asyncio.run(run())
 

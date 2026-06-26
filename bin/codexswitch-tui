@@ -11,7 +11,7 @@ from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Header, Label, OptionList, Static
+from textual.widgets import Button, Header, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 
@@ -27,6 +27,8 @@ class HelpScreen(ModalScreen):
         yield Static(
             """
 [bold #000087]CODEXSWITCH COMMANDER[/]
+by WAM-Software since (c) 1988
+AI-assisted implementation: OpenAI Codex
 
 [b]Navigation[/]
   Tab / Shift+Tab   Switch panel
@@ -51,9 +53,45 @@ Press Escape or F1 to close.
         )
 
 
+class OpenAIAuthScreen(ModalScreen):
+    BINDINGS = [
+        ("enter", "start", "Start"),
+        ("escape", "dismiss", "Cancel"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            """
+[bold #000087]OPENAI DEVICE SIGN-IN[/]
+
+CodexSwitch will temporarily leave the TUI and start:
+
+  codex login --device-auth
+
+Codex will show a URL and device code. Open the URL, enter the code,
+finish login in your browser, then return here. When Codex reports the
+login is complete, CodexSwitch verifies ~/.codex/auth.json, saves the
+account and refreshes the provider/account list.
+
+[b]Enter[/] Start sign-in    [b]Esc[/] Cancel
+""",
+            id="openai-auth-dialog",
+            markup=True,
+        )
+        yield Button("Start OpenAI sign-in", id="start-openai-auth")
+
+    def action_start(self) -> None:
+        self.dismiss()
+        self.app.run_openai_device_auth()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "start-openai-auth":
+            self.action_start()
+
+
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
-    SUB_TITLE = f"v{BACKEND['VERSION']} · Provider and model control center"
+    SUB_TITLE = f"v{BACKEND['VERSION']} · {BACKEND['CREDITS_OWNER']}"
 
     CSS = """
     Screen {
@@ -179,6 +217,11 @@ class CodexSwitchApp(App):
         background: rgba(0, 0, 0, 0.65);
     }
 
+    OpenAIAuthScreen {
+        align: center middle;
+        background: rgba(0, 0, 0, 0.65);
+    }
+
     #help-dialog {
         width: 66;
         height: 25;
@@ -186,6 +229,20 @@ class CodexSwitchApp(App):
         background: #bcbcbc;
         color: #000000;
         padding: 1 2;
+    }
+
+    #openai-auth-dialog {
+        width: 72;
+        height: 19;
+        border: double #ffffff;
+        background: #bcbcbc;
+        color: #000000;
+        padding: 1 2;
+    }
+
+    #start-openai-auth {
+        width: 28;
+        margin-top: 1;
     }
     """
 
@@ -229,7 +286,10 @@ class CodexSwitchApp(App):
             with Vertical(id="reason-box"):
                 yield Label("┤ REASONING ├", classes="lower-title")
                 yield OptionList(id="reasoning")
-        yield Static(" Ready", id="status")
+        yield Static(
+            f" {BACKEND['CREDITS_OWNER']} · {BACKEND['CREDITS_AI']}",
+            id="status",
+        )
         yield Static(
             "[reverse bold]1[/]Help [reverse bold]2[/]Prov "
             "[reverse bold]3[/]Model [reverse bold]4[/]Think "
@@ -595,6 +655,8 @@ class CodexSwitchApp(App):
             self.set_status(str(exc) or "Could not activate selection", error=True)
 
     def action_auth(self) -> None:
+        if self.provider == "openai":
+            return self.push_screen(OpenAIAuthScreen())
         self.set_status(f"Starting {self.provider} authentication...")
         try:
             with self.suspend():
@@ -608,6 +670,34 @@ class CodexSwitchApp(App):
             self.set_status(f"{self.provider} authentication completed")
         except subprocess.CalledProcessError:
             self.set_status("Authentication was not completed", error=True)
+
+    def run_openai_device_auth(self) -> None:
+        self.set_status("Starting OpenAI device sign-in...")
+        try:
+            with self.suspend():
+                subprocess.run(
+                    [str(BACKEND_PATH), "auth", "openai"],
+                    check=True,
+                    env={**os.environ, "HOME": str(BACKEND["HOME"])},
+                )
+            auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
+            email = BACKEND["openai_auth_email"](auth)
+            if not email:
+                self.set_status(
+                    "OpenAI login completed, but no account email was detected",
+                    error=True,
+                )
+                return
+            self.account = email
+            self.provider = "openai"
+            self.load_state()
+            self.load_sources()
+            self.load_models()
+            self.set_status(f"OpenAI account added: {email}")
+        except subprocess.CalledProcessError:
+            self.set_status("OpenAI sign-in was not completed", error=True)
+        except Exception as exc:
+            self.set_status(str(exc) or "OpenAI sign-in failed", error=True)
 
     def action_status(self) -> None:
         self.load_state()

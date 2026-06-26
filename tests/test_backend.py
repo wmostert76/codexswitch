@@ -24,7 +24,9 @@ _spec.loader.exec_module(cs)
 
 
 def test_version_constant_is_release_version():
-    assert cs.VERSION == "0.5.2"
+    assert cs.VERSION == "0.5.3"
+    assert cs.CREDITS_OWNER == "by WAM-Software since (c) 1988"
+    assert cs.CREDITS_AI == "AI-assisted implementation: OpenAI Codex"
 
 
 def test_cli_version_output():
@@ -35,13 +37,20 @@ def test_cli_version_output():
         stderr=subprocess.PIPE,
         check=True,
     )
-    assert proc.stdout.strip() == "codexswitch 0.5.2"
+    assert proc.stdout.strip() == "codexswitch 0.5.3"
 
 
 def test_choose_filters_before_selecting(monkeypatch):
     answers = iter(["router", "1"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
     assert cs.choose("Provider", ["openai", "opencode-go", "openrouter"]) == "openrouter"
+
+
+def test_banner_contains_credits(capsys):
+    cs.banner("Actief: test")
+    output = capsys.readouterr().out
+    assert "by WAM-Software since (c) 1988" in output
+    assert "AI-assisted implementation: OpenAI Codex" in output
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────

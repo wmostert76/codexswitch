@@ -8,6 +8,16 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.3] - 2026-06-26
+
+### Changed
+
+- Added WAM-Software and AI-assisted implementation credits to the TUI subtitle,
+  TUI status line, TUI help screen and classic startup banner.
+- OpenAI authentication in the TUI now opens a device sign-in modal before
+  temporarily suspending to `codex login --device-auth`, then verifies and saves
+  the account after Codex completes login.
+
 ## [0.5.2] - 2026-06-26
 
 ### Changed

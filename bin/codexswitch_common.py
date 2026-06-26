@@ -19,7 +19,9 @@ from pathlib import Path
 import pwd
 
 
-VERSION = "0.5.2"
+VERSION = "0.5.3"
+CREDITS_OWNER = "by WAM-Software since (c) 1988"
+CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 
 
 def user_home() -> Path:
