@@ -126,6 +126,61 @@ def ensure_home_owner(path: Path) -> None:
         die(f"kan eigendom van {path} niet herstellen; voer sudo chown uit")
 
 
+def ensure_home_owner_recursive(path: Path) -> None:
+    if not path.exists():
+        return
+    home_stat = HOME.stat()
+    uid_gid = f"{home_stat.st_uid}:{home_stat.st_gid}"
+    mismatched = False
+    for current, dirs, files in os.walk(path):
+        for name in [".", *dirs, *files]:
+            candidate = Path(current) if name == "." else Path(current) / name
+            try:
+                stat = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if (stat.st_uid, stat.st_gid) != (home_stat.st_uid, home_stat.st_gid):
+                mismatched = True
+                break
+        if mismatched:
+            break
+    if not mismatched:
+        return
+    if os.geteuid() == 0:
+        for current, dirs, files in os.walk(path):
+            for name in [".", *dirs, *files]:
+                candidate = Path(current) if name == "." else Path(current) / name
+                try:
+                    os.chown(candidate, home_stat.st_uid, home_stat.st_gid, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+        return
+    proc = subprocess.run(
+        ["sudo", "-n", "chown", "-R", uid_gid, str(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        die(f"kan eigendom van {path} niet herstellen; voer sudo chown -R {uid_gid} {path} uit")
+
+
+def ensure_codex_runtime_writable() -> None:
+    CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    set_home_owner(CODEX_HOME)
+    runtime_dirs = [
+        CODEX_HOME / "sessions",
+        CODEX_HOME / "shell_snapshots",
+        CODEX_HOME / "tmp",
+        CODEX_HOME / "log",
+    ]
+    for path in runtime_dirs:
+        path.mkdir(parents=True, exist_ok=True)
+        ensure_home_owner_recursive(path)
+        if not os.access(path, os.W_OK | os.X_OK):
+            die(f"Codex kan niet schrijven naar {path}; herstel de permissies")
+
+
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")

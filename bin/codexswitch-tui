@@ -39,6 +39,7 @@ CODEX_TUI_LAUNCH_ARGS = (
     "--dangerously-bypass-approvals-and-sandbox",
     "--search",
 )
+DEFAULT_REASONING_VALUE = "__default__"
 FUNCTION_KEYS = (
     ("1", "Help"),
     ("2", "Prov"),
@@ -543,6 +544,19 @@ class CodexSwitchApp(App):
         self.catalog = BACKEND["opencode_model_catalog"]()
         self.openai_metadata = BACKEND["openai_model_catalog"]()
 
+    @staticmethod
+    def token_value(*values) -> int | str:
+        for value in values:
+            if isinstance(value, int):
+                return value
+            if isinstance(value, str) and value.isdigit():
+                return int(value)
+        return "?"
+
+    @staticmethod
+    def token_display(value: int | str) -> str:
+        return f"{value:,}" if isinstance(value, int) else str(value)
+
     def source_options(self) -> list[Option]:
         openai_active = self.provider == "openai"
         opencode_active = self.provider == "opencode-go"
@@ -652,6 +666,10 @@ class CodexSwitchApp(App):
         if self.provider == "opencode-go":
             meta = self.catalog.get(self.model, {})
             limits = meta.get("limit", {})
+            if not isinstance(limits, dict):
+                limits = meta.get("limits", {})
+            if not isinstance(limits, dict):
+                limits = {}
             capabilities = meta.get("capabilities", {})
             modalities = [
                 name
@@ -659,16 +677,24 @@ class CodexSwitchApp(App):
                 if enabled
             ]
             variants = BACKEND["reasoning_choices"](self.model)
-            choices = variants or [("model-default", "medium")]
+            choices = variants or [("model default", DEFAULT_REASONING_VALUE)]
             status = meta.get("status", "active")
-            ctx = limits.get("context", "?")
-            out = limits.get("output", "?")
-            ctx_display = f"{ctx:,}" if isinstance(ctx, int) else str(ctx)
-            out_display = f"{out:,}" if isinstance(out, int) else str(out)
+            ctx = self.token_value(
+                limits.get("context"),
+                limits.get("input"),
+                meta.get("context_length"),
+                meta.get("context_window"),
+            )
+            out = self.token_value(
+                limits.get("output"),
+                limits.get("max_output"),
+                limits.get("max_tokens"),
+                meta.get("max_output_tokens"),
+            )
             detail.update(
                 f"[bold #ffff00]{meta.get('name', self.model)}[/]  "
                 f"[#5fd7ff]{meta.get('family', 'unknown')}[/]\n"
-                f"Context: {ctx_display}   Output: {out_display}   "
+                f"Tokens: {self.token_display(ctx)} context / {self.token_display(out)} output   "
                 f"Status: {status}\n"
                 f"Auth: {'ok' if BACKEND['opencode_go_key_present']() else 'missing'}   "
                 f"Input: {', '.join(modalities) or 'text'}   Tools: "
@@ -676,32 +702,53 @@ class CodexSwitchApp(App):
             )
         elif self.provider == "openai":
             meta = self.openai_metadata.get(self.model, {})
-            context = meta.get("context_window", "?")
-            context_display = f"{context:,}" if isinstance(context, int) else str(context)
+            context = self.token_value(
+                meta.get("context_window"),
+                meta.get("context_length"),
+                meta.get("max_context_tokens"),
+            )
+            output = self.token_value(
+                meta.get("max_output_tokens"),
+                meta.get("output_window"),
+                meta.get("max_tokens"),
+            )
             choices = BACKEND["openai_reasoning_choices"](self.model) or [
-                ("model-default", "medium")
+                ("model default", DEFAULT_REASONING_VALUE)
             ]
+            default_reasoning = (
+                meta.get("default_reasoning_level")
+                or meta.get("default_effort")
+                or "model default"
+            )
             detail.update(
                 f"[bold #ffff00]{meta.get('display_name', self.model)}[/]  "
                 f"[#5fd7ff]OpenAI[/]\n"
-                f"Context: {context_display}   "
-                f"Default reasoning: {meta.get('default_reasoning_level', 'medium')}\n"
+                f"Tokens: {self.token_display(context)} context / {self.token_display(output)} output   "
+                f"Default reasoning: {default_reasoning}\n"
                 f"Account: {self.account or 'not detected'}"
             )
         else:
             meta = BACKEND["openrouter_model_catalog"]().get(self.model, {})
             architecture = meta.get("architecture", {}) if isinstance(meta, dict) else {}
-            context = meta.get("context_length", "?") if isinstance(meta, dict) else "?"
-            context_display = f"{context:,}" if isinstance(context, int) else str(context)
+            context = self.token_value(
+                meta.get("context_length") if isinstance(meta, dict) else None,
+                meta.get("context_window") if isinstance(meta, dict) else None,
+            )
+            output = self.token_value(
+                meta.get("max_completion_tokens") if isinstance(meta, dict) else None,
+                meta.get("max_output_tokens") if isinstance(meta, dict) else None,
+            )
             input_modalities = architecture.get("input_modalities", ["text"]) if isinstance(architecture, dict) else ["text"]
-            choices = BACKEND["openrouter_reasoning_choices"](self.model) or [
-                ("model-default", "medium")
-            ]
             reasoning_info = meta.get("reasoning", {}) if isinstance(meta, dict) else {}
+            choices = BACKEND["openrouter_reasoning_choices"](self.model)
+            if not choices:
+                label = "model-managed" if reasoning_info.get("mandatory") else "provider default"
+                choices = [(label, DEFAULT_REASONING_VALUE)]
             detail.update(
                 f"[bold #ffff00]{meta.get('name', self.model) if isinstance(meta, dict) else self.model}[/]  "
                 f"[#5fd7ff]OpenRouter[/]\n"
-                f"Context: {context_display}   Input: {', '.join(input_modalities)}\n"
+                f"Tokens: {self.token_display(context)} context / {self.token_display(output)} output   "
+                f"Input: {', '.join(input_modalities)}\n"
                 f"Auth: {'ok' if BACKEND['openrouter_key_present']() else 'missing'}   "
                 f"Reasoning: {'mandatory' if reasoning_info.get('mandatory') else 'optional'}"
             )
@@ -710,7 +757,10 @@ class CodexSwitchApp(App):
         current = state.get("reasoning_effort")
         values = {value for _, value in choices}
         if current not in values:
-            current = BACKEND["default_reasoning_effort"](self.model) if self.provider in ("opencode-go", "openrouter") else meta.get("default_reasoning_level", "medium")
+            if DEFAULT_REASONING_VALUE in values:
+                current = DEFAULT_REASONING_VALUE
+            else:
+                current = BACKEND["default_reasoning_effort"](self.model) if self.provider in ("opencode-go", "openrouter") else meta.get("default_reasoning_level", "medium")
         if current not in values:
             current = choices[0][1]
         reason_options = []
@@ -816,7 +866,8 @@ class CodexSwitchApp(App):
         option = reasoning.highlighted_option
         if option is None or not option.id:
             return None
-        return option.id.split(":", 1)[1]
+        value = option.id.split(":", 1)[1]
+        return None if value == DEFAULT_REASONING_VALUE else value
 
     def mark_reasoning(self, selected: str) -> None:
         reasoning = self.query_one("#reasoning", OptionList)
@@ -1011,6 +1062,7 @@ def main() -> int:
     app = CodexSwitchApp()
     app.run()
     if app.launch_codex:
+        BACKEND["ensure_codex_runtime_writable"]()
         argv = codex_launch_argv()
         os.execvp(argv[0], argv)
     return 0

@@ -96,6 +96,21 @@ def test_cli_without_args_shows_help_not_tui():
     assert "codexswitch commander" not in proc.stdout
 
 
+def test_ensure_codex_runtime_writable_creates_runtime_dirs(tmp_path, monkeypatch):
+    home = tmp_path / "home"
+    codex_home = home / ".codex"
+    home.mkdir()
+    monkeypatch.setattr(cs, "HOME", home)
+    monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+
+    cs.ensure_codex_runtime_writable()
+
+    for name in ("sessions", "shell_snapshots", "tmp", "log"):
+        path = codex_home / name
+        assert path.is_dir()
+        assert os.access(path, os.W_OK | os.X_OK)
+
+
 def test_choose_filters_before_selecting(monkeypatch):
     answers = iter(["router", "1"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))

@@ -64,6 +64,37 @@ def test_codex_launch_argv_uses_resume_bypass_and_search():
     ]
 
 
+def test_main_checks_codex_runtime_before_exec(monkeypatch):
+    calls = []
+
+    class FakeApp:
+        launch_codex = True
+
+        def run(self):
+            calls.append("run")
+
+    monkeypatch.setattr(tui, "CodexSwitchApp", FakeApp)
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "ensure_codex_runtime_writable",
+        lambda: calls.append("preflight"),
+    )
+    monkeypatch.setattr(tui, "codex_launch_argv", lambda: ["/bin/echo", "codex"])
+
+    def fake_execvp(binary, argv):
+        calls.append(("exec", binary, argv))
+        raise SystemExit(0)
+
+    monkeypatch.setattr(tui.os, "execvp", fake_execvp)
+
+    import pytest
+
+    with pytest.raises(SystemExit):
+        tui.main()
+
+    assert calls == ["run", "preflight", ("exec", "/bin/echo", ["/bin/echo", "codex"])]
+
+
 def test_button_bar_is_segmented_commander_style():
     assert tui.FUNCTION_KEYS == (
         ("1", "Help"),
@@ -273,6 +304,84 @@ def test_provider_api_key_popup_saves_opencode_go_key(monkeypatch):
             await pilot.press("enter")
             await pilot.pause()
             assert saved == {"opencode": "oc-test"}
+
+    asyncio.run(run())
+
+
+def test_opencode_details_show_token_limits_and_reasoning(monkeypatch):
+    monkeypatch.setitem(tui.BACKEND, "opencode_go_key_present", lambda: True)
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "reasoning_choices",
+        lambda model: [("low", "low"), ("high", "high")],
+    )
+    monkeypatch.setitem(tui.BACKEND, "read_json", lambda path, default: {})
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            app.provider = "opencode-go"
+            app.model = "model-x"
+            app.catalog = {
+                "model-x": {
+                    "name": "Model X",
+                    "family": "Test",
+                    "limit": {"context": 123456, "output": 7890},
+                    "capabilities": {"input": {"text": True}, "toolcall": True},
+                    "status": "active",
+                }
+            }
+            app.update_details()
+            detail = app.query_one("#model-detail").render().plain
+            assert "Tokens: 123,456 context / 7,890 output" in detail
+            reason_ids = [option.id for option in app.query_one("#reasoning").options]
+            assert reason_ids == ["reason:low", "reason:high"]
+
+    asyncio.run(run())
+
+
+def test_openrouter_mandatory_without_efforts_is_model_managed(monkeypatch):
+    state = {"provider": "openrouter", "model": "aion-labs/aion-2.0"}
+
+    def fake_read_json(path, default):
+        if path == tui.BACKEND["SWITCH_CONFIG"]:
+            return state
+        return default
+
+    monkeypatch.setitem(tui.BACKEND, "read_json", fake_read_json)
+    monkeypatch.setitem(tui.BACKEND, "openrouter_key_present", lambda: True)
+    monkeypatch.setitem(tui.BACKEND, "openrouter_reasoning_choices", lambda model: [])
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "openrouter_model_catalog",
+        lambda refresh=False: {
+            "aion-labs/aion-2.0": {
+                "name": "Aion 2.0",
+                "context_length": 131072,
+                "reasoning": {"mandatory": True},
+                "architecture": {"input_modalities": ["text"]},
+            }
+        },
+    )
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            app.provider = "openrouter"
+            app.model = "aion-labs/aion-2.0"
+            app.update_details()
+            detail = app.query_one("#model-detail").render().plain
+            assert "Tokens: 131,072 context / ? output" in detail
+            reasoning = app.query_one("#reasoning")
+            assert [option.id for option in reasoning.options] == [
+                f"reason:{tui.DEFAULT_REASONING_VALUE}"
+            ]
+            assert "model-managed" in str(reasoning.options[0].prompt)
+            assert app.selected_reasoning() is None
 
     asyncio.run(run())
 
