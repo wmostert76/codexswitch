@@ -776,9 +776,11 @@ class CodexSwitchApp(App):
             self.load_state()
             self.load_sources()
             self.load_models()
+            applied_state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
+            active_effort = applied_state.get("reasoning_effort")
             self.set_status(
                 f"Active: {self.provider} / {self.model}"
-                + (f" / {effort}" if effort else "")
+                + (f" / {active_effort}" if active_effort else "")
             )
         except Exception as exc:
             self.set_status(str(exc) or "Could not activate selection", error=True)

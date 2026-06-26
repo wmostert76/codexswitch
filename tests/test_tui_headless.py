@@ -141,6 +141,9 @@ def test_openai_auth_opens_device_sign_in_modal():
     async def run():
         async with app.run_test(size=(120, 40)) as pilot:
             await dismiss_splash(pilot)
+            source_ids = [option.id for option in app.query_one("#sources").options]
+            app.query_one("#sources").highlighted = source_ids.index("provider:openai")
+            await pilot.pause()
             assert app.provider == "openai"
             await pilot.press("f7")
             await pilot.pause()
@@ -207,5 +210,45 @@ def test_provider_switch_keeps_models_and_accounts_exclusive():
                     model_id == "model:kimi-k2.6"
                     for model_id in openai_ids
                 )
+
+    asyncio.run(run())
+
+
+def test_openrouter_apply_status_uses_persisted_reasoning_state(monkeypatch):
+    """OpenRouter status must not show transient medium when config did not store it."""
+    state = {"provider": "openrouter", "model": "openrouter/auto"}
+
+    def fake_read_json(path, default):
+        if path == tui.BACKEND["SWITCH_CONFIG"]:
+            return state
+        return default
+
+    monkeypatch.setitem(tui.BACKEND, "read_json", fake_read_json)
+    monkeypatch.setitem(tui.BACKEND, "openrouter_models", lambda: ["openrouter/auto"])
+    monkeypatch.setitem(tui.BACKEND, "openrouter_model_catalog", lambda refresh=False: {})
+    monkeypatch.setitem(tui.BACKEND, "openrouter_reasoning_choices", lambda model: [])
+    monkeypatch.setitem(tui.BACKEND, "default_reasoning_effort", lambda model: "medium")
+    monkeypatch.setitem(tui.BACKEND, "validate_provider_model", lambda provider, model: None)
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "update_codex_config",
+        lambda provider, model, effort=None: state.update(
+            {"provider": provider, "model": model}
+        ),
+    )
+    monkeypatch.setitem(tui.BACKEND, "openrouter_key_present", lambda: True)
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            assert app.provider == "openrouter"
+            assert app.model == "openrouter/auto"
+            app.action_apply()
+            await pilot.pause()
+            assert app.query_one("#status").render().plain.strip() == (
+                "Active: openrouter / openrouter/auto"
+            )
 
     asyncio.run(run())

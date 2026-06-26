@@ -108,6 +108,54 @@ def test_banner_contains_credits(capsys):
     assert "AI-assisted implementation: OpenAI Codex" in output
 
 
+def test_classic_from_opencode_to_openai_uses_only_openai_model_picker(tmp_path, monkeypatch, capsys):
+    codex_home = tmp_path / ".codex"
+    switch_home = tmp_path / ".config" / "codexswitch"
+    codex_home.mkdir(parents=True)
+    switch_home.mkdir(parents=True)
+    config = codex_home / "config.toml"
+    state_path = switch_home / "config.json"
+    config.write_text(
+        'model = "kimi-k2.6"\n'
+        'model_provider = "opencode-go"\n'
+        '\n'
+        '[model_providers.opencode-go]\n'
+        'base_url = "http://127.0.0.1:14555/v1"\n'
+    )
+    state_path.write_text(
+        json.dumps(
+            {
+                "provider": "opencode-go",
+                "model": "kimi-k2.6",
+                "reasoning_effort": "medium",
+            }
+        )
+    )
+
+    answers = iter(["1", "1", "1", "7"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+    monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+    monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+    monkeypatch.setattr(cs, "openai_accounts", lambda: [])
+    monkeypatch.setattr(cs, "openai_models", lambda: ["gpt-5.5", "gpt-5.4-mini"])
+    monkeypatch.setattr(cs, "openai_reasoning_choices", lambda model: [])
+
+    cs.interactive()
+
+    output = capsys.readouterr().out
+    text = config.read_text()
+    state = json.loads(state_path.read_text())
+    assert "gpt-5.5" in output
+    assert "kimi-k2.6" not in output.split("┌─ openai model", 1)[1]
+    assert state["provider"] == "openai"
+    assert state["model"] == "gpt-5.5"
+    assert 'model_provider = "openai"' in text
+    assert 'model = "gpt-5.5"' in text
+    assert "[model_providers.opencode-go]" not in text
+
+
 # ─── JWT / auth helpers ───────────────────────────────────────────
 
 def make_jwt(claims: dict) -> str:
@@ -542,6 +590,41 @@ class TestUpdateState:
         assert "model_reasoning_effort" not in text
         assert "openai_account" not in state
         assert "reasoning_effort" not in state
+
+    def test_openrouter_all_catalog_models_can_apply_without_secret_or_provider_leak(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+        token_helper = tmp_path / "openrouter-token"
+        token_helper.write_text("")
+
+        catalog = {
+            "vendor/model-a": {"id": "vendor/model-a"},
+            "vendor/model-b:free": {"id": "vendor/model-b:free"},
+            "~vendor/latest": {"id": "~vendor/latest"},
+        }
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
+        monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
+        monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
+
+        for model in cs.openrouter_models():
+            cs.validate_provider_model("openrouter", model)
+            cs.update_codex_config("openrouter", model, cs.default_reasoning_effort(model))
+            text = config.read_text()
+            assert f'model = "{model}"' in text
+            assert 'model_provider = "openrouter"' in text
+            assert "[model_providers.openrouter]" in text
+            assert "[model_providers.opencode-go]" not in text
+            assert "api_key" not in text
 
 
 class TestOpenRouterCatalog:

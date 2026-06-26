@@ -2,6 +2,21 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.5.13] - 2026-06-26
+
+### Fixed
+
+- TUI OpenRouter apply no longer reports a stale `medium` reasoning suffix when
+  the selected model does not persist a reasoning setting.
+- Verified that every current OpenRouter catalog model can be applied through
+  the config writer in an isolated temporary environment without inference
+  calls, provider leakage or secret leakage.
+
+### Changed
+
+- Replaced the README TUI screenshot with a sanitized full-color Commander SVG
+  so GitHub shows the intended blue/cyan/yellow interface.
+
 ## [0.5.12] - 2026-06-26
 
 ### Fixed
