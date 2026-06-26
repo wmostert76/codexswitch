@@ -17,6 +17,9 @@ Versioning follows pragmatic semantic versioning:
 - OpenAI authentication in the TUI now opens a device sign-in modal before
   temporarily suspending to `codex login --device-auth`, then verifies and saves
   the account after Codex completes login.
+- `codexswitch --help` now shows the project credits.
+- Running `codexswitch` without arguments now shows help; the TUI is started
+  explicitly with `codexswitch tui` or `codexswitch commander`.
 
 ## [0.5.2] - 2026-06-26
 

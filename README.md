@@ -52,7 +52,7 @@ cd codexswitch
 Start the app:
 
 ```bash
-codexswitch
+codexswitch tui
 ```
 
 The installer creates `.venv`, installs Textual, links commands into
@@ -77,7 +77,9 @@ every install so updated proxy code is active immediately.
 ## CLI reference
 
 ```bash
-codexswitch                         # start Commander TUI
+codexswitch                         # show help
+codexswitch tui                     # start Commander TUI
+codexswitch commander               # start Commander TUI
 codexswitch classic                 # searchable classic picker
 codexswitch use PROVIDER MODEL [REASONING]
 codexswitch auth [openai|opencode-go|openrouter]
@@ -94,6 +96,7 @@ codexswitch --version
 Examples:
 
 ```bash
+codexswitch tui
 codexswitch account add
 codexswitch auth openrouter
 codexswitch use openai gpt-5.5

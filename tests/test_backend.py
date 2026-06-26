@@ -40,6 +40,32 @@ def test_cli_version_output():
     assert proc.stdout.strip() == "codexswitch 0.5.3"
 
 
+def test_cli_help_contains_credits_and_tui_command():
+    proc = subprocess.run(
+        [str(BIN_DIR / "codexswitch"), "--help"],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    assert "by WAM-Software since (c) 1988" in proc.stdout
+    assert "AI-assisted implementation: OpenAI Codex" in proc.stdout
+    assert "codexswitch tui" in proc.stdout
+
+
+def test_cli_without_args_shows_help_not_tui():
+    proc = subprocess.run(
+        [str(BIN_DIR / "codexswitch")],
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        check=True,
+    )
+    assert "CodexSwitch Commander" in proc.stdout
+    assert "Usage:" in proc.stdout
+    assert "codexswitch tui" in proc.stdout
+
+
 def test_choose_filters_before_selecting(monkeypatch):
     answers = iter(["router", "1"])
     monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))

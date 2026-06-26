@@ -914,9 +914,12 @@ def interactive() -> None:
 
 def usage() -> None:
     print(f"""{APP_TITLE} {VERSION}
+{CREDITS_OWNER}
+{CREDITS_AI}
 
 Usage:
-  codexswitch                        start Commander TUI
+  codexswitch tui                    start Commander TUI
+  codexswitch commander              start Commander TUI
   codexswitch classic                start searchable classic picker
   codexswitch use PROVIDER MODEL [REASONING]
   codexswitch auth [openai|opencode-go|openrouter]
@@ -935,7 +938,7 @@ Providers:
   openrouter                         OpenRouter API key through openrouter-token
 
 Examples:
-  codexswitch
+  codexswitch tui
   codexswitch classic
   codexswitch account add
   codexswitch auth openrouter
@@ -947,9 +950,7 @@ Examples:
 
 def main(argv: list[str]) -> int:
     if not argv:
-        if sys.stdin.isatty() and sys.stdout.isatty() and Path(TUI_PYTHON).exists():
-            os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
-        interactive()
+        usage()
         return 0
     cmd = argv[0]
     if cmd in {"-h", "--help", "help"}:
@@ -958,6 +959,10 @@ def main(argv: list[str]) -> int:
     if cmd in {"-v", "--version"}:
         print(f"{Path(sys.argv[0]).name} {VERSION}")
         return 0
+    if cmd in {"tui", "commander"}:
+        if not Path(TUI_PYTHON).exists():
+            die(f"TUI Python ontbreekt: {TUI_PYTHON}; draai ./install.sh")
+        os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
     if cmd == "classic":
         interactive()
         return 0
