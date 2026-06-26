@@ -354,7 +354,7 @@ class CodexSwitchApp(App):
             with Vertical(id="reason-box"):
                 yield Label("┤ REASONING ├", classes="lower-title")
                 yield OptionList(id="reasoning")
-        yield Static(" Ready · F1 Help · F6 Apply · F9 Codex", id="status")
+        yield Static(" Ready", id="status")
         with Horizontal(id="buttonbar"):
             for number, label in FUNCTION_KEYS:
                 yield Static(

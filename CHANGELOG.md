@@ -8,6 +8,13 @@ Versioning follows pragmatic semantic versioning:
 - Minor (`0.x.0`) for new user-visible features or provider support.
 - Major (`x.0.0`) for breaking command/config/auth behavior.
 
+## [0.5.11] - 2026-06-26
+
+### Changed
+
+- TUI bottom status bar now starts with only `Ready` and no longer duplicates
+  function-key hints already shown in the Commander key bar.
+
 ## [0.5.10] - 2026-06-26
 
 ### Changed

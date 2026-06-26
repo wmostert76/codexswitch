@@ -26,7 +26,7 @@ async def dismiss_splash(pilot) -> None:
 
 def test_tui_subtitle_contains_version():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
-    assert "v0.5.10" in tui.CodexSwitchApp.SUB_TITLE
+    assert "v0.5.11" in tui.CodexSwitchApp.SUB_TITLE
     assert "by WAM-Software since (c) 1988" in tui.CodexSwitchApp.SUB_TITLE
 
 
@@ -39,7 +39,7 @@ def test_startup_splash_contains_ascii_branding_and_credits():
             dialog = app.screen.query_one("#splash-dialog")
             plain = dialog.render().plain
             assert "                    C O M M A N D E R" in plain
-            assert "CodexSwitch Commander v0.5.10" in plain
+            assert "CodexSwitch Commander v0.5.11" in plain
             assert "by WAM-Software since (c) 1988" in plain
             assert "AI-assisted implementation: OpenAI Codex" in plain
 
@@ -84,7 +84,9 @@ def test_tui_80x24():
             assert app.query_one("#status") is not None
             assert app.query_one("#buttonbar") is not None
             status = app.query_one("#status").render().plain
-            assert "Ready · F1 Help · F6 Apply · F9 Codex" in status
+            assert status.strip() == "Ready"
+            assert "F1 Help" not in status
+            assert "F6 Apply" not in status
             assert "WAM-Software" not in status
             bb = app.query_one("#buttonbar")
             keys = list(bb.query(".fkey"))
