@@ -396,13 +396,15 @@ class CodexSwitchApp(App):
             )
         elif self.provider == "openai":
             meta = self.openai_metadata.get(self.model, {})
+            context = meta.get("context_window", "?")
+            context_display = f"{context:,}" if isinstance(context, int) else str(context)
             choices = BACKEND["openai_reasoning_choices"](self.model) or [
                 ("model-default", "medium")
             ]
             detail.update(
                 f"[bold #ffff00]{meta.get('display_name', self.model)}[/]  "
                 f"[#5fd7ff]OpenAI[/]\n"
-                f"Context: {meta.get('context_window', '?'):,}   "
+                f"Context: {context_display}   "
                 f"Default reasoning: {meta.get('default_reasoning_level', 'medium')}\n"
                 f"Account: {self.account or 'not detected'}"
             )
