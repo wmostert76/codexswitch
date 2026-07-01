@@ -5,7 +5,7 @@ from pathlib import Path
 
 # Import shared helpers from the sibling module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from codexswitch_common import user_home  # noqa: E402
+from codexswitch_common import read_secret_json, user_home  # noqa: E402
 
 
 def main() -> int:
@@ -13,10 +13,10 @@ def main() -> int:
     auth_path = home / ".config/codexswitch/opencode-go/auth.json"
     legacy_auth_path = home / ".local/share/opencode/auth.json"
     try:
-        data = json.loads(auth_path.read_text())
+        data = read_secret_json(auth_path, {})
     except FileNotFoundError:
         data = {}
-    except json.JSONDecodeError as exc:
+    except Exception as exc:
         print(f"OpenCode Go auth store is not valid JSON: {exc}", file=sys.stderr)
         return 1
 

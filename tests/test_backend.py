@@ -724,31 +724,34 @@ class TestOpenRouterCatalog:
 
     def test_save_openrouter_key_is_secret_file(self, tmp_path, monkeypatch):
         auth_path = tmp_path / "openrouter" / "auth.json"
+        monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path)
         monkeypatch.setattr(cs, "OPENROUTER_AUTH", auth_path)
         cs.save_openrouter_key(" test-openrouter-key-not-secret ")
-        assert json.loads(auth_path.read_text()) == {"api_key": "test-openrouter-key-not-secret"}
-        assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
-        assert oct(auth_path.parent.stat().st_mode & 0o777) == "0o700"
+        assert cs.openrouter_key_present() is True
+        assert not auth_path.exists()
+        vault_text = (tmp_path / "vault.enc").read_text()
+        assert "test-openrouter-key-not-secret" not in vault_text
 
 
 class TestOpenCodeGoStore:
     def test_save_opencode_go_key_is_secret_file(self, tmp_path, monkeypatch):
         auth_path = tmp_path / "opencode-go" / "auth.json"
+        monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path)
         monkeypatch.setattr(cs, "OPENCODE_GO_AUTH", auth_path)
 
         cs.save_opencode_go_key(" test-opencode-go-key-not-secret ")
 
-        assert json.loads(auth_path.read_text()) == {
-            "api_key": "test-opencode-go-key-not-secret"
-        }
-        assert oct(auth_path.stat().st_mode & 0o777) == "0o600"
-        assert oct(auth_path.parent.stat().st_mode & 0o777) == "0o700"
+        assert cs.opencode_go_key_present() is True
+        assert not auth_path.exists()
+        vault_text = (tmp_path / "vault.enc").read_text()
+        assert "test-opencode-go-key-not-secret" not in vault_text
 
     def test_opencode_key_present_prefers_switch_store_and_falls_back_to_legacy(
         self, tmp_path, monkeypatch
     ):
         switch_auth = tmp_path / "switch" / "auth.json"
         legacy_auth = tmp_path / "legacy" / "auth.json"
+        monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path / "switch-home")
         monkeypatch.setattr(cs, "OPENCODE_GO_AUTH", switch_auth)
         monkeypatch.setattr(cs, "OPENCODE_AUTH", legacy_auth)
 

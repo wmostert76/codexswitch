@@ -23,6 +23,9 @@ from codexswitch_common import (
     CREDITS_AI,
     CREDITS_OWNER,
     VERSION,
+    read_secret_json as vault_read_secret_json,
+    write_secret_json as vault_write_secret_json,
+    vault_load,
     user_home as _common_user_home,
     OPENCODE_GO_FALLBACK_CATALOG,
     opencode_catalog_from_binary as _common_catalog_from_binary,
@@ -394,14 +397,19 @@ def account_filename(email: str) -> str:
 
 
 def openai_accounts() -> list[str]:
-    if not OPENAI_ACCOUNTS_DIR.exists():
-        return []
     accounts = []
-    for path in OPENAI_ACCOUNTS_DIR.glob("*.json"):
-        data = read_json(path, {})
+    for key, data in vault_load(SWITCH_HOME).items():
+        if not key.startswith("openai-accounts/") or not key.endswith(".json"):
+            continue
         email = openai_auth_email(data)
         if email:
             accounts.append(email)
+    if OPENAI_ACCOUNTS_DIR.exists():
+        for path in OPENAI_ACCOUNTS_DIR.glob("*.json"):
+            data = vault_read_secret_json(path, {}, SWITCH_HOME)
+            email = openai_auth_email(data)
+            if email:
+                accounts.append(email)
     return sorted(set(accounts))
 
 
@@ -415,7 +423,7 @@ def save_openai_account(expected_email: str | None = None) -> str:
     if expected_email and email != expected_email.strip().lower():
         die(f"huidige login is {email}, niet {expected_email.strip().lower()}")
     destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
-    write_secret_json(destination, data)
+    vault_write_secret_json(destination, data, SWITCH_HOME)
     print(f"OpenAI-account opgeslagen: {email}")
     return email
 
@@ -433,17 +441,17 @@ def sync_active_openai_account() -> str | None:
             "auth.json bevat credentials maar geen herkenbaar e-mailadres"
         )
     destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
-    write_secret_json(destination, data)
+    vault_write_secret_json(destination, data, SWITCH_HOME)
     return email
 
 
 def use_openai_account(email: str) -> None:
     normalized = email.strip().lower()
     source = OPENAI_ACCOUNTS_DIR / account_filename(normalized)
-    if not source.exists():
+    data = vault_read_secret_json(source, {}, SWITCH_HOME)
+    if not data:
         die(f"geen opgeslagen OpenAI-account voor {normalized}")
     sync_active_openai_account()
-    data = read_json(source, {})
     actual_email = openai_auth_email(data)
     if actual_email != normalized:
         die(f"accountbestand klopt niet: verwacht {normalized}, gevonden {actual_email or 'onbekend'}")
@@ -470,20 +478,42 @@ def save_openrouter_key(key: str) -> None:
     normalized = key.strip()
     if not normalized:
         die("OpenRouter API-key is leeg")
-    write_secret_json(OPENROUTER_AUTH, {"api_key": normalized})
+    vault_write_secret_json(OPENROUTER_AUTH, {"api_key": normalized}, SWITCH_HOME)
     print("OpenRouter API-key opgeslagen")
 
 
 def openrouter_key_present() -> bool:
-    data = read_json(OPENROUTER_AUTH, {})
+    data = vault_read_secret_json(OPENROUTER_AUTH, {}, SWITCH_HOME)
     return bool(isinstance(data, dict) and data.get("api_key"))
+
+
+def migrate_secret_file(path: Path) -> bool:
+    if not path.exists():
+        return False
+    data = read_json(path, {})
+    vault_write_secret_json(path, data, SWITCH_HOME)
+    path.unlink(missing_ok=True)
+    return True
+
+
+def migrate_vault() -> None:
+    migrated = 0
+    for path in [AZURE_AUTH, OPENROUTER_AUTH, OPENCODE_GO_AUTH]:
+        if migrate_secret_file(path):
+            migrated += 1
+    if OPENAI_ACCOUNTS_DIR.exists():
+        for path in OPENAI_ACCOUNTS_DIR.glob("*.json"):
+            if migrate_secret_file(path):
+                migrated += 1
+    print(f"Credential vault: {SWITCH_HOME / 'vault.enc'}")
+    print(f"Gemigreerde legacy secret-bestanden: {migrated}")
 
 
 def save_opencode_go_key(key: str) -> None:
     normalized = key.strip()
     if not normalized:
         die("OpenCode Go API-key is leeg")
-    write_secret_json(OPENCODE_GO_AUTH, {"api_key": normalized})
+    vault_write_secret_json(OPENCODE_GO_AUTH, {"api_key": normalized}, SWITCH_HOME)
     print("OpenCode Go API-key opgeslagen")
 
 
@@ -495,19 +525,20 @@ def save_azure_credentials(endpoint: str, key: str, api_version: str = AZURE_DEF
         die("Azure endpoint is leeg")
     if not normalized_key:
         die("Azure API-key is leeg")
-    write_secret_json(
+    vault_write_secret_json(
         AZURE_AUTH,
         {
             "endpoint": normalized_endpoint,
             "api_key": normalized_key,
             "api_version": normalized_version,
         },
+        SWITCH_HOME,
     )
     print("Azure OpenAI credentials opgeslagen")
 
 
 def azure_credentials() -> dict:
-    data = read_json(AZURE_AUTH, {})
+    data = vault_read_secret_json(AZURE_AUTH, {}, SWITCH_HOME)
     return data if isinstance(data, dict) else {}
 
 
@@ -517,7 +548,7 @@ def azure_credentials_present() -> bool:
 
 
 def opencode_go_key_present() -> bool:
-    data = read_json(OPENCODE_GO_AUTH, {})
+    data = vault_read_secret_json(OPENCODE_GO_AUTH, {}, SWITCH_HOME)
     if isinstance(data, dict) and data.get("api_key"):
         return True
     legacy = read_json(OPENCODE_AUTH, {})
@@ -1307,6 +1338,7 @@ Usage:
   codexswitch account save [EMAIL]   save current OpenAI login
   codexswitch account use EMAIL      activate saved OpenAI account
   codexswitch refresh                refresh OpenCode Go and OpenRouter models
+  codexswitch vault migrate          encrypt legacy CodexSwitch secret files
   codexswitch update [--check]       update from latest GitHub release
   codexswitch list                   list known models
   codexswitch status                 show active config and auth status
@@ -1353,6 +1385,11 @@ def main(argv: list[str]) -> int:
         refresh_opencode_models()
         refresh_openrouter_models(strict=False)
         return 0
+    if cmd == "vault":
+        if len(argv) == 2 and argv[1] == "migrate":
+            migrate_vault()
+            return 0
+        die("gebruik: codexswitch vault migrate")
     if cmd == "update":
         if len(argv) > 2 or (len(argv) == 2 and argv[1] != "--check"):
             die("gebruik: codexswitch update [--check]")

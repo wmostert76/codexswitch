@@ -1,20 +1,19 @@
 #!/usr/bin/env python3
-import json
 import sys
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from codexswitch_common import user_home
+from codexswitch_common import read_secret_json, user_home
 
 
 def main() -> int:
     auth_path = user_home() / ".config/codexswitch/openrouter/auth.json"
     try:
-        data = json.loads(auth_path.read_text())
+        data = read_secret_json(auth_path, {})
     except FileNotFoundError:
         print(f"OpenRouter auth not found: {auth_path}", file=sys.stderr)
         return 1
-    except json.JSONDecodeError as exc:
+    except Exception as exc:
         print(f"OpenRouter auth is not valid JSON: {auth_path}: {exc}", file=sys.stderr)
         return 1
     key = data.get("api_key")

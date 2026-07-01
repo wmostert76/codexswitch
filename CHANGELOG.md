@@ -2,6 +2,24 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.8.1] - 2026-07-01
+
+### Added
+
+- Added an encrypted CodexSwitch credential vault at
+  `~/.config/codexswitch/vault.enc`.
+- Added OS keyring support for the vault master key when available, with a
+  restricted local key-file fallback for systems without a usable keyring.
+- Added `codexswitch vault migrate` to encrypt legacy CodexSwitch secret JSON
+  files and remove the migrated plaintext secret files.
+
+### Changed
+
+- OpenAI saved accounts, Azure credentials, OpenRouter keys and OpenCode Go
+  keys are now stored through the encrypted vault instead of plaintext JSON
+  files.
+- OpenRouter and OpenCode Go token helpers now read from the encrypted vault.
+
 ## [0.8.0] - 2026-07-01
 
 ### Added

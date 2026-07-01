@@ -161,12 +161,24 @@ out of the repository.
 | Secret | Location | Managed by |
 | --- | --- | --- |
 | Active OpenAI auth | `~/.codex/auth.json` | `codex login` |
-| Saved OpenAI accounts | `~/.config/codexswitch/openai-accounts/` | CodexSwitch |
-| Azure OpenAI key | `~/.config/codexswitch/azure/auth.json` | CodexSwitch |
-| OpenCode Go key | `~/.config/codexswitch/opencode-go/auth.json` | CodexSwitch |
-| OpenRouter key | `~/.config/codexswitch/openrouter/auth.json` | CodexSwitch |
+| Saved OpenAI accounts | `~/.config/codexswitch/vault.enc` | CodexSwitch |
+| Azure OpenAI key | `~/.config/codexswitch/vault.enc` | CodexSwitch |
+| OpenCode Go key | `~/.config/codexswitch/vault.enc` | CodexSwitch |
+| OpenRouter key | `~/.config/codexswitch/vault.enc` | CodexSwitch |
 
-Secret directories are written as `0700`; secret files are written as `0600`.
+CodexSwitch encrypts saved accounts and provider API keys in
+`~/.config/codexswitch/vault.enc`. The vault master key is stored in the OS
+keyring when available. If no usable keyring is present, CodexSwitch falls back
+to a restricted local `~/.config/codexswitch/vault.key` file. Run this after
+upgrading an existing install:
+
+```bash
+codexswitch vault migrate
+```
+
+Codex itself still owns the active `~/.codex/auth.json` file, and Azure
+activation still writes the active provider settings required by Codex into
+`~/.codex/config.toml`.
 
 OpenAI account add uses Codex device authentication:
 

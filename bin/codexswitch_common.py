@@ -15,6 +15,8 @@ import os
 import re
 import shutil
 import subprocess
+import base64
+import secrets
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -24,7 +26,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "0.8.0"
+VERSION = "0.8.1"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -38,6 +40,8 @@ COMMANDER_CENTERED = COMMANDER_SPACED.rjust(
     (ASCII_LOGO_WIDTH + len(COMMANDER_SPACED)) // 2
 )
 BRAND_BANNER = f"{ASCII_LOGO}\n{COMMANDER_CENTERED}"
+VAULT_SERVICE = "CodexSwitch"
+VAULT_USER = "default"
 
 
 def user_home() -> Path:
@@ -49,6 +53,154 @@ def user_home() -> Path:
         except KeyError:
             pass
     return Path(os.environ.get("HOME", str(Path.home()))).expanduser()
+
+
+def switch_home() -> Path:
+    return user_home() / ".config/codexswitch"
+
+
+def vault_path(home: Path | None = None) -> Path:
+    return (home or switch_home()) / "vault.enc"
+
+
+def vault_key_path(home: Path | None = None) -> Path:
+    return (home or switch_home()) / "vault.key"
+
+
+def _chmod_secret(path: Path, directory: bool = False) -> None:
+    try:
+        path.chmod(0o700 if directory else 0o600)
+    except OSError:
+        pass
+
+
+def _fernet():
+    try:
+        from cryptography.fernet import Fernet
+    except ImportError as exc:
+        raise RuntimeError(
+            "cryptography ontbreekt; installeer requirements.txt opnieuw"
+        ) from exc
+    return Fernet
+
+
+def _key_from_keyring() -> bytes | None:
+    try:
+        import keyring
+    except Exception:
+        return None
+    try:
+        value = keyring.get_password(VAULT_SERVICE, VAULT_USER)
+    except Exception:
+        return None
+    if not value:
+        return None
+    try:
+        return value.encode("ascii")
+    except UnicodeEncodeError:
+        return None
+
+
+def _store_key_in_keyring(key: bytes) -> bool:
+    try:
+        import keyring
+    except Exception:
+        return False
+    try:
+        keyring.set_password(VAULT_SERVICE, VAULT_USER, key.decode("ascii"))
+        return True
+    except Exception:
+        return False
+
+
+def vault_key(home: Path | None = None) -> bytes:
+    """Return the local vault key.
+
+    Preferred storage is the OS keyring. If that is unavailable, CodexSwitch
+    falls back to a local key file with restrictive permissions so secrets are
+    still encrypted at rest, but without OS-backed protection.
+    """
+    env_key = os.environ.get("CODEXSWITCH_VAULT_KEY")
+    if env_key:
+        return env_key.encode("ascii")
+    use_keyring = home is None or home == switch_home()
+    if use_keyring:
+        key = _key_from_keyring()
+        if key:
+            return key
+    key_file = vault_key_path(home)
+    if key_file.exists():
+        return key_file.read_text().strip().encode("ascii")
+    Fernet = _fernet()
+    key = Fernet.generate_key()
+    if use_keyring and _store_key_in_keyring(key):
+        return key
+    key_file.parent.mkdir(parents=True, exist_ok=True)
+    _chmod_secret(key_file.parent, directory=True)
+    key_file.write_text(key.decode("ascii") + "\n")
+    _chmod_secret(key_file)
+    return key
+
+
+def vault_load(home: Path | None = None) -> dict:
+    path = vault_path(home)
+    if not path.exists():
+        return {}
+    Fernet = _fernet()
+    try:
+        plaintext = Fernet(vault_key(home)).decrypt(path.read_bytes())
+        data = json.loads(plaintext.decode("utf-8"))
+    except Exception as exc:
+        raise RuntimeError(f"kan credential vault niet openen: {exc}") from exc
+    return data if isinstance(data, dict) else {}
+
+
+def vault_save(data: dict, home: Path | None = None) -> None:
+    Fernet = _fernet()
+    path = vault_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _chmod_secret(path.parent, directory=True)
+    token = Fernet(vault_key(home)).encrypt(
+        json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+    )
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_bytes(token)
+        _chmod_secret(tmp)
+        os.replace(tmp, path)
+        _chmod_secret(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def secret_id(path: Path, home: Path | None = None) -> str:
+    path = path.expanduser()
+    try:
+        rel = path.relative_to(home or switch_home())
+        return rel.as_posix()
+    except ValueError:
+        return base64.urlsafe_b64encode(str(path).encode("utf-8")).decode("ascii")
+
+
+def read_secret_json(path: Path, default, home: Path | None = None):
+    sid = secret_id(path, home)
+    data = vault_load(home)
+    if sid in data:
+        return data[sid]
+    try:
+        legacy = json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+    except json.JSONDecodeError:
+        raise
+    write_secret_json(path, legacy, home)
+    return legacy
+
+
+def write_secret_json(path: Path, value, home: Path | None = None) -> None:
+    data = vault_load(home)
+    data[secret_id(path, home)] = value
+    vault_save(data, home)
 
 
 def opencode_bin() -> str | None:
