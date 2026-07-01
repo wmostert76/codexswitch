@@ -33,6 +33,10 @@ from codexswitch_common import (
 
 
 OPENAI_FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+AZURE_MODEL = "gpt-5.5"
+AZURE_MODELS = [AZURE_MODEL]
+AZURE_DEFAULT_ENDPOINT = "https://emmausopenaieurespwerner.cognitiveservices.azure.com/openai"
+AZURE_DEFAULT_API_VERSION = "2025-04-01-preview"
 DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
 OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
@@ -63,6 +67,7 @@ CODEX_CONFIG = CODEX_HOME / "config.toml"
 SWITCH_HOME = HOME / ".config/codexswitch"
 SWITCH_CONFIG = SWITCH_HOME / "config.json"
 OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
+AZURE_AUTH = SWITCH_HOME / "azure/auth.json"
 OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
 OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
 OPENROUTER_CODEX_MODELS = SWITCH_HOME / "openrouter/codex-models.json"
@@ -473,6 +478,35 @@ def save_opencode_go_key(key: str) -> None:
     print("OpenCode Go API-key opgeslagen")
 
 
+def save_azure_credentials(endpoint: str, key: str, api_version: str = AZURE_DEFAULT_API_VERSION) -> None:
+    normalized_endpoint = endpoint.strip().rstrip("/")
+    normalized_key = key.strip()
+    normalized_version = api_version.strip() or AZURE_DEFAULT_API_VERSION
+    if not normalized_endpoint:
+        die("Azure endpoint is leeg")
+    if not normalized_key:
+        die("Azure API-key is leeg")
+    write_secret_json(
+        AZURE_AUTH,
+        {
+            "endpoint": normalized_endpoint,
+            "api_key": normalized_key,
+            "api_version": normalized_version,
+        },
+    )
+    print("Azure OpenAI credentials opgeslagen")
+
+
+def azure_credentials() -> dict:
+    data = read_json(AZURE_AUTH, {})
+    return data if isinstance(data, dict) else {}
+
+
+def azure_credentials_present() -> bool:
+    data = azure_credentials()
+    return bool(data.get("endpoint") and data.get("api_key"))
+
+
 def opencode_go_key_present() -> bool:
     data = read_json(OPENCODE_GO_AUTH, {})
     if isinstance(data, dict) and data.get("api_key"):
@@ -527,6 +561,10 @@ def ensure_proxy() -> None:
 def openai_models() -> list[str]:
     catalog = openai_model_catalog()
     return list(catalog) or OPENAI_FALLBACK_MODELS
+
+
+def azure_models() -> list[str]:
+    return list(AZURE_MODELS)
 
 
 def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
@@ -852,6 +890,10 @@ def default_reasoning_effort(model: str) -> str:
 
 
 def validate_provider_model(provider: str, model: str) -> None:
+    if provider == "azure":
+        if model not in AZURE_MODELS:
+            die(f"Azure model '{model}' is niet beschikbaar; kies {AZURE_MODEL}")
+        return
     if provider == "openai":
         if model not in openai_models():
             print(f"warning: OpenAI model '{model}' staat niet in de huidige Codex catalogus", file=sys.stderr)
@@ -924,6 +966,10 @@ def remove_top_level(lines: list[str], key: str) -> list[str]:
     return output
 
 
+def toml_string(value: str) -> str:
+    return json.dumps(value)
+
+
 def cleanup_config_backups() -> None:
     """Keep only the most recent MAX_CONFIG_BACKUPS backup files."""
     pattern = "config.toml.bak-*"
@@ -951,6 +997,8 @@ def warm_codex_model_catalog() -> bool:
 
 
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
+    if provider == "azure" and not azure_credentials_present():
+        die("Azure credentials ontbreken; gebruik: codexswitch auth azure")
     if provider == "opencode-go":
         if not opencode_go_key_present():
             die("OpenCode Go API-key ontbreekt; gebruik: codexswitch auth opencode-go")
@@ -967,6 +1015,8 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
 
     lines = remove_block(lines, "model_providers.opencode-go.auth")
     lines = remove_block(lines, "model_providers.opencode-go")
+    lines = remove_block(lines, "model_providers.azure.auth")
+    lines = remove_block(lines, "model_providers.azure")
     lines = remove_block(lines, "model_providers.openrouter.auth")
     lines = remove_block(lines, "model_providers.openrouter")
     lines = set_top_level(lines, "model", model)
@@ -981,7 +1031,7 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 f"kies uit {', '.join(label for label, _ in choices)}"
             )
         lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
-    elif provider == "openai" and reasoning_effort:
+    elif provider in {"openai", "azure"} and reasoning_effort:
         choices = openai_reasoning_choices(model)
         allowed = {effort for _, effort in choices}
         if allowed and reasoning_effort not in allowed:
@@ -1004,7 +1054,7 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
             lines = remove_top_level(lines, "model_reasoning_effort")
             if not allowed:
                 reasoning_effort = None
-    elif provider == "openai":
+    elif provider in {"openai", "azure"}:
         lines = remove_top_level(lines, "model_reasoning_effort")
 
     if provider == "openrouter":
@@ -1028,6 +1078,22 @@ wire_api = "responses"
 command = "{TOKEN_HELPER}"
 timeout_ms = 5000
 refresh_interval_ms = 0
+'''
+        lines.append(provider_block)
+
+    if provider == "azure":
+        credential = azure_credentials()
+        endpoint = str(credential.get("endpoint", "")).rstrip("/")
+        api_key = str(credential.get("api_key", ""))
+        api_version = str(credential.get("api_version") or AZURE_DEFAULT_API_VERSION)
+        provider_block = f'''
+
+[model_providers.azure]
+name = "Azure"
+base_url = {toml_string(endpoint)}
+wire_api = "responses"
+http_headers = {{ "api-key" = {toml_string(api_key)} }}
+query_params = {{ api-version = {toml_string(api_version)} }}
 '''
         lines.append(provider_block)
 
@@ -1056,7 +1122,7 @@ refresh_interval_ms = 0
         state["reasoning_effort"] = reasoning_effort
     else:
         state.pop("reasoning_effort", None)
-    if provider in {"opencode-go", "openrouter"}:
+    if provider in {"azure", "opencode-go", "openrouter"}:
         state.pop("openai_account", None)
     write_json(SWITCH_CONFIG, state)
     if provider in {"opencode-go", "openrouter"} and not warm_codex_model_catalog():
@@ -1080,6 +1146,7 @@ def status() -> None:
     print(f"opencode cfg: {OPENCODE_CONFIG} (legacy)")
     print(f"opencode auth:{OPENCODE_AUTH} (legacy)")
     print(f"opencode-go auth: {'ok' if opencode_go_key_present() else 'ontbreekt'}")
+    print(f"azure auth:      {'ok' if azure_credentials_present() else 'ontbreekt'}")
     print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
     print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}")
@@ -1099,6 +1166,9 @@ def current_selection_line() -> str:
 def list_models() -> None:
     print("OpenAI:")
     for model in openai_models():
+        print(f"  {model}")
+    print("\nAzure:")
+    for model in azure_models():
         print(f"  {model}")
     print("\nOpenCode Go:")
     for model in opencode_models():
@@ -1176,7 +1246,7 @@ def choose(title: str, options: list[str], descriptions: dict[str, str] | None =
 
 
 def auth(provider: str | None = None) -> None:
-    provider = provider or choose("Auth provider", ["openai", "opencode-go", "openrouter"])
+    provider = provider or choose("Auth provider", ["openai", "azure", "opencode-go", "openrouter"])
     if provider == "openai":
         ensure_home_owner(CODEX_HOME / "auth.json")
         current_auth = read_json(CODEX_HOME / "auth.json", {})
@@ -1190,6 +1260,12 @@ def auth(provider: str | None = None) -> None:
         key = getpass.getpass("OpenCode Go API-key: ")
         save_opencode_go_key(key)
         refresh_opencode_models(strict=False)
+        return
+    if provider == "azure":
+        endpoint = input(f"Azure endpoint [{AZURE_DEFAULT_ENDPOINT}]: ").strip() or AZURE_DEFAULT_ENDPOINT
+        api_version = input(f"Azure API version [{AZURE_DEFAULT_API_VERSION}]: ").strip() or AZURE_DEFAULT_API_VERSION
+        key = getpass.getpass("Azure API-key: ")
+        save_azure_credentials(endpoint, key, api_version)
         return
     if provider == "openrouter":
         key = getpass.getpass("OpenRouter API-key: ")
@@ -1211,7 +1287,7 @@ def usage() -> None:
 Usage:
   codexswitch tui                    start Commander TUI
   codexswitch use PROVIDER MODEL [REASONING]
-  codexswitch auth [openai|opencode-go|openrouter]
+  codexswitch auth [openai|azure|opencode-go|openrouter]
   codexswitch account add            add OpenAI account with device sign-in
   codexswitch account save [EMAIL]   save current OpenAI login
   codexswitch account use EMAIL      activate saved OpenAI account
@@ -1224,6 +1300,7 @@ Usage:
 
 Providers:
   openai                             native Codex/OpenAI account flow
+  azure                              Azure OpenAI endpoint/API-key with gpt-5.5
   opencode-go                        OpenCode Go key through CodexSwitch store and local Responses proxy
   openrouter                         OpenRouter API key through openrouter-token
 
@@ -1232,6 +1309,7 @@ Examples:
   codexswitch account add
   codexswitch auth openrouter
   codexswitch update --check
+  codexswitch use azure gpt-5.5
   codexswitch use openai gpt-5.5
   codexswitch use opencode-go glm-5.2 high
   codexswitch use openrouter anthropic/claude-sonnet-4.5

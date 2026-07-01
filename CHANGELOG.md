@@ -2,6 +2,20 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.7.2] - 2026-07-01
+
+### Added
+
+- Added Azure OpenAI as a selectable provider in the CLI and Commander TUI.
+- Added a CodexSwitch-owned Azure credential store at
+  `~/.config/codexswitch/azure/auth.json` with `0600` secret file permissions.
+- Added the fixed Azure model list with `gpt-5.5` as the only selectable model.
+
+### Changed
+
+- Azure activation now writes the active Codex provider config from the local
+  secret store, keeping Azure credentials out of the repository.
+
 ## [0.7.1] - 2026-06-26
 
 ### Changed

@@ -164,6 +164,51 @@ the provider/account list.
         self.app.run_openai_device_auth()
 
 
+class AzureAuthScreen(ModalScreen):
+    BINDINGS = [("escape", "dismiss", "Cancel")]
+
+    def compose(self) -> ComposeResult:
+        credential = BACKEND["azure_credentials"]()
+        endpoint = credential.get("endpoint") or BACKEND["AZURE_DEFAULT_ENDPOINT"]
+        api_version = credential.get("api_version") or BACKEND["AZURE_DEFAULT_API_VERSION"]
+        yield Static(
+            "[bold white]AZURE OPENAI CREDENTIALS[/]\n\n"
+            "[black]Store the Azure endpoint, API version and API key in the "
+            "CodexSwitch secret store with 0600 file permissions.[/]",
+            id="api-key-title",
+            markup=True,
+        )
+        yield Input(value=endpoint, placeholder="Azure endpoint", id="azure-endpoint-input")
+        yield Input(value=api_version, placeholder="Azure API version", id="azure-version-input")
+        yield Input(password=True, placeholder="Azure API key", id="api-key-input")
+        yield Button("Save / Renew", id="api-key-save", variant="primary")
+        yield Button("Cancel", id="api-key-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#api-key-input", Input).focus()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "api-key-cancel":
+            self.dismiss()
+            return
+        self.submit()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        self.submit()
+
+    def submit(self) -> None:
+        endpoint = self.query_one("#azure-endpoint-input", Input).value.strip()
+        api_version = self.query_one("#azure-version-input", Input).value.strip()
+        key = self.query_one("#api-key-input", Input).value.strip()
+        if not endpoint:
+            self.app.set_status("Azure endpoint is empty", error=True)
+            return
+        if not key:
+            self.app.set_status("Azure API key is empty", error=True)
+            return
+        self.dismiss((endpoint, key, api_version))
+
+
 class ApiKeyScreen(ModalScreen):
     BINDINGS = [
         ("escape", "dismiss", "Cancel"),
@@ -419,7 +464,7 @@ class CodexSwitchApp(App):
         padding: 1 2;
     }
 
-    #api-key-input {
+    #api-key-input, #azure-endpoint-input, #azure-version-input {
         width: 66;
         height: 3;
         background: #ffffff;
@@ -545,7 +590,7 @@ class CodexSwitchApp(App):
         self.provider = state.get("provider", "openai")
         self.model = state.get("model")
         auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
-        if self.provider not in {"openai", "opencode-go", "openrouter"}:
+        if self.provider not in {"openai", "azure", "opencode-go", "openrouter"}:
             self.provider = "openai"
         self.account = (
             BACKEND["openai_auth_email"](auth)
@@ -570,6 +615,7 @@ class CodexSwitchApp(App):
 
     def source_options(self) -> list[Option]:
         openai_active = self.provider == "openai"
+        azure_active = self.provider == "azure"
         opencode_active = self.provider == "opencode-go"
         openrouter_active = self.provider == "openrouter"
         options = [
@@ -589,6 +635,17 @@ class CodexSwitchApp(App):
             )
         options.append(
             Option("  └─ + add OpenAI account", id="action:add-openai-account")
+        )
+        options.append(
+            Option(
+                Text.from_markup(
+                    f"[b]{'●' if azure_active else '○'} AZURE[/]"
+                ),
+                id="provider:azure",
+            )
+        )
+        options.append(
+            Option("  └─ set/renew Azure credentials", id="action:auth-azure")
         )
         options.append(
             Option(
@@ -639,6 +696,8 @@ class CodexSwitchApp(App):
     def load_models(self) -> None:
         if self.provider == "openai":
             models = BACKEND["openai_models"]()
+        elif self.provider == "azure":
+            models = BACKEND["azure_models"]()
         elif self.provider == "opencode-go":
             models = BACKEND["opencode_models"]()
         else:
@@ -649,7 +708,7 @@ class CodexSwitchApp(App):
             options.append(Option(f" {marker}  {model}", id=f"model:{model}"))
         model_list = self.query_one("#models", OptionList)
         model_list.set_options(options)
-        if self.provider == "openai":
+        if self.provider in {"openai", "azure"}:
             default_model = "gpt-5.5"
         elif self.provider == "opencode-go":
             default_model = BACKEND["DEFAULT_OPENCODE_MODEL"]
@@ -711,6 +770,15 @@ class CodexSwitchApp(App):
                 f"Input: {', '.join(modalities) or 'text'}   Tools: "
                 f"{'yes' if capabilities.get('toolcall') else 'no'}"
             )
+        elif self.provider == "azure":
+            credential = BACKEND["azure_credentials"]()
+            choices = [("model default", DEFAULT_REASONING_VALUE)]
+            detail.update(
+                f"[bold #ffff00]{self.model}[/]  [#5fd7ff]Azure OpenAI[/]\n"
+                "Tokens: provider managed\n"
+                f"Endpoint: {credential.get('endpoint') or 'not configured'}\n"
+                f"Auth: {'ok' if BACKEND['azure_credentials_present']() else 'missing'}"
+            )
         elif self.provider == "openai":
             meta = self.openai_metadata.get(self.model, {})
             context = self.token_value(
@@ -771,7 +839,12 @@ class CodexSwitchApp(App):
             if DEFAULT_REASONING_VALUE in values:
                 current = DEFAULT_REASONING_VALUE
             else:
-                current = BACKEND["default_reasoning_effort"](self.model) if self.provider in ("opencode-go", "openrouter") else meta.get("default_reasoning_level", "medium")
+                if self.provider in ("opencode-go", "openrouter"):
+                    current = BACKEND["default_reasoning_effort"](self.model)
+                elif self.provider == "azure":
+                    current = DEFAULT_REASONING_VALUE
+                else:
+                    current = meta.get("default_reasoning_level", "medium")
         if current not in values:
             current = choices[0][1]
         reason_options = []
@@ -832,6 +905,11 @@ class CodexSwitchApp(App):
             kind, value = event.option.id.split(":", 1)
             if kind == "action" and value == "add-openai-account":
                 self.provider = "openai"
+                self.account = None
+                self.action_auth()
+                return
+            if kind == "action" and value == "auth-azure":
+                self.provider = "azure"
                 self.account = None
                 self.action_auth()
                 return
@@ -965,6 +1043,8 @@ class CodexSwitchApp(App):
     def action_auth(self) -> None:
         if self.provider == "openai":
             return self.push_screen(OpenAIAuthScreen())
+        if self.provider == "azure":
+            return self.push_screen(AzureAuthScreen(), self.store_azure_credentials)
         if self.provider in {"opencode-go", "openrouter"}:
             return self.push_screen(
                 ApiKeyScreen(self.provider), self.store_api_key
@@ -982,6 +1062,19 @@ class CodexSwitchApp(App):
             self.set_status(f"{self.provider} authentication completed")
         except subprocess.CalledProcessError:
             self.set_status("Authentication was not completed", error=True)
+
+    def store_azure_credentials(self, payload) -> None:
+        if not payload:
+            return
+        endpoint, key, api_version = payload
+        result, output = self.capture(
+            BACKEND["save_azure_credentials"], endpoint, key, api_version
+        )
+        if isinstance(result, SystemExit):
+            self.set_status(output or "Azure credentials were not saved", error=True)
+            return
+        self.load_models()
+        self.set_status("Azure credentials saved")
 
     def store_api_key(self, key: str | None) -> None:
         if not key:

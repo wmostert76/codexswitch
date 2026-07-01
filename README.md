@@ -9,8 +9,8 @@
                     C O M M A N D E R
 ```
 
-Switch Codex CLI between native OpenAI accounts, OpenCode Go models and
-OpenRouter models from one polished terminal control center.
+Switch Codex CLI between native OpenAI accounts, Azure OpenAI, OpenCode Go
+models and OpenRouter models from one polished terminal control center.
 
 ![CodexSwitch Commander](docs/codexswitch-commander.svg)
 
@@ -28,6 +28,7 @@ It is built for three workflows:
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
+| Azure OpenAI | Endpoint/API-key storage and fixed `gpt-5.5` model selection |
 | OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
 | OpenRouter | API-key storage, model catalog refresh and Codex provider config |
 
@@ -35,6 +36,7 @@ It is built for three workflows:
 
 - Commander-style TUI with provider/account and model panes
 - OpenAI multi-account management without losing rotated refresh tokens
+- Azure OpenAI selection for a single configured `gpt-5.5` deployment
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - OpenCode Go compatibility proxy with tool-call translation
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
@@ -97,7 +99,7 @@ codexswitch version
 codexswitch                         # show help
 codexswitch tui                     # start Commander TUI
 codexswitch use PROVIDER MODEL [REASONING]
-codexswitch auth [openai|opencode-go|openrouter]
+codexswitch auth [openai|azure|opencode-go|openrouter]
 codexswitch account add             # OpenAI device sign-in
 codexswitch account save [EMAIL]
 codexswitch account use user@example.com
@@ -125,6 +127,8 @@ Examples:
 codexswitch tui
 codexswitch account add
 codexswitch auth openrouter
+codexswitch auth azure
+codexswitch use azure gpt-5.5
 codexswitch use openai gpt-5.5
 codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
@@ -140,6 +144,7 @@ out of the repository.
 | --- | --- | --- |
 | Active OpenAI auth | `~/.codex/auth.json` | `codex login` |
 | Saved OpenAI accounts | `~/.config/codexswitch/openai-accounts/` | CodexSwitch |
+| Azure OpenAI key | `~/.config/codexswitch/azure/auth.json` | CodexSwitch |
 | OpenCode Go key | `~/.config/codexswitch/opencode-go/auth.json` | CodexSwitch |
 | OpenRouter key | `~/.config/codexswitch/openrouter/auth.json` | CodexSwitch |
 
@@ -151,11 +156,12 @@ OpenAI account add uses Codex device authentication:
 codexswitch account add
 ```
 
-OpenRouter and OpenCode Go auth read API keys without terminal echo, or
+Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Codex receives keys via
 installed token command helpers, not via plain text in `~/.codex/config.toml`.
 
 ```bash
+codexswitch auth azure
 codexswitch auth openrouter
 codexswitch auth opencode-go
 ```
