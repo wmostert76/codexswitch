@@ -158,19 +158,24 @@ codexswitch use openrouter anthropic/claude-sonnet-4.5
 CodexSwitch reuses provider-native auth stores where possible and keeps secrets
 out of the repository.
 
-| Secret | Location | Managed by |
+| Secret | Nu opgeslagen in | Hoe het werkt |
 | --- | --- | --- |
-| Active OpenAI auth | `~/.codex/auth.json` | `codex login` |
-| Saved OpenAI accounts | `~/.config/codexswitch/vault.enc` | CodexSwitch |
-| Azure OpenAI key | `~/.config/codexswitch/vault.enc` | CodexSwitch |
-| OpenCode Go key | `~/.config/codexswitch/vault.enc` | CodexSwitch |
-| OpenRouter key | `~/.config/codexswitch/vault.enc` | CodexSwitch |
+| Actieve OpenAI login | `~/.codex/auth.json` | `codex login` blijft eigenaar van de actieve login |
+| Opgeslagen OpenAI accounts | `~/.config/codexswitch/vault.enc` | CodexSwitch bewaart en herstelt accounts uit de vault |
+| Azure OpenAI credentials | `~/.config/codexswitch/vault.enc` | Endpoint, API key en API version zitten versleuteld in de vault |
+| OpenCode Go API key | `~/.config/codexswitch/vault.enc` | De token helper leest de key uit de vault |
+| OpenRouter API key | `~/.config/codexswitch/vault.enc` | De token helper leest de key uit de vault |
 
-CodexSwitch encrypts saved accounts and provider API keys in
-`~/.config/codexswitch/vault.enc`. The vault master key is stored in the OS
-keyring when available. If no usable keyring is present, CodexSwitch falls back
-to a restricted local `~/.config/codexswitch/vault.key` file. Run this after
-upgrading an existing install:
+Vault flow:
+
+| Stap | Wat gebeurt er |
+| --- | --- |
+| 1 | CodexSwitch schrijft secrets naar `~/.config/codexswitch/vault.enc` |
+| 2 | De vault master key komt uit de OS keyring als die beschikbaar is |
+| 3 | Zonder keyring valt CodexSwitch terug op `~/.config/codexswitch/vault.key` |
+| 4 | Active Codex config blijft apart in `~/.codex/auth.json` en `~/.codex/config.toml` |
+
+Run this after upgrading an existing install:
 
 ```bash
 codexswitch vault migrate

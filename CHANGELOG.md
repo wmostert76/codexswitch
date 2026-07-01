@@ -4,6 +4,11 @@ All notable CodexSwitch changes are documented here.
 
 ## [0.8.2] - 2026-07-01
 
+### Changed
+
+- Updated the README storage section with a current vault flow table so the
+  active auth files and encrypted CodexSwitch secrets are easier to scan.
+
 ### Fixed
 
 - Fixed `codexswitch tui` on Windows so it launches the Commander TUI instead
