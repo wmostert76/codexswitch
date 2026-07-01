@@ -2,6 +2,21 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.8.0] - 2026-07-01
+
+### Added
+
+- Added a native Go `codexswitch` launcher that runs the existing Python
+  Commander backend on Windows, Linux and macOS.
+- Added GitHub release assets for Windows amd64, Linux amd64/arm64 and macOS
+  amd64/arm64 launcher binaries, plus SHA256 checksums.
+- Added cross-build helper scripts for local Go launcher builds.
+
+### Changed
+
+- Improved Windows compatibility for CodexSwitch path handling, subprocess
+  output decoding and TUI Python discovery.
+
 ## [0.7.2] - 2026-07-01
 
 ### Added

@@ -16,6 +16,7 @@ from textual.widgets import Button, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
 from textual.events import Click
+from textual.css.query import NoMatches
 
 
 PROJECT = Path(__file__).resolve().parents[1]
@@ -894,7 +895,10 @@ class CodexSwitchApp(App):
             self.update_details()
         elif event.option_list.id == "reasoning" and event.option.id:
             selected = event.option.id.split(":", 1)[1]
-            self.mark_reasoning(selected)
+            try:
+                self.mark_reasoning(selected)
+            except NoMatches:
+                return
             if event.option_list.has_focus:
                 self.show_ready_to_start(selected)
 

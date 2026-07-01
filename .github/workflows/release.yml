@@ -24,6 +24,10 @@ jobs:
         with:
           python-version: "3.13"
 
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.22.x"
+
       - name: Detect version
         run: |
           if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
@@ -68,6 +72,27 @@ jobs:
         if: env.DO_RELEASE == 'true'
         run: python3 -m pytest tests/ -v
 
+      - name: Build Go launcher binaries
+        if: env.DO_RELEASE == 'true'
+        run: |
+          mkdir -p dist
+          build() {
+            local goos=$1
+            local goarch=$2
+            local name=$3
+            GOOS=$goos GOARCH=$goarch go build \
+              -trimpath \
+              -ldflags "-s -w" \
+              -o "dist/$name" \
+              ./cmd/codexswitch
+          }
+          build windows amd64 codexswitch-windows-amd64.exe
+          build linux amd64 codexswitch-linux-amd64
+          build linux arm64 codexswitch-linux-arm64
+          build darwin amd64 codexswitch-darwin-amd64
+          build darwin arm64 codexswitch-darwin-arm64
+          (cd dist && sha256sum * > SHA256SUMS)
+
       - name: Extract changelog section
         if: env.DO_RELEASE == 'true'
         run: |
@@ -96,4 +121,5 @@ jobs:
         run: |
           gh release create "v$VERSION" \
             --title "CodexSwitch v$VERSION" \
-            --notes-file release-notes.md
+            --notes-file release-notes.md \
+            dist/*

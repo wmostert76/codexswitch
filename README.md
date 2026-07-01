@@ -78,6 +78,24 @@ cd ~/codexswitch
 codexswitch version
 ```
 
+## Native launcher binaries
+
+GitHub releases include a small native Go `codexswitch` launcher for Windows,
+Linux and macOS. The launcher starts the Python Commander backend from a local
+checkout. Put the binary in the repository root or set `CODEXSWITCH_HOME` to
+the checkout path.
+
+Release assets:
+
+```text
+codexswitch-windows-amd64.exe
+codexswitch-linux-amd64
+codexswitch-linux-arm64
+codexswitch-darwin-amd64
+codexswitch-darwin-arm64
+SHA256SUMS
+```
+
 ## Keyboard workflow
 
 | Key | Action |

@@ -47,7 +47,10 @@ MAX_CONFIG_BACKUPS = 5
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
 OPENROUTER_TOKEN_HELPER = shutil.which("openrouter-token") or str(PROJECT_ROOT / "bin/openrouter-token")
 PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
-TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
+if os.name == "nt":
+    TUI_PYTHON = str(PROJECT_ROOT / ".venv/Scripts/python.exe")
+else:
+    TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
 TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
 APP_NAME = "CodexSwitch"
 APP_TITLE = f"{APP_NAME} Commander"
@@ -88,11 +91,11 @@ def die(message: str, code: int = 1) -> None:
 
 
 def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
-    return subprocess.run(cmd, text=True, check=check)
+    return subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", check=check)
 
 
 def command_output(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, text=True).strip()
+    return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace").strip()
 
 
 def read_json(path: Path, default):
@@ -105,21 +108,25 @@ def read_json(path: Path, default):
 
 
 def set_home_owner(path: Path) -> None:
+    if not hasattr(os, "chown"):
+        return
     try:
         home_stat = HOME.stat()
         os.chown(path, home_stat.st_uid, home_stat.st_gid)
-    except (FileNotFoundError, PermissionError):
+    except (FileNotFoundError, PermissionError, AttributeError):
         pass
 
 
 def ensure_home_owner(path: Path) -> None:
+    if not hasattr(os, "chown"):
+        return
     if not path.exists():
         return
     home_stat = HOME.stat()
     path_stat = path.stat()
     if (path_stat.st_uid, path_stat.st_gid) == (home_stat.st_uid, home_stat.st_gid):
         return
-    if os.geteuid() == 0:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
         os.chown(path, home_stat.st_uid, home_stat.st_gid)
         return
     proc = subprocess.run(
@@ -133,6 +140,8 @@ def ensure_home_owner(path: Path) -> None:
 
 
 def ensure_home_owner_recursive(path: Path) -> None:
+    if not hasattr(os, "chown"):
+        return
     if not path.exists():
         return
     home_stat = HOME.stat()
@@ -152,7 +161,7 @@ def ensure_home_owner_recursive(path: Path) -> None:
             break
     if not mismatched:
         return
-    if os.geteuid() == 0:
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
         for current, dirs, files in os.walk(path):
             for name in [".", *dirs, *files]:
                 candidate = Path(current) if name == "." else Path(current) / name
@@ -582,6 +591,8 @@ def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
             proc = subprocess.run(
                 [binary, "debug", "models"],
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.DEVNULL,
                 timeout=12,
@@ -792,6 +803,8 @@ def refresh_opencode_models(strict: bool = True) -> bool:
             proc = subprocess.run(
                 [binary, "models", "opencode-go", "--refresh", "--verbose"],
                 text=True,
+                encoding="utf-8",
+                errors="replace",
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
                 timeout=60,
@@ -986,6 +999,8 @@ def warm_codex_model_catalog() -> bool:
         proc = subprocess.run(
             [binary, "debug", "models"],
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             timeout=20,

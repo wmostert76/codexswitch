@@ -18,10 +18,13 @@ import subprocess
 import urllib.error
 import urllib.request
 from pathlib import Path
-import pwd
+try:
+    import pwd
+except ImportError:  # Windows
+    pwd = None
 
 
-VERSION = "0.7.2"
+VERSION = "0.8.0"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -40,7 +43,7 @@ BRAND_BANNER = f"{ASCII_LOGO}\n{COMMANDER_CENTERED}"
 def user_home() -> Path:
     """Resolve the real home directory, respecting SUDO_USER."""
     sudo_user = os.environ.get("SUDO_USER")
-    if sudo_user and sudo_user != "root":
+    if pwd and sudo_user and sudo_user != "root":
         try:
             return Path(pwd.getpwnam(sudo_user).pw_dir)
         except KeyError:
