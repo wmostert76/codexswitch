@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [0.8.2] - 2026-07-01
+
+### Fixed
+
+- Fixed `codexswitch tui` on Windows so it launches the Commander TUI instead
+  of opening an interactive Python prompt.
+
 ## [0.8.1] - 2026-07-01
 
 ### Added

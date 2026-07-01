@@ -1377,6 +1377,8 @@ def main(argv: list[str]) -> int:
     if cmd == "tui":
         if not Path(TUI_PYTHON).exists():
             die(f"TUI Python ontbreekt: {TUI_PYTHON}; draai ./install.sh")
+        if os.name == "nt":
+            raise SystemExit(subprocess.run([TUI_PYTHON, TUI_BIN]).returncode)
         os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
     if cmd == "list":
         list_models()
