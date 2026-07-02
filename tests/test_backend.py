@@ -415,6 +415,25 @@ class TestReadJson:
             cs.read_json(f, {})
 
 
+class TestCodexConfigState:
+    def test_reads_top_level_model_provider_and_reasoning(self, tmp_path, monkeypatch):
+        config = tmp_path / "config.toml"
+        config.write_text(
+            'model = "deepseek-v4-pro"\n'
+            'model_provider = "opencode-go"\n'
+            'model_reasoning_effort = "medium"\n'
+            '\n[model_providers.opencode-go]\n'
+            'name = "OpenCode Go"\n'
+        )
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+
+        assert cs.codex_config_state() == {
+            "model": "deepseek-v4-pro",
+            "model_provider": "opencode-go",
+            "model_reasoning_effort": "medium",
+        }
+
+
 # ─── Reasoning choices ────────────────────────────────────────────
 
 class TestReasoningChoices:

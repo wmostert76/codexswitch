@@ -55,6 +55,47 @@ def test_startup_splash_contains_ascii_branding_and_credits():
     asyncio.run(run())
 
 
+def test_tui_detects_codex_config_drift_from_external_model_change(monkeypatch):
+    state = {
+        "provider": "opencode-go",
+        "model": "deepseek-v4-pro",
+        "reasoning_effort": "medium",
+    }
+
+    def fake_read_json(path, default):
+        if path == tui.BACKEND["SWITCH_CONFIG"]:
+            return state
+        return default
+
+    monkeypatch.setitem(tui.BACKEND, "read_json", fake_read_json)
+    monkeypatch.setitem(tui.BACKEND, "opencode_models", lambda: ["deepseek-v4-pro"])
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "opencode_model_catalog",
+        lambda: {"deepseek-v4-pro": {"name": "DeepSeek V4 Pro"}},
+    )
+    monkeypatch.setitem(tui.BACKEND, "openai_model_catalog", lambda refresh=False: {})
+    monkeypatch.setitem(tui.BACKEND, "reasoning_choices", lambda model: [("medium", "medium")])
+    monkeypatch.setitem(tui.BACKEND, "default_reasoning_effort", lambda model: "medium")
+    monkeypatch.setitem(tui.BACKEND, "opencode_go_key_present", lambda: True)
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "codex_config_state",
+        lambda: {"model_provider": "opencode-go", "model": "gpt-5.5"},
+    )
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            assert app.provider == "opencode-go"
+            assert app.model == "deepseek-v4-pro"
+            assert app.selection_is_dirty() is True
+
+    asyncio.run(run())
+
+
 def test_codex_launch_argv_uses_resume_bypass_and_search():
     assert tui.codex_launch_argv("/usr/local/bin/codex") == [
         "/usr/local/bin/codex",

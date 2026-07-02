@@ -1143,9 +1143,14 @@ class CodexSwitchApp(App):
     def selection_is_dirty(self) -> bool:
         """Check if current selection differs from the active config."""
         state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
+        codex_state = BACKEND["codex_config_state"]()
         if self.provider != state.get("provider"):
             return True
+        if self.provider != codex_state.get("model_provider"):
+            return True
         if self.model and self.model != state.get("model"):
+            return True
+        if self.model and self.model != codex_state.get("model"):
             return True
         if self.provider == "openai" and self.account:
             auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
@@ -1154,6 +1159,8 @@ class CodexSwitchApp(App):
                 return True
         effort = self.selected_reasoning()
         if effort and effort != state.get("reasoning_effort"):
+            return True
+        if effort and effort != codex_state.get("model_reasoning_effort"):
             return True
         return False
 

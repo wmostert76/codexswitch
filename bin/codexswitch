@@ -9,6 +9,7 @@ import tempfile
 import time
 import base64
 import getpass
+import tomllib
 import urllib.error
 import urllib.request
 from datetime import datetime, timezone
@@ -110,6 +111,21 @@ def read_json(path: Path, default):
         return default
     except json.JSONDecodeError as exc:
         die(f"{path} is geen geldige JSON: {exc}")
+
+
+def codex_config_state() -> dict[str, str]:
+    try:
+        data = tomllib.loads(CODEX_CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+    except tomllib.TOMLDecodeError as exc:
+        die(f"{CODEX_CONFIG} is geen geldige TOML: {exc}")
+    state = {}
+    for key in ("model", "model_provider", "model_reasoning_effort"):
+        value = data.get(key)
+        if isinstance(value, str):
+            state[key] = value
+    return state
 
 
 def set_home_owner(path: Path) -> None:

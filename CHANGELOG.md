@@ -16,6 +16,8 @@ All notable CodexSwitch changes are documented here.
 - Fixed the OpenCode Go proxy so chats keep working after importing an API key
   into the encrypted CodexSwitch vault instead of expecting a plaintext
   `~/.config/codexswitch/opencode-go/auth.json`.
+- Fixed TUI launch/apply drift detection after Codex `/model` changes the
+  underlying `~/.codex/config.toml` without updating CodexSwitch state.
 
 ### Added
 
