@@ -13,6 +13,22 @@ All notable CodexSwitch changes are documented here.
 
 - Fixed `codexswitch tui` on Windows so it launches the Commander TUI instead
   of opening an interactive Python prompt.
+- Fixed the OpenCode Go proxy so chats keep working after importing an API key
+  into the encrypted CodexSwitch vault instead of expecting a plaintext
+  `~/.config/codexswitch/opencode-go/auth.json`.
+
+### Added
+
+- Added `codexswitch proxy install|uninstall|status|restart` so the OpenCode
+  Go proxy systemd service can be installed, inspected, restarted and removed
+  independently from the main `install.sh` bootstrap flow.
+
+### Changed
+
+- `codexswitch`, `codexswitch tui` and `codexswitch status` now perform a
+  startup update check and immediately run the existing GitHub upgrade flow
+  when a newer release or `origin/main` revision is available and the local
+  checkout is clean.
 
 ## [0.8.1] - 2026-07-01
 

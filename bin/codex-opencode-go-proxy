@@ -16,6 +16,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codexswitch_common import (
     user_home,
+    read_secret_json,
     opencode_catalog_from_binary,
     opencode_catalog_from_cache,
     opencode_catalog_from_upstream,
@@ -66,7 +67,7 @@ class ToolContext:
 
 def opencode_key() -> str:
     try:
-        data = json.loads(AUTH_PATH.read_text())
+        data = read_secret_json(AUTH_PATH, {})
     except FileNotFoundError:
         data = {}
     key = data.get("api_key") if isinstance(data, dict) else None

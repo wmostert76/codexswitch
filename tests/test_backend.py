@@ -75,6 +75,8 @@ def test_cli_help_contains_credits_and_tui_command():
     assert "AI-assisted implementation: OpenAI Codex" in proc.stdout
     assert cs.BRAND_BANNER in proc.stdout
     assert "codexswitch tui" in proc.stdout
+    assert "codexswitch proxy install" in proc.stdout
+    assert "codexswitch proxy uninstall" in proc.stdout
     assert "codexswitch update [--check]" in proc.stdout
     assert "codexswitch version" in proc.stdout
     assert "codexswitch --version" not in proc.stdout
@@ -177,6 +179,87 @@ def test_update_refuses_dirty_repository(monkeypatch):
 
     with pytest.raises(SystemExit):
        cs.update_from_github(check_only=False)
+
+
+def test_auto_update_is_quiet_when_current(monkeypatch, capsys):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(cs, "latest_github_release", lambda: (f"v{cs.VERSION}", ""))
+    monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
+
+    assert cs.auto_update_from_github() is False
+
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == ""
+
+
+def test_auto_update_skips_dirty_checkout(monkeypatch, capsys):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", ""))
+    monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
+    monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: True)
+
+    assert cs.auto_update_from_github() is False
+
+    assert "upgrade overgeslagen" in capsys.readouterr().err
+
+
+def test_auto_update_main_branch_runs_install_without_self_update(monkeypatch):
+    calls = []
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(cs, "latest_github_release", lambda: (f"v{cs.VERSION}", ""))
+    monkeypatch.setattr(
+        cs,
+        "main_branch_update_available",
+        lambda: (True, "1111111local", "2222222remote"),
+    )
+    monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append((cmd, check)))
+
+    assert cs.auto_update_from_github() is True
+
+    assert (["git", "-C", str(cs.PROJECT_ROOT), "fetch", "--tags", "origin"], True) in calls
+    assert (
+        ["git", "-C", str(cs.PROJECT_ROOT), "pull", "--ff-only", "origin", "main"],
+        True,
+    ) in calls
+    assert (["bash", str(cs.PROJECT_ROOT / "install.sh"), "--no-self-update"], True) in calls
+
+
+def test_proxy_service_unit_uses_proxy_binary_and_current_user(tmp_path, monkeypatch):
+    proxy_bin = tmp_path / "codex-opencode-go-proxy"
+    proxy_bin.write_text("")
+    monkeypatch.setattr(cs, "PROXY_BIN", str(proxy_bin))
+    monkeypatch.setattr(cs.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(cs, "command_output", lambda cmd: {
+        ("id", "-un"): "tester",
+        ("id", "-gn", "tester"): "testers",
+        ("getent", "passwd", "tester"): "tester:x:1000:1000::/home/tester:/bin/bash",
+    }[tuple(cmd)])
+
+    unit = cs.proxy_service_unit()
+
+    assert "User=tester" in unit
+    assert "Group=testers" in unit
+    assert "Environment=HOME=/home/tester" in unit
+    assert f"ExecStart={proxy_bin.resolve()}" in unit
+
+
+def test_install_proxy_service_installs_and_restarts_unit(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs, "require_proxy_service_support", lambda: None)
+    monkeypatch.setattr(cs, "proxy_service_unit", lambda: "[Unit]\n")
+    monkeypatch.setattr(cs, "privileged_cmd", lambda cmd: ["sudo", *cmd])
+    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append((cmd, check)))
+
+    cs.install_proxy_service()
+
+    assert calls[0][0][:4] == ["sudo", "install", "-m", "644"]
+    assert calls[0][0][-1] == "/etc/systemd/system/codex-opencode-go-proxy.service"
+    assert (["sudo", "systemctl", "daemon-reload"], True) in calls
+    assert (["sudo", "systemctl", "enable", "--now", cs.PROXY_SERVICE], True) in calls
+    assert (["sudo", "systemctl", "restart", cs.PROXY_SERVICE], True) in calls
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────

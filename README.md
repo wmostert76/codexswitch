@@ -78,6 +78,11 @@ cd ~/codexswitch
 codexswitch version
 ```
 
+`codexswitch`, `codexswitch tui` and `codexswitch status` automatically check
+for a newer GitHub release or newer `origin/main` revision and immediately run
+the same upgrade path as `codexswitch update` when the checkout is clean. Set
+`CODEXSWITCH_NO_AUTO_UPDATE=1` to suppress this startup check.
+
 ## Native launcher binaries
 
 GitHub releases include a small native Go `codexswitch` launcher for Windows,
@@ -213,6 +218,15 @@ API. The local proxy bridges that gap on `127.0.0.1:14555` and handles:
 - proxy-local web-search fallback
 - optional bearer auth for manual clients
 
+Manage the Linux systemd service independently from the main installer:
+
+```bash
+codexswitch proxy install
+codexswitch proxy status
+codexswitch proxy restart
+codexswitch proxy uninstall
+```
+
 To require a dedicated proxy token for manual clients:
 
 ```bash
@@ -239,6 +253,14 @@ Release notes are maintained in [CHANGELOG.md](CHANGELOG.md). Tags named `v*`
 trigger the GitHub Release workflow.
 
 ## Uninstall
+
+Remove only the OpenCode Go proxy service:
+
+```bash
+codexswitch proxy uninstall
+```
+
+Remove installed CodexSwitch commands and the proxy service:
 
 ```bash
 ./uninstall.sh

@@ -413,6 +413,20 @@ class TestHandler:
 
         assert proxy.opencode_key() == "switch-token"
 
+    def test_opencode_key_reads_vault_backed_store(self, tmp_path, monkeypatch):
+        switch_auth = tmp_path / "switch-auth.json"
+        legacy_auth = tmp_path / "legacy-auth.json"
+        legacy_auth.write_text(json.dumps({"opencode-go": {"key": "legacy-token"}}))
+        monkeypatch.setattr(proxy, "AUTH_PATH", switch_auth)
+        monkeypatch.setattr(proxy, "LEGACY_AUTH_PATH", legacy_auth)
+        monkeypatch.setattr(
+            proxy,
+            "read_secret_json",
+            lambda path, default: {"api_key": "vault-token"},
+        )
+
+        assert proxy.opencode_key() == "vault-token"
+
     def test_opencode_catalog_uses_switch_cache(self, tmp_path, monkeypatch):
         cache = tmp_path / "models.json"
         cache.write_text(json.dumps({"models": {"switch-model": {"name": "Switch"}}}))
