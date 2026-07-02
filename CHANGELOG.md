@@ -18,6 +18,9 @@ All notable CodexSwitch changes are documented here.
   `~/.config/codexswitch/opencode-go/auth.json`.
 - Fixed TUI launch/apply drift detection after Codex `/model` changes the
   underlying `~/.codex/config.toml` without updating CodexSwitch state.
+- Fixed repeated Codex reconnects when OpenCode Go rejects `deepseek-v4-pro`
+  `xhigh` reasoning by retrying that upstream call with `medium` reasoning
+  before emitting a failed response.
 
 ### Added
 

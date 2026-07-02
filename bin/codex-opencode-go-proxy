@@ -590,61 +590,77 @@ def upstream_chat(body: dict, context: ToolContext | None = None):
     # Process tools first so custom tool metadata is populated before
     # responses_input_to_messages needs it to wrap custom tool arguments.
     tools = responses_tools_to_chat(body, context)
-    payload = {
+    base_payload = {
         "model": body.get("model"),
         "messages": responses_input_to_messages(body, context),
         "stream": bool(body.get("stream", True)),
     }
     if tools:
-        payload["tools"] = tools
-        payload["tool_choice"] = responses_tool_choice_to_chat(
+        base_payload["tools"] = tools
+        base_payload["tool_choice"] = responses_tool_choice_to_chat(
             body.get("tool_choice", "auto"), context
         )
-        payload["parallel_tool_calls"] = body.get("parallel_tool_calls", True)
+        base_payload["parallel_tool_calls"] = body.get("parallel_tool_calls", True)
     if body.get("temperature") is not None:
-        payload["temperature"] = body["temperature"]
+        base_payload["temperature"] = body["temperature"]
     if body.get("max_output_tokens") is not None:
-        payload["max_tokens"] = body["max_output_tokens"]
+        base_payload["max_tokens"] = body["max_output_tokens"]
     model_id = str(body.get("model"))
     effort = (reasoning or {}).get("effort") or configured_reasoning_effort(model_id)
     model_meta = opencode_catalog().get(model_id, {})
     _, _, effort_options = model_reasoning(model_id, model_meta)
-    options = effort_options.get(effort, {})
-    if "reasoningEffort" in options:
-        payload["reasoning_effort"] = options["reasoningEffort"]
-    if "thinking" in options:
-        payload["thinking"] = options["thinking"]
-    if effort:
-        print(f"upstream model={body.get('model')} reasoning={effort}", flush=True)
+    effort_sequence = [effort]
+    if effort == "xhigh" and "medium" in effort_options:
+        effort_sequence.append("medium")
 
     headers = {
         "authorization": f"Bearer {opencode_key()}",
         "content-type": "application/json",
-        "accept": "text/event-stream" if payload["stream"] else "application/json",
+        "accept": "text/event-stream" if base_payload["stream"] else "application/json",
         "user-agent": "opencode/1.17.9",
     }
-    data = json.dumps(payload).encode()
     url = f"{UPSTREAM}/chat/completions"
 
     # Retry transient upstream errors (5xx, connection resets) with backoff.
     max_retries = 3
-    for attempt in range(max_retries):
-        req = urllib.request.Request(url, data=data, headers=headers, method="POST")
-        try:
-            return urllib.request.urlopen(req, timeout=300)
-        except urllib.error.HTTPError as exc:
-            # 4xx errors are not transient — don't retry.
-            if exc.code < 500 or attempt == max_retries - 1:
-                raise
-            wait = 0.5 * (2 ** attempt)
-            print(f"upstream {exc.code}, retry {attempt + 1}/{max_retries} after {wait}s", flush=True)
-            time.sleep(wait)
-        except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
-            if attempt == max_retries - 1:
-                raise
-            wait = 0.5 * (2 ** attempt)
-            print(f"upstream connection error, retry {attempt + 1}/{max_retries} after {wait}s: {exc}", flush=True)
-            time.sleep(wait)
+    for effort_index, current_effort in enumerate(effort_sequence):
+        payload = dict(base_payload)
+        options = effort_options.get(current_effort, {})
+        if "reasoningEffort" in options:
+            payload["reasoning_effort"] = options["reasoningEffort"]
+        if "thinking" in options:
+            payload["thinking"] = options["thinking"]
+        if current_effort:
+            print(f"upstream model={body.get('model')} reasoning={current_effort}", flush=True)
+        data = json.dumps(payload).encode()
+
+        for attempt in range(max_retries):
+            req = urllib.request.Request(url, data=data, headers=headers, method="POST")
+            try:
+                return urllib.request.urlopen(req, timeout=300)
+            except urllib.error.HTTPError as exc:
+                if (
+                    exc.code == 400
+                    and current_effort == "xhigh"
+                    and effort_index + 1 < len(effort_sequence)
+                ):
+                    print(
+                        f"upstream rejected {model_id} reasoning=xhigh; retrying with medium",
+                        flush=True,
+                    )
+                    break
+                # 4xx errors are not transient — don't retry.
+                if exc.code < 500 or attempt == max_retries - 1:
+                    raise
+                wait = 0.5 * (2 ** attempt)
+                print(f"upstream {exc.code}, retry {attempt + 1}/{max_retries} after {wait}s", flush=True)
+                time.sleep(wait)
+            except (urllib.error.URLError, ConnectionError, TimeoutError) as exc:
+                if attempt == max_retries - 1:
+                    raise
+                wait = 0.5 * (2 ** attempt)
+                print(f"upstream connection error, retry {attempt + 1}/{max_retries} after {wait}s: {exc}", flush=True)
+                time.sleep(wait)
 
 
 class Handler(BaseHTTPRequestHandler):

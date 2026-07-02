@@ -348,6 +348,46 @@ class TestModelReasoning:
         assert len(levels) == 1
 
 
+class TestUpstreamChat:
+    def test_xhigh_400_falls_back_to_medium_reasoning(self, monkeypatch):
+        payloads = []
+
+        class FakeResponse:
+            pass
+
+        def fake_urlopen(req, timeout):
+            payloads.append(json.loads(req.data.decode()))
+            if len(payloads) == 1:
+                raise proxy.urllib.error.HTTPError(
+                    req.full_url,
+                    400,
+                    "Bad Request",
+                    hdrs={},
+                    fp=io.BytesIO(b'{"error":"upstream failed"}'),
+                )
+            return FakeResponse()
+
+        monkeypatch.setattr(proxy.urllib.request, "urlopen", fake_urlopen)
+        monkeypatch.setattr(proxy, "opencode_key", lambda: "token")
+        monkeypatch.setattr(proxy, "configured_reasoning_effort", lambda model: "xhigh")
+        monkeypatch.setattr(
+            proxy,
+            "opencode_catalog",
+            lambda: {
+                "deepseek-v4-pro": {
+                    "variants": {
+                        "max": {"reasoningEffort": "max"},
+                        "medium": {"reasoningEffort": "medium"},
+                    }
+                }
+            },
+        )
+
+        assert proxy.upstream_chat({"model": "deepseek-v4-pro", "input": "test"}) is not None
+        assert payloads[0]["reasoning_effort"] == "max"
+        assert payloads[1]["reasoning_effort"] == "medium"
+
+
 class FakeUpstream:
     def __init__(self, chunks):
         self.chunks = chunks
