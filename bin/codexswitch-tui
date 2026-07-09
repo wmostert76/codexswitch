@@ -112,7 +112,7 @@ FUNCTION KEYS
   F2  Providers     Focus provider/account panel
   F3  Models        Focus model panel
   F4  Reasoning     Focus reasoning modes
-  F5  Refresh       Refresh OpenCode Go catalog
+  F5  Refresh       Refresh selected provider catalog
   F6  Apply         Activate selection without starting Codex
   F7  Auth          Login to selected provider
   F8  Status        Reload active configuration
@@ -982,24 +982,29 @@ class CodexSwitchApp(App):
         )
 
     def action_refresh(self) -> None:
-        # Always refresh both catalogs from internet sources so models,
-        # context limits and reasoning variants stay current regardless of
-        # which provider is currently active.
-        self.set_status("Refreshing OpenCode Go + OpenRouter catalogs...")
-        result1, output1 = self.capture(BACKEND["refresh_opencode_models"], False)
-        result2, output2 = self.capture(BACKEND["refresh_openrouter_models"], False)
-        if isinstance(result1, SystemExit) and isinstance(result2, SystemExit):
+        refreshers = {
+            "openai": ("OpenAI Codex", BACKEND["refresh_openai_models"]),
+            "opencode-go": ("OpenCode Go", BACKEND["refresh_opencode_models"]),
+            "openrouter": ("OpenRouter", BACKEND["refresh_openrouter_models"]),
+        }
+        if self.provider == "azure":
+            self.set_status("Azure uses a fixed model catalog")
+            return
+        name, refresh = refreshers[self.provider]
+        self.set_status(f"Refreshing {name} catalog...")
+        result, output = self.capture(refresh, False)
+        if isinstance(result, SystemExit) or result is False:
             self.set_status(
-                output1 or output2 or "Model refresh failed; existing cache retained",
+                output or "Model refresh failed; existing cache retained",
                 error=True,
             )
             return
-        self.catalog = BACKEND["opencode_model_catalog"]()
+        if self.provider == "openai":
+            self.openai_metadata = BACKEND["openai_model_catalog"]()
+        elif self.provider == "opencode-go":
+            self.catalog = BACKEND["opencode_model_catalog"]()
         self.load_models()
-        combined = " | ".join(
-            line for line in (output1, output2) if line
-        )
-        self.set_status(combined.splitlines()[-1] if combined else "Catalogs refreshed")
+        self.set_status(output.splitlines()[-1] if output else f"{name} catalog refreshed")
 
     def action_apply(self) -> None:
         if not self.model:

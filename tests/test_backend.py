@@ -126,6 +126,37 @@ def test_banner_contains_credits(capsys):
     assert "AI-assisted implementation: OpenAI Codex" in output
 
 
+def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
+    codex_home = tmp_path / ".codex"
+    switch_home = tmp_path / ".config" / "codexswitch"
+    codex_home.mkdir(parents=True)
+    switch_home.mkdir(parents=True)
+    switch_config = switch_home / "config.json"
+    switch_config.write_text(
+        json.dumps(
+            {
+                "provider": "openrouter",
+                "model": "z-ai/glm-5.2",
+                "reasoning_effort": "high",
+            }
+        )
+    )
+
+    monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(cs, "CODEX_CONFIG", codex_home / "config.toml")
+    monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_config)
+    monkeypatch.setattr(cs, "codex_bin", lambda: "/tmp/codex")
+    monkeypatch.setattr(cs, "_common_opencode_bin", lambda: None)
+    monkeypatch.setattr(cs, "opencode_go_key_present", lambda: True)
+    monkeypatch.setattr(cs, "azure_credentials_present", lambda: True)
+    monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+    monkeypatch.setattr(cs, "codex_usage_summary", lambda data: [])
+
+    cs.status()
+
+    assert "huidig:       openrouter / z-ai/glm-5.2 / denken=high" in capsys.readouterr().out
+
+
 def test_parse_version_accepts_release_tags():
     assert cs.parse_version("0.6.0") == (0, 6, 0)
     assert cs.parse_version("v0.6.0") == (0, 6, 0)
@@ -792,6 +823,43 @@ class TestOpenRouterCatalog:
             },
         )
         assert cs.openrouter_models() == ["a/model", "z/model"]
+
+    def test_openrouter_short_model_alias_resolves_to_full_id(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        token_helper = tmp_path / "openrouter-token"
+        token_helper.write_text("")
+
+        catalog = {
+            "z-ai/glm-5.2": {
+                "id": "z-ai/glm-5.2",
+                "reasoning": {"supported_efforts": ["xhigh", "high"]},
+            }
+        }
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", codex_home / "config.toml")
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_home / "config.json")
+        monkeypatch.setattr(
+            cs,
+            "OPENROUTER_CODEX_MODELS",
+            switch_home / "openrouter/codex-models.json",
+        )
+        monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
+        monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
+        monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
+
+        cs.validate_provider_model("openrouter", "glm-5.2")
+        cs.update_codex_config("openrouter", "glm-5.2", "high")
+
+        assert 'model = "z-ai/glm-5.2"' in (codex_home / "config.toml").read_text()
+        state = json.loads((switch_home / "config.json").read_text())
+        assert state["model"] == "z-ai/glm-5.2"
+        assert state["reasoning_effort"] == "high"
 
     def test_openrouter_models_fallback(self, monkeypatch):
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: {})

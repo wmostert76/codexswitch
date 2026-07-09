@@ -105,6 +105,44 @@ def test_codex_launch_argv_uses_resume_bypass_and_search():
     ]
 
 
+def test_openai_refresh_only_refreshes_the_codex_catalog(monkeypatch):
+    calls = []
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "refresh_openai_models",
+        lambda strict=False: calls.append(("openai", strict)) or True,
+    )
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "refresh_opencode_models",
+        lambda strict=False: calls.append(("opencode-go", strict)) or True,
+    )
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "refresh_openrouter_models",
+        lambda strict=False: calls.append(("openrouter", strict)) or True,
+    )
+    monkeypatch.setitem(
+        tui.BACKEND,
+        "openai_model_catalog",
+        lambda refresh=False: {"gpt-5.5": {}},
+    )
+
+    app = tui.CodexSwitchApp()
+
+    async def run():
+        async with app.run_test(size=(120, 40)) as pilot:
+            await dismiss_splash(pilot)
+            calls.clear()  # Ignore the startup refreshes of external catalogs.
+            app.provider = "openai"
+            app.action_refresh()
+            await pilot.pause()
+            assert calls == [("openai", False)]
+            assert "OpenAI Codex catalog refreshed" in app.query_one("#status").render().plain
+
+    asyncio.run(run())
+
+
 def test_main_checks_codex_runtime_before_exec(monkeypatch):
     calls = []
 

@@ -2,7 +2,7 @@
 
 All notable CodexSwitch changes are documented here.
 
-## [0.8.2] - 2026-07-01
+## [0.9.0] - 2026-07-09
 
 ### Changed
 
@@ -11,6 +11,8 @@ All notable CodexSwitch changes are documented here.
 
 ### Fixed
 
+- Fixed TUI `F5` so an OpenAI selection refreshes the native Codex model
+  catalog instead of refreshing the OpenRouter catalog.
 - Fixed `codexswitch tui` on Windows so it launches the Commander TUI instead
   of opening an interactive Python prompt.
 - Fixed the OpenCode Go proxy so chats keep working after importing an API key
@@ -21,6 +23,9 @@ All notable CodexSwitch changes are documented here.
 - Fixed repeated Codex reconnects when OpenCode Go rejects `deepseek-v4-pro`
   `xhigh` reasoning by retrying that upstream call with `medium` reasoning
   before emitting a failed response.
+- Fixed OpenRouter short model aliases such as `glm-5.2` so they resolve to
+  the full provider-qualified model id, for example `z-ai/glm-5.2`, before
+  writing Codex config.
 
 ### Added
 

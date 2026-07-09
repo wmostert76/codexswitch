@@ -989,6 +989,21 @@ def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
         return {}
 
 
+def refresh_openai_models(strict: bool = True) -> bool:
+    print("OpenAI Codex-modelcatalogus verversen...")
+    catalog = openai_model_catalog(refresh=True)
+    if not catalog:
+        if strict:
+            die("OpenAI Codex model-refresh mislukt; geen modellen ontvangen")
+        print(
+            "warning: OpenAI Codex model-refresh mislukt; bestaande fallback blijft actief",
+            file=sys.stderr,
+        )
+        return False
+    print(f"OpenAI Codex-modellen bijgewerkt: {len(catalog)} actief")
+    return True
+
+
 def openai_reasoning_choices(model: str) -> list[tuple[str, str]]:
     metadata = openai_model_catalog().get(model, {})
     return [
@@ -1035,6 +1050,24 @@ def openrouter_models() -> list[str]:
     if not catalog:
         return OPENROUTER_FALLBACK_MODELS
     return sorted(catalog)
+
+
+def resolve_openrouter_model(model: str) -> str:
+    """Resolve short OpenRouter aliases like ``glm-5.2`` to vendor/model IDs."""
+    models = openrouter_models()
+    if model in models:
+        return model
+    if "/" in model:
+        return model
+    matches = [candidate for candidate in models if candidate.rsplit("/", 1)[-1] == model]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        die(
+            f"OpenRouter model '{model}' is ambigu; gebruik volledige id: "
+            f"{', '.join(matches)}"
+        )
+    return model
 
 
 def refresh_openrouter_models(strict: bool = True) -> bool:
@@ -1298,6 +1331,7 @@ def validate_provider_model(provider: str, model: str) -> None:
             die(f"OpenCode Go model '{model}' staat niet in de huidige catalogus")
         return
     if provider == "openrouter":
+        model = resolve_openrouter_model(model)
         if model not in openrouter_models():
             print(f"warning: OpenRouter model '{model}' staat niet in de huidige catalogus", file=sys.stderr)
         return
@@ -1399,6 +1433,8 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
         ensure_proxy()
     if provider == "openrouter" and not openrouter_key_present():
         die("OpenRouter API-key ontbreekt; gebruik: codexswitch auth openrouter")
+    if provider == "openrouter":
+        model = resolve_openrouter_model(model)
     CODEX_HOME.mkdir(parents=True, exist_ok=True)
     ensure_home_owner(CODEX_CONFIG)
     lines = CODEX_CONFIG.read_text().splitlines(True) if CODEX_CONFIG.exists() else []
@@ -1507,7 +1543,6 @@ timeout_ms = 5000
 refresh_interval_ms = 0
 '''
         lines.append(provider_block)
-        reasoning_effort = None
 
     CODEX_CONFIG.write_text("".join(lines))
     state = read_json(SWITCH_CONFIG, {})
@@ -1544,7 +1579,8 @@ def status() -> None:
     print(f"azure auth:      {'ok' if azure_credentials_present() else 'ontbreekt'}")
     print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
-    print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}")
+    suffix = f" / denken={state['reasoning_effort']}" if state.get("reasoning_effort") else ""
+    print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}{suffix}")
     print(f"openai acct:  {current_openai_account or 'onbekend'}")
     for line in codex_usage_summary(current_data):
         print(line)

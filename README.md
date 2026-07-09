@@ -109,7 +109,7 @@ SHA256SUMS
 | `F2` | Provider/account panel |
 | `F3` | Model panel |
 | `F4` | Reasoning selector |
-| `F5` | Refresh current catalog |
+| `F5` | Refresh selected provider catalog (including native OpenAI Codex models) |
 | `F6` | Apply selected provider/model without starting Codex |
 | `F7` | Authenticate selected provider |
 | `F8` | Reload active status |
