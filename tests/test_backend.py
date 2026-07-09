@@ -630,6 +630,39 @@ class TestAccountSwitchSafety:
 
 
 class TestUpdateState:
+    def test_openai_records_the_current_authenticated_account(
+        self, tmp_path, monkeypatch
+    ):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+        config.write_text('model = "old"\nmodel_provider = "openai"\n')
+        state_path.write_text(
+            json.dumps({"openai_account": "stale@example.com"})
+        )
+        (codex_home / "auth.json").write_text(
+            json.dumps(
+                {
+                    "tokens": {
+                        "id_token": make_jwt({"email": "current@example.com"})
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(cs, "openai_reasoning_choices", lambda model: [])
+
+        cs.update_codex_config("openai", "gpt-test")
+        state = json.loads(state_path.read_text())
+        assert state["openai_account"] == "current@example.com"
+
     def test_openai_without_effort_clears_saved_reasoning(self, tmp_path, monkeypatch):
         codex_home = tmp_path / ".codex"
         switch_home = tmp_path / ".config" / "codexswitch"

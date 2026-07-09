@@ -1,85 +1,106 @@
 #!/usr/bin/env python3
+"""Commander-style Textual interface for CodexSwitch."""
+
 import asyncio
 import contextlib
 import io
+import json
 import os
 import runpy
 import subprocess
+from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.events import Click, DescendantFocus, Key, Resize
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
-
-from textual.events import Click
-from textual.css.query import NoMatches
 
 
 PROJECT = Path(__file__).resolve().parents[1]
 BACKEND_PATH = PROJECT / "bin/codexswitch"
 BACKEND = runpy.run_path(str(BACKEND_PATH))
 
-FKEY_ACTIONS = {
-    "1": "help",
-    "2": "accounts",
-    "3": "models",
-    "4": "reasoning",
-    "5": "refresh",
-    "6": "apply",
-    "7": "auth",
-    "8": "status",
-    "9": "codex",
-    "10": "quit",
-}
 CODEX_TUI_LAUNCH_ARGS = (
     "resume",
     "--dangerously-bypass-approvals-and-sandbox",
     "--search",
 )
 DEFAULT_REASONING_VALUE = "__default__"
+PROVIDERS = ("openai", "azure", "opencode-go", "openrouter")
+PROVIDER_LABELS = {
+    "openai": "OpenAI",
+    "azure": "Azure",
+    "opencode-go": "OpenCode Go",
+    "openrouter": "OpenRouter",
+}
+
+# number, compact label, wide label, action
 FUNCTION_KEYS = (
-    ("1", "Help"),
-    ("2", "Prov"),
-    ("3", "Model"),
-    ("4", "Think"),
-    ("5", "Fresh"),
-    ("6", "Apply"),
-    ("7", "Auth"),
-    ("8", "Stat"),
-    ("9", "Codex"),
-    ("10", "Quit"),
+    ("F1", "Help", "Help", "help"),
+    ("F2", "Prov", "Providers", "accounts"),
+    ("F3", "Model", "Models", "models"),
+    ("F4", "Think", "Reasoning", "reasoning"),
+    ("F5", "Refr", "Refresh", "refresh"),
+    ("F6", "Apply", "Apply", "apply"),
+    ("F7", "Auth", "Auth", "auth"),
+    ("F8", "Stat", "Status", "status"),
+    ("F9", "Start", "Start", "codex"),
+    ("F10", "Quit", "Quit", "request_quit"),
 )
 
 
+@dataclass(frozen=True)
+class Selection:
+    provider: str = "openai"
+    account: str | None = None
+    model: str | None = None
+    reasoning: str | None = None
+
 
 class FKey(Static):
-    """A clickable function-key label styled like Midnight Commander."""
+    """Clickable function-key segment."""
 
-    def __init__(self, *args, action: str = "", **kwargs) -> None:
-        super().__init__(*args, **kwargs)
+    def __init__(
+        self,
+        key: str,
+        compact_label: str,
+        full_label: str,
+        action: str,
+    ) -> None:
+        super().__init__(classes="fkey", id=f"fkey-{action}", markup=True)
+        self.key_name = key
+        self.compact_label = compact_label
+        self.full_label = full_label
         self.fkey_action = action
+        self.set_compact(True)
+
+    def set_compact(self, compact: bool) -> None:
+        label = self.compact_label if compact else self.full_label
+        self.update(f"[reverse bold]{self.key_name}[/] {label}")
 
 
 def splash_line(text: str) -> str:
     return text.center(BACKEND["ASCII_LOGO_WIDTH"])
 
 
-class SplashScreen(ModalScreen):
+class SplashScreen(ModalScreen[bool]):
     BINDINGS = [
-        ("enter", "dismiss", "Continue"),
-        ("escape", "dismiss", "Continue"),
-        ("space", "dismiss", "Continue"),
+        Binding("enter", "continue", "Continue", show=False),
+        Binding("escape", "continue", "Continue", show=False),
+        Binding("space", "continue", "Continue", show=False),
     ]
 
     def compose(self) -> ComposeResult:
         yield Static(
-            f"""[bold white]{BACKEND['BRAND_BANNER']}[/]
+            f"""[bold #000087]{BACKEND['BRAND_BANNER']}[/]
 
-[bold white]{splash_line(f"CodexSwitch Commander v{BACKEND['VERSION']}")}[/]
+[bold #000087]{splash_line(f"CodexSwitch Commander v{BACKEND['VERSION']}")}[/]
 [black]{splash_line(BACKEND['CREDITS_OWNER'])}[/]
 [black]{splash_line(BACKEND['CREDITS_AI'])}[/]
 
@@ -89,175 +110,256 @@ class SplashScreen(ModalScreen):
             markup=True,
         )
 
+    def action_continue(self) -> None:
+        self.dismiss(True)
+
     def on_click(self, event: Click) -> None:
-        self.dismiss()
+        self.dismiss(True)
 
 
-class HelpScreen(ModalScreen):
-    BINDINGS = [("escape", "dismiss", "Close"), ("f1", "dismiss", "Close")]
+class HelpScreen(ModalScreen[None]):
+    BINDINGS = [
+        Binding("escape", "dismiss", "Close", show=False),
+        Binding("f1", "dismiss", "Close", show=False),
+        Binding("question_mark", "dismiss", "Close", show=False),
+    ]
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            """
-[bold white]CODEXSWITCH COMMANDER HELP[/]
+        with VerticalScroll(id="help-dialog"):
+            yield Static(
+                """[bold #000087]CODEXSWITCH COMMANDER HELP[/]
 
-[black]NAVIGATION[/]
-  Tab · Shift+Tab   Switch panel
-  ↑ ↓               Move selection
-  Enter on model    Move to reasoning
-  Enter on reason   Apply and start Codex
+[black]WORKFLOW[/]  Providers → Models → Reasoning
+  ↑↓ Move · Home/End First/last · PgUp/PgDn Page
+  ←→ or Tab/Shift+Tab Switch panel
+  Enter Next panel / start from Reasoning
+  / Filter models · Esc Close/cancel/reset
 
-FUNCTION KEYS
-  F1  Help          This screen
-  F2  Providers     Focus provider/account panel
-  F3  Models        Focus model panel
-  F4  Reasoning     Focus reasoning modes
-  F5  Refresh       Refresh selected provider catalog
-  F6  Apply         Activate selection without starting Codex
-  F7  Auth          Login to selected provider
-  F8  Status        Reload active configuration
-  F9  Codex         Resume Codex with bypass sandbox and search
-  F10 Quit          Close CodexSwitch
+[black]COMMANDS[/]
+  F1/? Help · F2/p Providers · F3/m Models
+  F4/t Reasoning · F5/r Refresh · F6/a Apply
+  F7/l Auth · F8/s Status · F9/c Start · F10/q Quit
 
-[black]Press Escape, F1 or click to close.[/]
-""",
-            id="help-dialog",
-            markup=True,
-        )
+[black]MARKERS[/]  ● Active   ◆ Pending   ○ Other
+
+[black]LAUNCH[/]  Enter from Reasoning or F9 applies and starts Codex
+  resume with sandbox bypass and search. F6 only applies.
+
+[black]ABOUT[/]
+"""
+                + f"[bold #000087]{BACKEND['BRAND_BANNER']}[/]\n\n"
+                + f"[bold #000087]CodexSwitch Commander v{BACKEND['VERSION']}[/]\n"
+                + f"[black]{BACKEND['CREDITS_OWNER']}[/]\n"
+                + f"[black]{BACKEND['CREDITS_AI']}[/]\n\n"
+                + "[black]Press Escape, F1, ? or click outside to close.[/]",
+                id="help-content",
+                markup=True,
+            )
 
     def on_click(self, event: Click) -> None:
-        self.dismiss()
+        if event.widget.id != "help-content":
+            self.dismiss()
 
 
-class OpenAIAuthScreen(ModalScreen):
+class ConfirmQuitScreen(ModalScreen[bool]):
     BINDINGS = [
-        ("enter", "start", "Start"),
-        ("escape", "dismiss", "Cancel"),
+        Binding("enter", "confirm", "Quit", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
+    ]
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal-dialog", id="quit-dialog"):
+            yield Label("QUIT CODEXSWITCH?", classes="modal-title")
+            yield Static(
+                "Pending changes have not been applied.\n"
+                "Press Enter to quit or Escape to continue.",
+                classes="modal-copy",
+            )
+
+    def action_confirm(self) -> None:
+        self.dismiss(True)
+
+    def action_cancel(self) -> None:
+        self.dismiss(False)
+
+
+class OpenAIAuthScreen(ModalScreen[str | None]):
+    BINDINGS = [
+        Binding("enter", "start", "Start", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
     ]
 
     def compose(self) -> ComposeResult:
         yield Static(
             """
-[bold white]OPENAI DEVICE SIGN-IN[/]
+[bold #000087]OPENAI DEVICE SIGN-IN[/]
 
-[black]
-Open the activation page when Codex shows the device code:
+[black]Open this page when Codex shows the device code:[/]
 
-  [bold white]https://chatgpt.com/activate[/]
+  [bold #000087]https://chatgpt.com/activate[/]
 
-CodexSwitch will temporarily leave the TUI and start:
+[black]CodexSwitch temporarily leaves the TUI and starts:[/]
 
-  codex login --device-auth
+  [bold #000087]codex login --device-auth[/]
 
-Codex will show the current device code. Enter that code on the page,
-finish login, then return here. When Codex reports the login is complete,
-CodexSwitch verifies ~/.codex/auth.json, saves the account and refreshes
-the provider/account list.
+[black]Complete the login, then return here. CodexSwitch verifies the
+active account and refreshes Providers.[/]
 
-[bold white]Enter[/] Start sign-in    [bold white]Esc[/] Cancel
+[bold #000087]Enter[/]: Start sign-in  •  [bold #000087]Esc[/]: Cancel
 """,
             id="openai-auth-dialog",
             markup=True,
         )
 
     def action_start(self) -> None:
-        self.dismiss()
-        self.app.run_openai_device_auth()
+        self.dismiss("start")
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
 
 
-class AzureAuthScreen(ModalScreen):
-    BINDINGS = [("escape", "dismiss", "Cancel")]
+class ApiKeyScreen(ModalScreen[str | None]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
-    def compose(self) -> ComposeResult:
-        credential = BACKEND["azure_credentials"]()
-        endpoint = credential.get("endpoint") or BACKEND["AZURE_DEFAULT_ENDPOINT"]
-        api_version = credential.get("api_version") or BACKEND["AZURE_DEFAULT_API_VERSION"]
-        yield Static(
-            "[bold white]AZURE OPENAI CREDENTIALS[/]\n\n"
-            "[black]Store the Azure endpoint, API version and API key in the "
-            "CodexSwitch secret store with 0600 file permissions.[/]",
-            id="api-key-title",
-            markup=True,
-        )
-        yield Input(value=endpoint, placeholder="Azure endpoint", id="azure-endpoint-input")
-        yield Input(value=api_version, placeholder="Azure API version", id="azure-version-input")
-        yield Input(password=True, placeholder="Azure API key", id="api-key-input")
-        yield Button("Save / Renew", id="api-key-save", variant="primary")
-        yield Button("Cancel", id="api-key-cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#api-key-input", Input).focus()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "api-key-cancel":
-            self.dismiss()
-            return
-        self.submit()
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        self.submit()
-
-    def submit(self) -> None:
-        endpoint = self.query_one("#azure-endpoint-input", Input).value.strip()
-        api_version = self.query_one("#azure-version-input", Input).value.strip()
-        key = self.query_one("#api-key-input", Input).value.strip()
-        if not endpoint:
-            self.app.set_status("Azure endpoint is empty", error=True)
-            return
-        if not key:
-            self.app.set_status("Azure API key is empty", error=True)
-            return
-        self.dismiss((endpoint, key, api_version))
-
-
-class ApiKeyScreen(ModalScreen):
-    BINDINGS = [
-        ("escape", "dismiss", "Cancel"),
-    ]
-
-    def __init__(self, provider: str):
+    def __init__(self, provider: str) -> None:
         super().__init__()
         self.provider = provider
-        self.provider_label = {
-            "opencode-go": "OpenCode Go",
-            "openrouter": "OpenRouter",
-        }[provider]
+        self.provider_label = PROVIDER_LABELS[provider]
 
     def compose(self) -> ComposeResult:
-        yield Static(
-            f"[bold white]{self.provider_label.upper()} API KEY[/]\n\n"
-            "[black]Paste the API key below. It is stored in the CodexSwitch "
-            "secret store with 0600 file permissions.[/]",
-            id="api-key-title",
-            markup=True,
-        )
-        yield Input(password=True, placeholder=f"{self.provider_label} API key", id="api-key-input")
-        yield Button("Save / Renew", id="api-key-save", variant="primary")
-        yield Button("Cancel", id="api-key-cancel")
+        with Vertical(classes="modal-dialog", id="api-key-dialog"):
+            yield Label(
+                f"{self.provider_label.upper()} API KEY",
+                classes="modal-title",
+            )
+            yield Static(
+                "The key is stored in the encrypted CodexSwitch vault.",
+                classes="modal-copy",
+            )
+            yield Label("API key", classes="field-label")
+            yield Input(
+                password=True,
+                placeholder=f"{self.provider_label} API key",
+                id="api-key-input",
+                classes="form-input",
+            )
+            yield Label("", id="form-error", classes="form-error")
+            with Horizontal(classes="modal-actions"):
+                yield Button("Save / Renew", id="api-key-save", variant="primary")
+                yield Button("Cancel", id="api-key-cancel")
 
     def on_mount(self) -> None:
         self.query_one("#api-key-input", Input).focus()
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "api-key-cancel":
-            self.dismiss()
-            return
-        key = self.query_one("#api-key-input", Input).value.strip()
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def submit(self) -> None:
+        field = self.query_one("#api-key-input", Input)
+        key = field.value.strip()
         if not key:
-            self.app.set_status(f"{self.provider_label} API key is empty", error=True)
+            self.query_one("#form-error", Label).update("API key is required")
+            field.focus()
             return
         self.dismiss(key)
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
-        key = event.value.strip()
-        if not key:
-            self.app.set_status(f"{self.provider_label} API key is empty", error=True)
+        self.submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "api-key-cancel":
+            self.dismiss(None)
+        else:
+            self.submit()
+
+
+class AzureAuthScreen(ModalScreen[tuple[str, str, str] | None]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, endpoint: str, api_version: str) -> None:
+        super().__init__()
+        self.endpoint = endpoint
+        self.api_version = api_version
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal-dialog", id="azure-dialog"):
+            yield Label("AZURE OPENAI CREDENTIALS", classes="modal-title")
+            yield Static(
+                "Credentials are stored in the encrypted CodexSwitch vault.",
+                classes="modal-copy",
+            )
+            yield Label("Endpoint", classes="field-label")
+            yield Input(
+                value=self.endpoint,
+                placeholder="https://…",
+                id="azure-endpoint-input",
+                classes="form-input",
+            )
+            yield Label("API version", classes="field-label")
+            yield Input(
+                value=self.api_version,
+                placeholder="API version",
+                id="azure-version-input",
+                classes="form-input",
+            )
+            yield Label("API key", classes="field-label")
+            yield Input(
+                password=True,
+                placeholder="Azure API key",
+                id="api-key-input",
+                classes="form-input",
+            )
+            yield Label("", id="form-error", classes="form-error")
+            with Horizontal(classes="modal-actions"):
+                yield Button("Save / Renew", id="api-key-save", variant="primary")
+                yield Button("Cancel", id="api-key-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#azure-endpoint-input", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "azure-endpoint-input":
+            self.query_one("#azure-version-input", Input).focus()
+        elif event.input.id == "azure-version-input":
+            self.query_one("#api-key-input", Input).focus()
+        else:
+            self.submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "api-key-cancel":
+            self.dismiss(None)
+        else:
+            self.submit()
+
+    def submit(self) -> None:
+        endpoint_field = self.query_one("#azure-endpoint-input", Input)
+        version_field = self.query_one("#azure-version-input", Input)
+        key_field = self.query_one("#api-key-input", Input)
+        error = self.query_one("#form-error", Label)
+        endpoint = endpoint_field.value.strip()
+        version = version_field.value.strip()
+        key = key_field.value.strip()
+        if not endpoint:
+            error.update("Endpoint is required")
+            endpoint_field.focus()
             return
-        self.dismiss(key)
+        if not version:
+            error.update("API version is required")
+            version_field.focus()
+            return
+        if not key:
+            error.update("API key is required")
+            key_field.focus()
+            return
+        self.dismiss((endpoint, key, version))
+
 
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
-    SUB_TITLE = f"v{BACKEND['VERSION']} · {BACKEND['CREDITS_OWNER']}"
+    SUB_TITLE = f"v{BACKEND['VERSION']}"
 
     CSS = """
     Screen {
@@ -277,25 +379,33 @@ class CodexSwitchApp(App):
         margin: 0 1;
     }
 
-    .pane {
-        height: 1fr;
+    .pane, #detail-box {
         border: solid #bcbcbc;
         background: #000087;
     }
 
-    .pane:focus-within, #reason-box:focus-within {
+    .pane:focus-within {
         border: heavy #ffff00;
+    }
+
+    #source-pane {
+        width: 28%;
+        min-width: 24;
+        max-width: 32;
     }
 
     #model-pane {
         width: 1fr;
+        min-width: 34;
     }
 
-    #source-pane {
-        width: 38;
+    #reason-box {
+        width: 24%;
+        min-width: 20;
+        max-width: 28;
     }
 
-    .pane-title {
+    .pane-title, .detail-title {
         height: 1;
         background: #bcbcbc;
         color: #000087;
@@ -303,8 +413,7 @@ class CodexSwitchApp(App):
         text-style: bold;
     }
 
-    .pane:focus-within > .pane-title,
-    #reason-box:focus-within > .lower-title {
+    .pane:focus-within > .pane-title {
         background: #ffff00;
         color: #000000;
     }
@@ -317,50 +426,53 @@ class CodexSwitchApp(App):
         border: none;
         scrollbar-color: #00afaf;
         scrollbar-background: #000087;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
 
     OptionList > .option-list--option-highlighted {
+        background: #000087;
+        color: #ffffff;
+        text-style: none;
+    }
+
+    OptionList > .option-list--option {
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
+    }
+
+    OptionList:focus > .option-list--option-highlighted {
         background: #00afaf;
         color: #000000;
         text-style: bold;
     }
 
-    #lower-pane {
-        height: 9;
-        margin: 0 1;
-    }
-
-    #detail-box, #reason-box {
-        height: 1fr;
-        border: solid #bcbcbc;
-        background: #000087;
+    #model-filter {
+        display: none;
+        width: 1fr;
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0 1;
+        background: #ffffff;
+        color: #000000;
     }
 
     #detail-box {
-        width: 1fr;
+        height: 7;
+        margin: 0 1;
         padding: 0 1;
     }
 
-    #reason-box {
-        width: 38;
-    }
-
-    .lower-title {
-        height: 1;
-        background: #bcbcbc;
-        color: #000087;
-        text-align: center;
-        text-style: bold;
+    .detail-title {
+        margin: 0 -1;
     }
 
     #model-detail {
         height: 1fr;
         color: #bcbcbc;
-    }
-
-    #reasoning {
-        width: 1fr;
-        height: 1fr;
+        text-wrap: nowrap;
+        text-overflow: ellipsis;
     }
 
     #status {
@@ -375,8 +487,6 @@ class CodexSwitchApp(App):
         height: 1;
         background: #00afaf;
         color: #000000;
-        text-align: center;
-        text-style: bold;
     }
 
     FKey {
@@ -393,43 +503,30 @@ class CodexSwitchApp(App):
         color: #000087;
     }
 
-    FKey:focus {
-        background: #ffff00;
-        color: #000000;
-    }
-
-    .fkey {
-        width: 1fr;
-        height: 1;
-        background: #00afaf;
-        color: #000000;
-        text-align: left;
+    #size-warning {
+        display: none;
+        overlay: screen;
+        width: 100%;
+        height: 100%;
+        background: #000087;
+        color: #ffff00;
         text-style: bold;
+        text-align: center;
+        content-align: center middle;
+        layer: overlay;
     }
 
-    SplashScreen {
-        align: center middle;
-        background: transparent;
-    }
-
-    HelpScreen {
-        align: center middle;
-        background: transparent;
-    }
-
-    OpenAIAuthScreen {
-        align: center middle;
-        background: transparent;
-    }
-
-    ApiKeyScreen {
+    SplashScreen, HelpScreen, ConfirmQuitScreen,
+    OpenAIAuthScreen, ApiKeyScreen, AzureAuthScreen {
         align: center middle;
         background: transparent;
     }
 
     #splash-dialog {
         width: 64;
+        max-width: 95%;
         height: 14;
+        max-height: 95%;
         border: double #000000;
         background: #00afaf;
         color: #000000;
@@ -437,169 +534,770 @@ class CodexSwitchApp(App):
     }
 
     #help-dialog {
-        width: 66;
-        height: 25;
+        width: 72;
+        max-width: 95%;
+        height: 38;
+        max-height: 92%;
         border: double #000000;
         background: #00afaf;
         color: #000000;
         padding: 1 2;
+        scrollbar-color: #000087;
+        scrollbar-background: #00afaf;
     }
 
     #openai-auth-dialog {
         width: 72;
-        height: 23;
+        max-width: 95%;
+        height: 20;
+        max-height: 92%;
         border: double #000000;
         background: #00afaf;
         color: #000000;
         padding: 1 2;
     }
 
-    #api-key-title {
-        width: 66;
-        height: 6;
-        border-top: double #000000;
-        border-left: double #000000;
-        border-right: double #000000;
+    .modal-dialog {
+        width: 68;
+        max-width: 95%;
+        height: auto;
+        max-height: 92%;
+        border: double #000000;
         background: #00afaf;
         color: #000000;
         padding: 1 2;
     }
 
-    #api-key-input, #azure-endpoint-input, #azure-version-input {
-        width: 66;
-        height: 3;
-        background: #ffffff;
-        color: #000000;
-        border-left: double #000000;
-        border-right: double #000000;
-        padding: 0 2;
+    #quit-dialog {
+        width: 54;
     }
 
-    #api-key-save, #api-key-cancel {
-        width: 66;
+    .modal-title {
+        height: 1;
+        color: #000087;
+        text-style: bold;
+        text-align: center;
+    }
+
+    .modal-copy {
+        height: auto;
+        color: #000000;
+        margin: 1 0;
+    }
+
+    .field-label {
+        height: 1;
+        color: #000000;
+        text-style: bold;
+    }
+
+    .form-input {
+        width: 1fr;
+        height: 1;
+        min-height: 1;
+        border: none;
+        padding: 0 1;
+        background: #ffffff;
+        color: #000000;
+    }
+
+    .form-input:focus {
+        background: #ffff00;
+        color: #000000;
+    }
+
+    .form-input > .input--placeholder {
+        color: #5f5f5f;
+    }
+
+    .form-error {
+        height: 1;
+        color: #870000;
+        text-style: bold;
+    }
+
+    .modal-actions {
         height: 3;
-        border-left: double #000000;
-        border-right: double #000000;
+        margin-top: 1;
+    }
+
+    .modal-actions Button {
+        width: 1fr;
+        height: 3;
         background: #00afaf;
         color: #000000;
         text-style: bold;
     }
 
-    #api-key-cancel {
-        border-bottom: double #000000;
+    .modal-actions Button:focus {
+        background: #ffff00;
+        color: #000000;
+        border: tall #000087;
     }
     """
 
     BINDINGS = [
         Binding("f1", "help", "Help", show=False),
-        Binding("f2", "accounts", "Accounts", show=False),
+        Binding("question_mark", "help", "Help", show=False),
+        Binding("f2", "accounts", "Providers", show=False),
+        Binding("p", "accounts", "Providers", show=False),
         Binding("f3", "models", "Models", show=False),
-        Binding("f4", "reasoning", "Reason", show=False),
+        Binding("m", "models", "Models", show=False),
+        Binding("f4", "reasoning", "Reasoning", show=False),
+        Binding("t", "reasoning", "Reasoning", show=False),
         Binding("f5", "refresh", "Refresh", show=False),
+        Binding("r", "refresh", "Refresh", show=False),
         Binding("f6", "apply", "Apply", show=False),
+        Binding("a", "apply", "Apply", show=False),
         Binding("f7", "auth", "Auth", show=False),
+        Binding("l", "auth", "Auth", show=False),
         Binding("f8", "status", "Status", show=False),
-        Binding("f9", "codex", "Codex", show=False),
-        Binding("f10", "quit", "Quit", show=False),
-        Binding("escape", "quit", "Quit", show=False),
+        Binding("s", "status", "Status", show=False),
+        Binding("f9", "codex", "Start", show=False),
+        Binding("c", "codex", "Start", show=False),
+        Binding("f10", "request_quit", "Quit", show=False),
+        Binding("q", "request_quit", "Quit", show=False),
+        Binding(
+            "ctrl+q",
+            "request_quit",
+            "Quit",
+            show=False,
+            priority=True,
+        ),
+        Binding("slash", "search_models", "Search", show=False),
+        Binding("left", "previous_panel", "Previous panel", show=False),
+        Binding("right", "next_panel", "Next panel", show=False),
+        Binding("escape", "cancel", "Cancel", show=False),
     ]
 
-    def __init__(self):
+    def __init__(
+        self,
+        backend: dict[str, Any] | None = None,
+        state_path: str | Path | None = None,
+        refresh_on_start: bool = True,
+    ) -> None:
         super().__init__()
-        self.provider = "openai"
-        self.account = None
-        self.model = None
-        self.catalog = {}
-        self.openai_metadata = {}
+        self.backend = backend or BACKEND
+        switch_home = Path(self.backend.get("SWITCH_HOME", Path.home() / ".config/codexswitch"))
+        self.state_path = Path(state_path) if state_path else switch_home / "tui-state.json"
+        self.refresh_on_start = refresh_on_start
+
+        self.active = Selection()
+        self.draft = Selection()
+        self.runtime_drift = False
         self.launch_codex = False
         self.loading_sources = False
+        self.loading_models = False
+        self.loading_reasoning = False
+        self.operation_busy = False
+        self.busy_providers: set[str] = set()
+        self.catalog_ready: set[str] = set()
+        self.model_filter_query = ""
+        self.search_has_no_results = False
+        self.unavailable_draft = False
+        self.modal_origin: str | None = None
+        self.small_screen_focus: str | None = None
+        self.too_small = False
+        self.last_focus_id: str | None = None
+        self.status_hint_held = False
+        self.backend_worker_lock = asyncio.Lock()
+
+        self.catalogs: dict[str, dict[str, dict]] = {
+            "openai": dict(self.backend.get("OPENAI_FALLBACK_CATALOG", {})),
+            "azure": {},
+            "opencode-go": dict(self.backend.get("OPENCODE_GO_FALLBACK_CATALOG", {})),
+            "openrouter": {},
+        }
+        self.model_lists: dict[str, list[str]] = {
+            "openai": list(self.backend.get("OPENAI_FALLBACK_MODELS", ["gpt-5.5"])),
+            "azure": list(self.backend.get("AZURE_MODELS", ["gpt-5.5"])),
+            "opencode-go": list(self.catalogs["opencode-go"]),
+            "openrouter": list(
+                self.backend.get("OPENROUTER_FALLBACK_MODELS", ["openrouter/auto"])
+            ),
+        }
+
+    @property
+    def provider(self) -> str:
+        return self.draft.provider
+
+    @provider.setter
+    def provider(self, value: str) -> None:
+        self.draft = replace(self.draft, provider=value)
+
+    @property
+    def account(self) -> str | None:
+        return self.draft.account
+
+    @account.setter
+    def account(self, value: str | None) -> None:
+        self.draft = replace(self.draft, account=value)
+
+    @property
+    def model(self) -> str | None:
+        return self.draft.model
+
+    @model.setter
+    def model(self, value: str | None) -> None:
+        self.draft = replace(self.draft, model=value)
+
+    @property
+    def catalog(self) -> dict[str, dict]:
+        return self.catalogs["opencode-go"]
+
+    @catalog.setter
+    def catalog(self, value: dict[str, dict]) -> None:
+        self.catalogs["opencode-go"] = value
+
+    @property
+    def openai_metadata(self) -> dict[str, dict]:
+        return self.catalogs["openai"]
+
+    @openai_metadata.setter
+    def openai_metadata(self, value: dict[str, dict]) -> None:
+        self.catalogs["openai"] = value
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="workspace"):
+            with Vertical(classes="pane", id="source-pane"):
+                yield Label("┤ PROVIDERS ├", classes="pane-title", id="source-title")
+                yield OptionList(id="sources")
             with Vertical(classes="pane", id="model-pane"):
                 yield Label("┤ MODELS ├", classes="pane-title")
-                yield OptionList(id="models")
-            with Vertical(classes="pane", id="source-pane"):
-                yield Label("┤ PROVIDERS / ACCOUNTS ├", classes="pane-title")
-                yield OptionList(id="sources")
-        with Horizontal(id="lower-pane"):
-            with Vertical(id="detail-box"):
-                yield Label("┤ MODEL DETAILS ├", classes="lower-title")
-                yield Static("", id="model-detail")
-            with Vertical(id="reason-box"):
-                yield Label("┤ REASONING ├", classes="lower-title")
-                yield OptionList(id="reasoning")
-        yield Static(" Ready", id="status")
-        with Horizontal(id="buttonbar"):
-            for number, label in FUNCTION_KEYS:
-                yield FKey(
-                    f"[reverse bold]{number:>2}[/] {label}",
-                    classes="fkey",
-                    id=f"fkey-{FKEY_ACTIONS[number]}",
-                    action=FKEY_ACTIONS[number],
-                    markup=True,
+                yield Input(
+                    placeholder="Filter model ID or name…",
+                    id="model-filter",
                 )
+                yield OptionList(id="models")
+            with Vertical(classes="pane", id="reason-box"):
+                yield Label("┤ REASONING ├", classes="pane-title")
+                yield OptionList(id="reasoning")
+        with Vertical(id="detail-box"):
+            yield Label("┤ MODEL DETAILS ├", classes="detail-title")
+            yield Static("", id="model-detail")
+        yield Static("Ready", id="status")
+        with Horizontal(id="buttonbar"):
+            for key, compact, full, action in FUNCTION_KEYS:
+                yield FKey(key, compact, full, action)
+        yield Static("", id="size-warning")
 
     def on_mount(self) -> None:
-        # Always refresh model catalogs from internet sources at startup so
-        # models, context limits and reasoning variants are current for both
-        # OpenCode Go and OpenRouter.  This works on fresh hosts without the
-        # opencode binary because refresh falls back to the upstream /models
-        # endpoint merged with the built-in catalog.
-        try:
-            self.capture(BACKEND["refresh_opencode_models"], False)
-            self.capture(BACKEND["refresh_openrouter_models"], False)
-        except Exception:
-            pass
-        self.load_state()
+        self.active = self.read_active_selection()
+        self.draft = self.active
+        if self.active.model:
+            models = self.model_lists.setdefault(self.active.provider, [])
+            if self.active.model not in models:
+                models.insert(0, self.active.model)
         self.load_sources()
         self.load_models()
-        self.query_one("#models", OptionList).focus()
-        self.push_screen(SplashScreen())
-        self.set_status(" Ready")
+        self.query_one("#sources", OptionList).focus()
+        self.update_responsive_ui(self.size.width, self.size.height)
+        self.update_status_hint()
+        if self.should_show_splash():
+            self.push_screen(SplashScreen(), self.on_splash_dismissed)
+        if self.refresh_on_start:
+            self.call_after_refresh(self.start_startup_refresh)
 
-    def on_click(self, event: Click) -> None:
-        """Handle mouse clicks on function key labels."""
-        if isinstance(event.control, FKey) and event.control.fkey_action:
-            asyncio.ensure_future(self.run_action(event.control.fkey_action))
+    # ---------- State and safe backend access ----------
 
-    def capture(self, function, *args):
-        output = io.StringIO()
-        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
-            try:
-                result = function(*args)
-            except SystemExit as exc:
-                return exc, output.getvalue().strip()
-        return result, output.getvalue().strip()
+    def safe_call(self, name: str, default: Any, *args) -> Any:
+        function = self.backend.get(name)
+        if function is None:
+            return default
+        try:
+            return function(*args)
+        except (Exception, SystemExit):
+            return default
 
-    def set_status(self, message: str, error: bool = False) -> None:
-        status = self.query_one("#status", Static)
-        status.update((" ERROR: " if error else " ") + message)
-        status.styles.background = "#870000" if error else "#000000"
+    def read_backend_json(self, path: Path | None, default: Any) -> Any:
+        if path is None:
+            return default
+        return self.safe_call("read_json", default, path, default)
 
-    def selection_label(self, effort: str | None = None) -> str:
-        label = f"{self.provider} / {self.model}"
-        if effort:
-            label += f" / {effort}"
-        if self.provider == "openai" and self.account:
-            label += f" / acct: {self.account}"
-        return label
+    def read_active_selection(self) -> Selection:
+        switch_path = self.backend.get("SWITCH_CONFIG")
+        state = self.read_backend_json(switch_path, {})
+        if not isinstance(state, dict):
+            state = {}
+        codex_state = self.safe_call("codex_config_state", {})
+        if not isinstance(codex_state, dict):
+            codex_state = {}
 
-    def load_state(self) -> None:
-        state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
-        self.provider = state.get("provider", "openai")
-        self.model = state.get("model")
-        auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
-        if self.provider not in {"openai", "azure", "opencode-go", "openrouter"}:
-            self.provider = "openai"
-        self.account = (
-            BACKEND["openai_auth_email"](auth)
-            if self.provider == "openai"
-            else None
+        saved_provider = state.get("provider", "openai")
+        runtime_provider = codex_state.get("model_provider")
+        provider = runtime_provider or saved_provider
+        if provider not in PROVIDERS:
+            provider = saved_provider if saved_provider in PROVIDERS else "openai"
+        saved_model = state.get("model")
+        runtime_model = codex_state.get("model")
+        model = runtime_model or saved_model
+        saved_reasoning = state.get("reasoning_effort")
+        runtime_reasoning = codex_state.get("model_reasoning_effort")
+        reasoning = (
+            runtime_reasoning
+            if "model_reasoning_effort" in codex_state
+            else saved_reasoning
         )
-        self.catalog = BACKEND["opencode_model_catalog"]()
-        self.openai_metadata = BACKEND["openai_model_catalog"]()
+
+        current_account = (
+            self.current_openai_account() if provider == "openai" else None
+        )
+        saved_account = state.get("openai_account") if provider == "openai" else None
+        account = current_account or saved_account
+        self.runtime_drift = any(
+            runtime_value != saved_value
+            for runtime_value, saved_value, runtime_key, saved_key in (
+                (runtime_provider, saved_provider, "model_provider", "provider"),
+                (runtime_model, saved_model, "model", "model"),
+                (
+                    runtime_reasoning,
+                    saved_reasoning,
+                    "model_reasoning_effort",
+                    "reasoning_effort",
+                ),
+            )
+            if runtime_key in codex_state or saved_key in state
+        )
+        if (
+            provider == "openai"
+            and saved_account is not None
+            and saved_account != current_account
+        ):
+            self.runtime_drift = True
+        return Selection(provider, account, model, reasoning)
+
+    def current_openai_account(self) -> str | None:
+        if self.backend.get("CODEX_HOME") is None:
+            return None
+        auth_path = Path(self.backend["CODEX_HOME"]) / "auth.json"
+        auth = self.read_backend_json(auth_path, {})
+        return self.safe_call("openai_auth_email", None, auth)
+
+    def selection_is_dirty(self) -> bool:
+        return self.draft != self.active or self.runtime_drift
+
+    def selection_label(self, selection: Selection | None = None) -> str:
+        selection = selection or self.draft
+        parts = [selection.provider, selection.model or "no model"]
+        if selection.reasoning:
+            parts.append(selection.reasoning)
+        if selection.provider == "openai" and selection.account:
+            parts.append(f"acct: {selection.account}")
+        return " / ".join(parts)
+
+    def status_selection_label(self, selection: Selection | None = None) -> str:
+        selection = selection or self.draft
+        if self.size.width >= 120:
+            return self.selection_label(selection)
+        return self.selection_label(replace(selection, account=None))
+
+    @staticmethod
+    def marker(active: bool, draft: bool) -> str:
+        if draft and not active:
+            return "◆"
+        if active:
+            return "●"
+        return "○"
+
+    def should_show_splash(self) -> bool:
+        try:
+            data = json.loads(self.state_path.read_text())
+        except (FileNotFoundError, json.JSONDecodeError, OSError):
+            return True
+        return data.get("splash_version") != self.backend.get("VERSION", BACKEND["VERSION"])
+
+    def mark_splash_seen(self) -> None:
+        version = self.backend.get("VERSION", BACKEND["VERSION"])
+        writer = self.backend.get("write_json")
+        if writer is not None:
+            try:
+                writer(self.state_path, {"splash_version": version})
+                return
+            except (Exception, SystemExit):
+                pass
+        try:
+            self.state_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = self.state_path.with_name(f".{self.state_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(json.dumps({"splash_version": version}, indent=2) + "\n")
+            os.replace(temporary, self.state_path)
+        except OSError:
+            pass
+
+    def on_splash_dismissed(self, result: bool | None) -> None:
+        self.mark_splash_seen()
+        self.restore_modal_focus()
+
+    # ---------- Option construction and selection ----------
+
+    def plain_option(
+        self,
+        marker: str,
+        label: str,
+        *,
+        indent: str = "",
+        bold: bool = False,
+        suffix: str = "",
+    ) -> Text:
+        text = Text(no_wrap=True, overflow="ellipsis")
+        text.append(f"{indent}{marker} ")
+        text.append(label, style="bold" if bold else None)
+        if suffix:
+            text.append(suffix)
+        return text
+
+    def source_options(self) -> list[Option]:
+        options: list[Option] = []
+        accounts = self.safe_call("openai_accounts", [])
+        if not isinstance(accounts, list):
+            accounts = []
+        for provider in PROVIDERS:
+            active = self.active.provider == provider
+            draft = self.draft.provider == provider
+            options.append(
+                Option(
+                    self.plain_option(
+                        self.marker(active, draft),
+                        PROVIDER_LABELS[provider].upper(),
+                        bold=True,
+                    ),
+                    id=f"provider:{provider}",
+                )
+            )
+            if provider == "openai":
+                for email in accounts:
+                    active_account = active and self.active.account == email
+                    draft_account = draft and self.draft.account == email
+                    options.append(
+                        Option(
+                            self.plain_option(
+                                self.marker(active_account, draft_account),
+                                str(email),
+                                indent="  ",
+                            ),
+                            id=f"account:{email}",
+                        )
+                    )
+                options.append(
+                    Option(
+                        Text("  + Add account", no_wrap=True, overflow="ellipsis"),
+                        id="action:add-openai-account",
+                    )
+                )
+        return options
+
+    @staticmethod
+    def source_target_id(selection: Selection) -> str:
+        if selection.provider == "openai" and selection.account:
+            return f"account:{selection.account}"
+        return f"provider:{selection.provider}"
+
+    def load_sources(self, target_id: str | None = None) -> None:
+        sources = self.query_one("#sources", OptionList)
+        current_id = target_id
+        if current_id is None and sources.highlighted_option is not None:
+            current_id = sources.highlighted_option.id
+        if current_id is None:
+            current_id = (
+                f"account:{self.draft.account}"
+                if self.draft.provider == "openai" and self.draft.account
+                else f"provider:{self.draft.provider}"
+            )
+        self.loading_sources = True
+        try:
+            sources.set_options(self.source_options())
+            for index, option in enumerate(sources.options):
+                if option.id == current_id:
+                    sources.highlighted = index
+                    break
+            else:
+                for index, option in enumerate(sources.options):
+                    if option.id == f"provider:{self.draft.provider}":
+                        sources.highlighted = index
+                        break
+        finally:
+            self.loading_sources = False
+
+    def update_source_markers(self) -> None:
+        sources = self.query_one("#sources", OptionList)
+        highlighted_id = sources.highlighted_option.id if sources.highlighted_option else None
+        replacement = self.source_options()
+        if len(replacement) != len(sources.options):
+            self.load_sources(highlighted_id)
+            return
+        for index, option in enumerate(replacement):
+            sources.replace_option_prompt_at_index(index, option.prompt)
+
+    def provider_default_model(self, provider: str, models: list[str]) -> str | None:
+        if not models:
+            return None
+        if self.active.provider == provider and self.active.model in models:
+            return self.active.model
+        defaults = {
+            "openai": "gpt-5.5",
+            "azure": self.backend.get("AZURE_MODEL", "gpt-5.5"),
+            "opencode-go": self.backend.get("DEFAULT_OPENCODE_MODEL"),
+            "openrouter": (
+                self.backend.get("OPENROUTER_FALLBACK_MODELS", [None]) or [None]
+            )[0],
+        }
+        default = defaults.get(provider)
+        return default if default in models else models[0]
+
+    def model_display_name(self, provider: str, model: str) -> str:
+        meta = self.catalogs.get(provider, {}).get(model, {})
+        if not isinstance(meta, dict):
+            return model
+        return str(meta.get("display_name") or meta.get("name") or model)
+
+    def filtered_model_ids(self, provider: str, models: list[str]) -> list[str]:
+        query = self.model_filter_query.casefold().strip()
+        if not query:
+            return models
+        return [
+            model
+            for model in models
+            if query in model.casefold()
+            or query in self.model_display_name(provider, model).casefold()
+        ]
+
+    def load_models(self, preserve_missing: bool = False) -> None:
+        provider = self.draft.provider
+        canonical = list(dict.fromkeys(self.model_lists.get(provider, [])))
+        draft_model = self.draft.model
+        self.unavailable_draft = False
+        if draft_model not in canonical:
+            if draft_model and preserve_missing:
+                self.unavailable_draft = self.active.model != draft_model
+            else:
+                draft_model = self.provider_default_model(provider, canonical)
+                self.draft = replace(self.draft, model=draft_model, reasoning=None)
+
+        visible_base = list(canonical)
+        for special in (
+            self.active.model if self.active.provider == provider else None,
+            draft_model,
+        ):
+            if special and special not in visible_base:
+                visible_base.insert(0, special)
+        visible = self.filtered_model_ids(provider, visible_base)
+
+        preview_model = draft_model
+        if visible and draft_model not in visible:
+            preview_model = visible[0]
+            draft_model = preview_model
+            self.draft = replace(self.draft, model=draft_model, reasoning=None)
+
+        self.search_has_no_results = bool(self.model_filter_query and not visible)
+
+        options: list[Option] = []
+        selected_index = 0
+        for index, model in enumerate(visible):
+            active = self.active.provider == provider and self.active.model == model
+            draft = self.draft.model == model
+            unavailable = model not in canonical and provider in self.catalog_ready
+            suffix = " [unavailable]" if unavailable else ""
+            options.append(
+                Option(
+                    self.plain_option(
+                        self.marker(active, draft),
+                        model,
+                        suffix=suffix,
+                    ),
+                    id=f"model:{model}",
+                )
+            )
+            if model == preview_model:
+                selected_index = index
+        if not options:
+            options = [Option(Text("  No matching models"), id=None, disabled=True)]
+
+        model_list = self.query_one("#models", OptionList)
+        self.loading_models = True
+        try:
+            model_list.set_options(options)
+            if visible:
+                model_list.highlighted = selected_index
+        finally:
+            self.loading_models = False
+        self.update_reasoning()
+        self.update_details()
+
+    def update_model_markers(self) -> None:
+        models = self.query_one("#models", OptionList)
+        provider = self.draft.provider
+        for index, option in enumerate(models.options):
+            if not option.id:
+                continue
+            model = option.id.split(":", 1)[1]
+            active = self.active.provider == provider and self.active.model == model
+            draft = self.draft.model == model
+            unavailable = (
+                model not in self.model_lists.get(provider, [])
+                and provider in self.catalog_ready
+            )
+            models.replace_option_prompt_at_index(
+                index,
+                self.plain_option(
+                    self.marker(active, draft),
+                    model,
+                    suffix=" [unavailable]" if unavailable else "",
+                ),
+            )
+
+    def reasoning_choices(self) -> list[tuple[str, str | None]]:
+        provider = self.draft.provider
+        model = self.draft.model
+        if not model:
+            return [("Model default", None)]
+        if provider == "azure":
+            return [("Model default", None)]
+        meta = self.catalogs.get(provider, {}).get(model, {})
+        if not isinstance(meta, dict):
+            meta = {}
+        choices: list[tuple[str, str | None]] = []
+        if provider == "openai":
+            levels = meta.get("supported_reasoning_levels", [])
+            if isinstance(levels, list):
+                for item in levels:
+                    effort = item.get("effort") if isinstance(item, dict) else None
+                    if isinstance(effort, str):
+                        choices.append((effort, effort))
+        elif provider == "opencode-go":
+            variants = meta.get("variants", {})
+            if isinstance(variants, dict):
+                if set(variants) == {"none", "thinking"}:
+                    choices = [("thinking", "high"), ("none", "none")]
+                else:
+                    for variant in variants:
+                        effort = "xhigh" if variant == "max" else variant
+                        if effort in {
+                            "none",
+                            "minimal",
+                            "low",
+                            "medium",
+                            "high",
+                            "xhigh",
+                        }:
+                            choices.append((variant, effort))
+        elif provider == "openrouter":
+            reasoning = meta.get("reasoning", {})
+            efforts = (
+                reasoning.get("supported_efforts", [])
+                if isinstance(reasoning, dict)
+                else []
+            )
+            seen: set[str] = set()
+            if isinstance(efforts, list):
+                for raw_effort in efforts:
+                    if not isinstance(raw_effort, str):
+                        continue
+                    if raw_effort == "max" and "xhigh" in efforts:
+                        continue
+                    effort = "xhigh" if raw_effort == "max" else raw_effort
+                    if effort not in seen:
+                        choices.append((raw_effort, effort))
+                        seen.add(effort)
+        if choices:
+            return choices
+        reasoning = meta.get("reasoning", {}) if isinstance(meta, dict) else {}
+        if isinstance(reasoning, dict) and reasoning.get("mandatory"):
+            return [("Model managed", None)]
+        if (
+            self.active.provider == provider
+            and self.active.model == model
+            and self.active.reasoning
+        ):
+            return [(self.active.reasoning, self.active.reasoning)]
+        return [("Model default", None)]
+
+    def default_reasoning(
+        self, choices: list[tuple[str, str | None]]
+    ) -> str | None:
+        values = {value for _, value in choices}
+        if None in values:
+            return None
+        provider = self.draft.provider
+        model = self.draft.model
+        meta = self.catalogs.get(provider, {}).get(model or "", {})
+        default = None
+        if isinstance(meta, dict):
+            default = meta.get("default_reasoning_level") or meta.get(
+                "default_effort"
+            )
+            reasoning = meta.get("reasoning", {})
+            if default is None and isinstance(reasoning, dict):
+                default = reasoning.get("default_effort")
+        if default == "max":
+            default = "xhigh"
+        if default is None:
+            for preferred in ("medium", "high", "xhigh", "low", "none"):
+                if preferred in values:
+                    default = preferred
+                    break
+        return str(default) if default in values else choices[0][1]
+
+    def update_reasoning(self) -> None:
+        choices = self.reasoning_choices()
+        values = {value for _, value in choices}
+        current = self.draft.reasoning
+        if current not in values:
+            if (
+                self.active.provider == self.draft.provider
+                and self.active.model == self.draft.model
+                and self.active.reasoning in values
+            ):
+                current = self.active.reasoning
+            else:
+                current = self.default_reasoning(choices)
+            self.draft = replace(self.draft, reasoning=current)
+
+        options: list[Option] = []
+        selected_index = 0
+        same_active_model = (
+            self.active.provider == self.draft.provider
+            and self.active.model == self.draft.model
+        )
+        for index, (label, value) in enumerate(choices):
+            active = same_active_model and self.active.reasoning == value
+            draft = self.draft.reasoning == value
+            option_value = DEFAULT_REASONING_VALUE if value is None else value
+            options.append(
+                Option(
+                    self.plain_option(self.marker(active, draft), label),
+                    id=f"reason:{option_value}",
+                )
+            )
+            if draft:
+                selected_index = index
+        reasoning = self.query_one("#reasoning", OptionList)
+        self.loading_reasoning = True
+        try:
+            reasoning.set_options(options)
+            reasoning.highlighted = selected_index
+        finally:
+            self.loading_reasoning = False
+
+    def update_reasoning_markers(self) -> None:
+        reasoning = self.query_one("#reasoning", OptionList)
+        same_active_model = (
+            self.active.provider == self.draft.provider
+            and self.active.model == self.draft.model
+        )
+        for index, option in enumerate(reasoning.options):
+            if not option.id:
+                continue
+            raw = option.id.split(":", 1)[1]
+            value = None if raw == DEFAULT_REASONING_VALUE else raw
+            label = str(option.prompt).lstrip(" ●◆○")
+            active = same_active_model and self.active.reasoning == value
+            draft = self.draft.reasoning == value
+            reasoning.replace_option_prompt_at_index(
+                index,
+                self.plain_option(self.marker(active, draft), label),
+            )
+
+    # ---------- Details and status ----------
 
     @staticmethod
     def token_value(*values) -> int | str:
@@ -614,570 +1312,947 @@ class CodexSwitchApp(App):
     def token_display(value: int | str) -> str:
         return f"{value:,}" if isinstance(value, int) else str(value)
 
-    def source_options(self) -> list[Option]:
-        openai_active = self.provider == "openai"
-        azure_active = self.provider == "azure"
-        opencode_active = self.provider == "opencode-go"
-        openrouter_active = self.provider == "openrouter"
-        options = [
-            Option(
-                Text.from_markup(
-                    f"[b]{'●' if openai_active else '○'} OPENAI[/]"
-                ),
-                id="provider:openai",
-            )
-        ]
-        accounts = BACKEND["openai_accounts"]()
-        for index, email in enumerate(accounts):
-            branch = "├─"
-            marker = "●" if openai_active and email == self.account else "○"
-            options.append(
-                Option(f"  {branch} {marker} {email}", id=f"account:{email}")
-            )
-        options.append(
-            Option("  └─ + add OpenAI account", id="action:add-openai-account")
-        )
-        options.append(
-            Option(
-                Text.from_markup(
-                    f"[b]{'●' if azure_active else '○'} AZURE[/]"
-                ),
-                id="provider:azure",
-            )
-        )
-        options.append(
-            Option("  └─ set/renew Azure credentials", id="action:auth-azure")
-        )
-        options.append(
-            Option(
-                Text.from_markup(
-                    f"[b]{'●' if opencode_active else '○'} OPENCODE GO[/]"
-                ),
-                id="provider:opencode-go",
-            )
-        )
-        options.append(
-            Option("  └─ set/renew API key", id="action:auth-opencode-go")
-        )
-        options.append(
-            Option(
-                Text.from_markup(
-                    f"[b]{'●' if openrouter_active else '○'} OPENROUTER[/]"
-                ),
-                id="provider:openrouter",
-            )
-        )
-        options.append(
-            Option("  └─ set/renew API key", id="action:auth-openrouter")
-        )
-        return options
-
-    def load_sources(self) -> None:
-        sources = self.query_one("#sources", OptionList)
-        self.loading_sources = True
-        try:
-            sources.set_options(self.source_options())
-            target = f"account:{self.account}" if self.provider == "openai" and self.account else f"provider:{self.provider}"
-            for index, option in enumerate(sources.options):
-                if option.id == target:
-                    sources.highlighted = index
-                    break
-        finally:
-            self.loading_sources = False
-
-    def update_source_markers(self) -> None:
-        sources = self.query_one("#sources", OptionList)
-        replacement = self.source_options()
-        if len(replacement) != len(sources.options):
-            self.load_sources()
-            return
-        for index, option in enumerate(replacement):
-            sources.replace_option_prompt_at_index(index, option.prompt)
-
-    def load_models(self) -> None:
-        if self.provider == "openai":
-            models = BACKEND["openai_models"]()
-        elif self.provider == "azure":
-            models = BACKEND["azure_models"]()
-        elif self.provider == "opencode-go":
-            models = BACKEND["opencode_models"]()
-        else:
-            models = BACKEND["openrouter_models"]()
-        options = []
-        for model in models:
-            marker = "●" if model == self.model else "○"
-            options.append(Option(f" {marker}  {model}", id=f"model:{model}"))
-        model_list = self.query_one("#models", OptionList)
-        model_list.set_options(options)
-        if self.provider in {"openai", "azure"}:
-            default_model = "gpt-5.5"
-        elif self.provider == "opencode-go":
-            default_model = BACKEND["DEFAULT_OPENCODE_MODEL"]
-        else:
-            default_model = BACKEND["OPENROUTER_FALLBACK_MODELS"][0]
-        selected_index = 0
-        for index, option in enumerate(model_list.options):
-            if option.id == f"model:{self.model or default_model}":
-                selected_index = index
-                break
-        if options:
-            model_list.highlighted = selected_index
-            self.model = model_list.highlighted_option.id.split(":", 1)[1]
-        self.update_details()
+    def auth_summary(self, provider: str) -> str:
+        if provider == "openai":
+            return self.draft.account or "not detected"
+        function = {
+            "azure": "azure_credentials_present",
+            "opencode-go": "opencode_go_key_present",
+            "openrouter": "openrouter_key_present",
+        }.get(provider)
+        return "ok" if self.safe_call(function, False) else "missing"
 
     def update_details(self) -> None:
         detail = self.query_one("#model-detail", Static)
-        reasoning = self.query_one("#reasoning", OptionList)
-        if not self.model:
-            detail.update("No model available")
-            reasoning.set_options([Option("  model default", id="reason:medium")])
-            reasoning.highlighted = 0
+        model = self.draft.model
+        provider = self.draft.provider
+        if not model:
+            detail.update(Text("No model available"))
             return
-
-        if self.provider == "opencode-go":
-            meta = self.catalog.get(self.model, {})
-            limits = meta.get("limit", {})
-            if not isinstance(limits, dict):
-                limits = meta.get("limits", {})
-            if not isinstance(limits, dict):
-                limits = {}
-            capabilities = meta.get("capabilities", {})
+        meta = self.catalogs.get(provider, {}).get(model, {})
+        if not isinstance(meta, dict):
+            meta = {}
+        name = self.model_display_name(provider, model)
+        context = self.token_value(
+            meta.get("context_window"),
+            meta.get("context_length"),
+            meta.get("max_context_tokens"),
+            (meta.get("limit") or {}).get("context")
+            if isinstance(meta.get("limit"), dict)
+            else None,
+            (meta.get("limit") or {}).get("input")
+            if isinstance(meta.get("limit"), dict)
+            else None,
+        )
+        output = self.token_value(
+            meta.get("max_output_tokens"),
+            meta.get("max_completion_tokens"),
+            meta.get("max_tokens"),
+            (meta.get("limit") or {}).get("output")
+            if isinstance(meta.get("limit"), dict)
+            else None,
+        )
+        capabilities = meta.get("capabilities", {})
+        architecture = meta.get("architecture", {})
+        modalities: list[str] = []
+        if isinstance(capabilities, dict) and isinstance(capabilities.get("input"), dict):
             modalities = [
-                name
-                for name, enabled in capabilities.get("input", {"text": True}).items()
+                str(name)
+                for name, enabled in capabilities["input"].items()
                 if enabled
             ]
-            variants = BACKEND["reasoning_choices"](self.model)
-            choices = variants or [("model default", DEFAULT_REASONING_VALUE)]
-            status = meta.get("status", "active")
-            ctx = self.token_value(
-                limits.get("context"),
-                limits.get("input"),
-                meta.get("context_length"),
-                meta.get("context_window"),
-            )
-            out = self.token_value(
-                limits.get("output"),
-                limits.get("max_output"),
-                limits.get("max_tokens"),
-                meta.get("max_output_tokens"),
-            )
-            detail.update(
-                f"[bold #ffff00]{meta.get('name', self.model)}[/]  "
-                f"[#5fd7ff]{meta.get('family', 'unknown')}[/]\n"
-                f"Tokens: {self.token_display(ctx)} context / {self.token_display(out)} output   "
-                f"Status: {status}\n"
-                f"Auth: {'ok' if BACKEND['opencode_go_key_present']() else 'missing'}   "
-                f"Input: {', '.join(modalities) or 'text'}   Tools: "
-                f"{'yes' if capabilities.get('toolcall') else 'no'}"
-            )
-        elif self.provider == "azure":
-            credential = BACKEND["azure_credentials"]()
-            choices = [("model default", DEFAULT_REASONING_VALUE)]
-            detail.update(
-                f"[bold #ffff00]{self.model}[/]  [#5fd7ff]Azure OpenAI[/]\n"
-                "Tokens: provider managed\n"
-                f"Endpoint: {credential.get('endpoint') or 'not configured'}\n"
-                f"Auth: {'ok' if BACKEND['azure_credentials_present']() else 'missing'}"
-            )
-        elif self.provider == "openai":
-            meta = self.openai_metadata.get(self.model, {})
-            context = self.token_value(
-                meta.get("context_window"),
-                meta.get("context_length"),
-                meta.get("max_context_tokens"),
-            )
-            output = self.token_value(
-                meta.get("max_output_tokens"),
-                meta.get("output_window"),
-                meta.get("max_tokens"),
-            )
-            choices = BACKEND["openai_reasoning_choices"](self.model) or [
-                ("model default", DEFAULT_REASONING_VALUE)
-            ]
-            default_reasoning = (
-                meta.get("default_reasoning_level")
-                or meta.get("default_effort")
-                or "model default"
-            )
-            detail.update(
-                f"[bold #ffff00]{meta.get('display_name', self.model)}[/]  "
-                f"[#5fd7ff]OpenAI[/]\n"
-                f"Tokens: {self.token_display(context)} context / {self.token_display(output)} output   "
-                f"Default reasoning: {default_reasoning}\n"
-                f"Account: {self.account or 'not detected'}"
-            )
+        elif isinstance(architecture, dict) and isinstance(
+            architecture.get("input_modalities"), list
+        ):
+            modalities = [str(value) for value in architecture["input_modalities"]]
+        elif isinstance(meta.get("input_modalities"), list):
+            modalities = [str(value) for value in meta["input_modalities"]]
+        if not modalities:
+            modalities = ["text"]
+        supported_parameters = meta.get("supported_parameters", [])
+        if isinstance(capabilities, dict) and "toolcall" in capabilities:
+            tools = "yes" if capabilities.get("toolcall") else "no"
+        elif isinstance(supported_parameters, list) and any(
+            value in supported_parameters for value in ("tools", "tool_choice")
+        ):
+            tools = "yes"
         else:
-            meta = BACKEND["openrouter_model_catalog"]().get(self.model, {})
-            architecture = meta.get("architecture", {}) if isinstance(meta, dict) else {}
-            context = self.token_value(
-                meta.get("context_length") if isinstance(meta, dict) else None,
-                meta.get("context_window") if isinstance(meta, dict) else None,
-            )
-            output = self.token_value(
-                meta.get("max_completion_tokens") if isinstance(meta, dict) else None,
-                meta.get("max_output_tokens") if isinstance(meta, dict) else None,
-            )
-            input_modalities = architecture.get("input_modalities", ["text"]) if isinstance(architecture, dict) else ["text"]
-            reasoning_info = meta.get("reasoning", {}) if isinstance(meta, dict) else {}
-            choices = BACKEND["openrouter_reasoning_choices"](self.model)
-            if not choices:
-                label = "model-managed" if reasoning_info.get("mandatory") else "provider default"
-                choices = [(label, DEFAULT_REASONING_VALUE)]
-            detail.update(
-                f"[bold #ffff00]{meta.get('name', self.model) if isinstance(meta, dict) else self.model}[/]  "
-                f"[#5fd7ff]OpenRouter[/]\n"
-                f"Tokens: {self.token_display(context)} context / {self.token_display(output)} output   "
-                f"Input: {', '.join(input_modalities)}\n"
-                f"Auth: {'ok' if BACKEND['openrouter_key_present']() else 'missing'}   "
-                f"Reasoning: {'mandatory' if reasoning_info.get('mandatory') else 'optional'}"
-            )
+            tools = "unknown"
+        reasoning = self.draft.reasoning or "model default"
 
-        state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
-        current = state.get("reasoning_effort")
-        values = {value for _, value in choices}
-        if current not in values:
-            if DEFAULT_REASONING_VALUE in values:
-                current = DEFAULT_REASONING_VALUE
-            else:
-                if self.provider in ("opencode-go", "openrouter"):
-                    current = BACKEND["default_reasoning_effort"](self.model)
-                elif self.provider == "azure":
-                    current = DEFAULT_REASONING_VALUE
-                else:
-                    current = meta.get("default_reasoning_level", "medium")
-        if current not in values:
-            current = choices[0][1]
-        reason_options = []
-        selected_index = 0
-        for index, (label, value) in enumerate(choices):
-            marker = "●" if value == current else "○"
-            reason_options.append(
-                Option(f" {marker}  {label}", id=f"reason:{value}")
-            )
-            if value == current:
-                selected_index = index
-        reasoning.set_options(reason_options)
-        reasoning.highlighted = selected_index
+        text = Text(no_wrap=True, overflow="ellipsis")
+        text.append(name, style="bold #ffff00")
+        text.append(" · ")
+        text.append(PROVIDER_LABELS.get(provider, provider), style="#5fd7ff")
+        text.append("\nID: ")
+        text.append(model)
+        if provider == "openai" and self.draft.account:
+            text.append(f" · Account: {self.draft.account}")
+        text.append(
+            f"\nContext: {self.token_display(context)} · "
+            f"Output: {self.token_display(output)} · Reasoning: {reasoning}"
+        )
+        state = "UNAVAILABLE" if self.unavailable_draft else f"Auth: {self.auth_summary(provider)}"
+        text.append(
+            f"\n{state} · Input: {','.join(modalities)} · Tools: {tools}"
+        )
+        detail.update(text)
 
-    def select_source(self, option_id: str) -> None:
-        kind, value = option_id.split(":", 1)
-        if kind == "action":
+    def set_status(
+        self, message: str, error: bool = False, hold: bool = False
+    ) -> None:
+        status = self.query_one("#status", Static)
+        self.status_hint_held = error or hold
+        status.update(
+            Text(
+                ("ERROR · " if error else "") + message,
+                no_wrap=True,
+                overflow="ellipsis",
+            )
+        )
+        status.styles.background = "#870000" if error else "#000000"
+
+    def update_status_hint_if_clear(self) -> None:
+        """Keep an operation result visible across its programmatic focus change."""
+        if not self.status_hint_held:
+            self.update_status_hint()
+
+    def update_status_hint(self) -> None:
+        focused_id = self.focused.id if self.focused is not None else ""
+        self.last_focus_id = focused_id
+        if focused_id == "sources":
+            source = self.query_one("#sources", OptionList).highlighted_option
+            action = (
+                "Enter: add account"
+                if source is not None and source.id == "action:add-openai-account"
+                else "Enter: models"
+            )
+        elif focused_id == "model-filter" and self.search_has_no_results:
+            action = "No matches · Esc: clear search"
+        elif focused_id == "model-filter":
+            action = "Enter: select model · Esc: clear search"
+        elif focused_id == "models":
+            action = "Enter: reasoning"
+        elif focused_id == "reasoning":
+            action = "Enter: start (sandbox bypass)"
+        else:
+            action = "←→/Tab: panels · /: search"
+        state = "OUT OF SYNC" if self.runtime_drift else (
+            "PENDING" if self.selection_is_dirty() else "ACTIVE"
+        )
+        self.set_status(f"{action} · {state} · {self.status_selection_label()}")
+
+    # ---------- Events and navigation ----------
+
+    def on_click(self, event: Click) -> None:
+        if isinstance(event.control, OptionList):
+            self.status_hint_held = False
+        if isinstance(event.control, FKey) and event.control.fkey_action:
+            asyncio.create_task(self.run_action(event.control.fkey_action))
+
+    def on_descendant_focus(self, event: DescendantFocus) -> None:
+        focused_id = event.widget.id
+        if focused_id in {"sources", "models", "reasoning", "model-filter"}:
+            if focused_id != self.last_focus_id:
+                self.call_after_refresh(self.update_status_hint_if_clear)
+
+    def on_key(self, event: Key) -> None:
+        if event.key in {
+            "up",
+            "down",
+            "home",
+            "end",
+            "pageup",
+            "pagedown",
+            "tab",
+            "shift+tab",
+        }:
+            self.status_hint_held = False
+        focused = self.focused
+        if focused is not None and focused.id == "model-filter":
+            models = self.query_one("#models", OptionList)
+            if event.key == "up":
+                models.action_cursor_up()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "down":
+                models.action_cursor_down()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "pageup":
+                models.action_page_up()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "pagedown":
+                models.action_page_down()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "home":
+                models.action_first()
+                event.prevent_default()
+                event.stop()
+            elif event.key == "end":
+                models.action_last()
+                event.prevent_default()
+                event.stop()
+
+    def on_option_list_option_highlighted(
+        self, event: OptionList.OptionHighlighted
+    ) -> None:
+        if self.too_small:
             return
-        if kind == "account":
-            self.provider = "openai"
-            self.account = value
-        else:
-            self.provider = value
-            if value == "openai":
-                auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
-                self.account = BACKEND["openai_auth_email"](auth)
-            else:
-                self.account = None
-        self.model = None
-        self.update_source_markers()
-        self.load_models()
-        self.set_status(f"Selected {self.provider}")
-
-    def on_option_list_option_highlighted(self, event: OptionList.OptionHighlighted) -> None:
-        if event.option_list.id == "sources" and event.option.id and not self.loading_sources:
+        if not event.option.id:
+            return
+        highlighted = event.option_list.highlighted_option
+        if highlighted is None or highlighted.id != event.option.id:
+            return
+        if event.option_list.id == "sources" and not self.loading_sources:
             kind, value = event.option.id.split(":", 1)
             if kind == "action":
+                self.update_status_hint_if_clear()
                 return
-            selected_provider = "openai" if kind == "account" else value
-            selected_account = value if kind == "account" else (
-                self.account if selected_provider == "openai" else None
+            provider = "openai" if kind == "account" else value
+            account = value if kind == "account" else (
+                self.current_openai_account() if provider == "openai" else None
             )
-            if selected_provider != self.provider or selected_account != self.account:
-                self.select_source(event.option.id)
-        elif event.option_list.id == "models" and event.option.id:
-            self.model = event.option.id.split(":", 1)[1]
+            same_provider = provider == self.draft.provider
+            self.draft = Selection(
+                provider,
+                account,
+                self.draft.model if same_provider else None,
+                self.draft.reasoning if same_provider else None,
+            )
+            self.update_source_markers()
+            self.load_models()
+            self.update_status_hint_if_clear()
+        elif event.option_list.id == "models" and not self.loading_models:
+            model = event.option.id.split(":", 1)[1]
+            self.draft = replace(self.draft, model=model, reasoning=None)
+            self.unavailable_draft = (
+                model not in self.model_lists.get(self.draft.provider, [])
+                and self.draft.provider in self.catalog_ready
+                and not (
+                    self.active.provider == self.draft.provider
+                    and self.active.model == model
+                )
+            )
+            self.update_model_markers()
+            self.update_reasoning()
             self.update_details()
-        elif event.option_list.id == "reasoning" and event.option.id:
-            selected = event.option.id.split(":", 1)[1]
-            try:
-                self.mark_reasoning(selected)
-            except NoMatches:
-                return
-            if event.option_list.has_focus:
-                self.show_ready_to_start(selected)
+            self.update_status_hint_if_clear()
+        elif event.option_list.id == "reasoning" and not self.loading_reasoning:
+            raw = event.option.id.split(":", 1)[1]
+            value = None if raw == DEFAULT_REASONING_VALUE else raw
+            self.draft = replace(self.draft, reasoning=value)
+            self.update_reasoning_markers()
+            self.update_details()
+            self.update_status_hint_if_clear()
 
-    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+    def on_option_list_option_selected(
+        self, event: OptionList.OptionSelected
+    ) -> None:
         if not event.option.id:
             return
         if event.option_list.id == "sources":
             kind, value = event.option.id.split(":", 1)
             if kind == "action" and value == "add-openai-account":
-                self.provider = "openai"
-                self.account = None
-                self.action_auth()
-                return
-            if kind == "action" and value == "auth-azure":
-                self.provider = "azure"
-                self.account = None
-                self.action_auth()
-                return
-            if kind == "action" and value == "auth-opencode-go":
-                self.provider = "opencode-go"
-                self.account = None
-                self.action_auth()
-                return
-            if kind == "action" and value == "auth-openrouter":
-                self.provider = "openrouter"
-                self.account = None
-                self.action_auth()
-                return
-            selected_provider = "openai" if kind == "account" else value
-            selected_account = value if kind == "account" else (
-                self.account if selected_provider == "openai" else None
-            )
-            if selected_provider != self.provider or selected_account != self.account:
-                self.select_source(event.option.id)
-            self.query_one("#models", OptionList).focus()
+                self.open_auth("openai")
+            else:
+                self.action_models()
         elif event.option_list.id == "models":
-            self.model = event.option.id.split(":", 1)[1]
-            self.update_details()
-            self.query_one("#reasoning", OptionList).focus()
-            self.show_ready_to_start(self.selected_reasoning())
+            self.action_reasoning()
         elif event.option_list.id == "reasoning":
             self.action_codex()
 
-    def action_help(self) -> None:
-        self.push_screen(HelpScreen())
+    def on_input_changed(self, event: Input.Changed) -> None:
+        if event.input.id == "model-filter" and not self.too_small:
+            self.model_filter_query = event.value
+            self.load_models()
+            self.update_status_hint()
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id != "model-filter":
+            return
+        option = self.query_one("#models", OptionList).highlighted_option
+        if option is None or not option.id:
+            self.set_status("No matching model to select", error=True)
+            return
+        model = option.id.split(":", 1)[1]
+        self.draft = replace(self.draft, model=model, reasoning=None)
+        self.unavailable_draft = False
+        self.close_model_filter()
+        self.action_reasoning()
 
     def action_accounts(self) -> None:
+        if self.too_small:
+            return
         self.query_one("#sources", OptionList).focus()
+        self.update_status_hint()
 
     def action_models(self) -> None:
+        if self.too_small:
+            return
         self.query_one("#models", OptionList).focus()
+        self.update_status_hint()
 
     def action_reasoning(self) -> None:
+        if self.too_small:
+            return
         self.query_one("#reasoning", OptionList).focus()
+        self.update_status_hint()
 
-    def selected_reasoning(self) -> str | None:
-        reasoning = self.query_one("#reasoning", OptionList)
-        option = reasoning.highlighted_option
-        if option is None or not option.id:
-            return None
-        value = option.id.split(":", 1)[1]
-        return None if value == DEFAULT_REASONING_VALUE else value
+    def panel_index(self) -> int:
+        focused_id = self.focused.id if self.focused is not None else "sources"
+        if focused_id == "model-filter":
+            focused_id = "models"
+        return {"sources": 0, "models": 1, "reasoning": 2}.get(focused_id, 0)
 
-    def mark_reasoning(self, selected: str) -> None:
-        reasoning = self.query_one("#reasoning", OptionList)
-        for index, option in enumerate(reasoning.options):
-            if not option.id:
-                continue
-            value = option.id.split(":", 1)[1]
-            label = str(option.prompt).lstrip(" ●○")
-            marker = "●" if value == selected else "○"
-            reasoning.replace_option_prompt_at_index(
-                index, f" {marker}  {label}"
-            )
+    def focus_panel(self, index: int) -> None:
+        target = ("#sources", "#models", "#reasoning")[index]
+        self.query_one(target, OptionList).focus()
+        self.update_status_hint()
 
-    def show_ready_to_start(self, effort: str | None = None) -> None:
-        if not self.model:
+    def action_previous_panel(self) -> None:
+        if self.too_small:
             return
-        self.set_status(
-            f"Ready: {self.selection_label(effort)} — Enter starts Codex"
-        )
-
-    def action_refresh(self) -> None:
-        refreshers = {
-            "openai": ("OpenAI Codex", BACKEND["refresh_openai_models"]),
-            "opencode-go": ("OpenCode Go", BACKEND["refresh_opencode_models"]),
-            "openrouter": ("OpenRouter", BACKEND["refresh_openrouter_models"]),
-        }
-        if self.provider == "azure":
-            self.set_status("Azure uses a fixed model catalog")
+        if self.focused is not None and self.focused.id == "model-filter":
             return
-        name, refresh = refreshers[self.provider]
-        self.set_status(f"Refreshing {name} catalog...")
-        result, output = self.capture(refresh, False)
-        if isinstance(result, SystemExit) or result is False:
+        self.focus_panel(max(0, self.panel_index() - 1))
+
+    def action_next_panel(self) -> None:
+        if self.too_small:
+            return
+        if self.focused is not None and self.focused.id == "model-filter":
+            return
+        self.focus_panel(min(2, self.panel_index() + 1))
+
+    def action_search_models(self) -> None:
+        if self.operation_busy or self.too_small:
+            return
+        field = self.query_one("#model-filter", Input)
+        field.styles.display = "block"
+        field.focus()
+        self.update_status_hint()
+
+    def close_model_filter(self) -> None:
+        field = self.query_one("#model-filter", Input)
+        self.model_filter_query = ""
+        field.value = ""
+        field.styles.display = "none"
+        self.load_models(preserve_missing=True)
+        self.query_one("#models", OptionList).focus()
+        self.update_status_hint()
+
+    def action_cancel(self) -> None:
+        if self.too_small:
+            return
+        field = self.query_one("#model-filter", Input)
+        if field.styles.display != "none":
+            self.close_model_filter()
+            return
+        if self.draft != self.active:
+            self.draft = self.active
+            self.load_sources(self.source_target_id(self.active))
+            self.load_models()
+            self.set_status("Pending selection restored to active configuration")
+        elif self.runtime_drift:
             self.set_status(
-                output or "Model refresh failed; existing cache retained",
+                "Codex runtime differs from CodexSwitch state; "
+                "F6 reapplies the active runtime selection",
                 error=True,
             )
+        else:
+            self.set_status("F10/q quits · F1/? opens help")
+
+    # ---------- Responsive layout ----------
+
+    def on_resize(self, event: Resize) -> None:
+        self.update_responsive_ui(event.size.width, event.size.height)
+
+    def update_responsive_ui(self, width: int, height: int) -> None:
+        compact_footer = width < 120
+        compact_source_title = width < 100
+        try:
+            self.query_one("#source-title", Label).update(
+                "┤ PROVIDERS ├"
+                if compact_source_title
+                else "┤ PROVIDERS / ACCOUNTS ├"
+            )
+            for key in self.query(FKey):
+                key.set_compact(compact_footer)
+            warning = self.query_one("#size-warning", Static)
+            too_small = width < 80 or height < 24
+            if too_small:
+                if self.focused is not None and self.focused.id != "size-warning":
+                    self.small_screen_focus = self.focused.id
+                warning.update(
+                    "Minimum terminal size: 80×24\n"
+                    f"Current size: {width}×{height}\n\n"
+                    "Resize or press F10/q to quit"
+                )
+                warning.styles.display = "block"
+                if not self.too_small:
+                    self.workflow_disabled(True)
+                self.too_small = True
+            else:
+                was_visible = warning.styles.display != "none"
+                warning.styles.display = "none"
+                self.too_small = False
+                if was_visible and not self.operation_busy:
+                    self.workflow_disabled(False)
+                if was_visible and self.small_screen_focus:
+                    try:
+                        self.query_one(f"#{self.small_screen_focus}").focus()
+                    except Exception:
+                        self.query_one("#sources", OptionList).focus()
+                    self.small_screen_focus = None
+        except Exception:
             return
-        if self.provider == "openai":
-            self.openai_metadata = BACKEND["openai_model_catalog"]()
-        elif self.provider == "opencode-go":
-            self.catalog = BACKEND["opencode_model_catalog"]()
-        self.load_models()
-        self.set_status(output.splitlines()[-1] if output else f"{name} catalog refreshed")
+
+    # ---------- Help, quit and modal focus ----------
+
+    def remember_modal_focus(self) -> None:
+        self.modal_origin = self.focused.id if self.focused is not None else "sources"
+
+    def restore_modal_focus(self, update_status: bool = True) -> None:
+        if self.modal_origin:
+            try:
+                self.query_one(f"#{self.modal_origin}").focus()
+            except Exception:
+                self.query_one("#sources", OptionList).focus()
+        self.modal_origin = None
+        if update_status:
+            self.update_status_hint()
+
+    def action_help(self) -> None:
+        self.remember_modal_focus()
+        self.push_screen(HelpScreen(), lambda _: self.restore_modal_focus())
+
+    def action_request_quit(self) -> None:
+        if isinstance(self.screen, ModalScreen):
+            return
+        if self.operation_busy:
+            self.set_status("An operation is still running", error=True)
+            return
+        if not self.selection_is_dirty():
+            self.exit()
+            return
+        self.remember_modal_focus()
+        self.push_screen(ConfirmQuitScreen(), self.finish_quit_request)
+
+    def finish_quit_request(self, confirmed: bool | None) -> None:
+        if confirmed:
+            self.exit()
+        else:
+            self.restore_modal_focus()
+
+    # ---------- Catalog workers ----------
+
+    def capture(self, function, *args) -> tuple[Any, str]:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), contextlib.redirect_stderr(output):
+            try:
+                result = function(*args)
+            except SystemExit as exc:
+                return exc, output.getvalue().strip()
+        return result, output.getvalue().strip()
+
+    def provider_data_sync(self, provider: str, refresh: bool) -> dict[str, Any]:
+        refreshers = {
+            "openai": "refresh_openai_models",
+            "opencode-go": "refresh_opencode_models",
+            "openrouter": "refresh_openrouter_models",
+        }
+        getters = {
+            "openai": ("openai_models", "openai_model_catalog"),
+            "azure": ("azure_models", None),
+            "opencode-go": ("opencode_models", "opencode_model_catalog"),
+            "openrouter": ("openrouter_models", "openrouter_model_catalog"),
+        }
+        success = True
+        output = ""
+        refresher_name = refreshers.get(provider)
+        if refresh and refresher_name and self.backend.get(refresher_name):
+            result, output = self.capture(self.backend[refresher_name], False)
+            success = not isinstance(result, SystemExit) and result is not False
+        model_name, catalog_name = getters[provider]
+        models = self.safe_call(model_name, self.model_lists.get(provider, []))
+        catalog = self.safe_call(catalog_name, {}) if catalog_name else {}
+        return {
+            "provider": provider,
+            "success": success,
+            "output": output,
+            "models": list(models) if isinstance(models, (list, tuple)) else [],
+            "catalog": catalog if isinstance(catalog, dict) else {},
+        }
+
+    def apply_provider_data(self, data: dict[str, Any], preserve_missing: bool) -> None:
+        provider = data["provider"]
+        models = data.get("models") or self.model_lists.get(provider, [])
+        if models:
+            self.model_lists[provider] = list(dict.fromkeys(models))
+        catalog = data.get("catalog")
+        if catalog:
+            self.catalogs[provider] = catalog
+        self.catalog_ready.add(provider)
+        if self.draft.provider == provider:
+            self.load_models(preserve_missing=preserve_missing)
+
+    def start_startup_refresh(self) -> None:
+        if self.operation_busy or self.busy_providers:
+            return
+        self.run_worker(
+            self.startup_refresh_worker(),
+            name="startup-catalogs",
+            group="catalogs",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def startup_refresh_worker(self) -> None:
+        providers = ("openai", "opencode-go", "openrouter")
+        self.busy_providers.update(providers)
+        self.set_status("Loading model catalogs in the background…")
+        failed = False
+        try:
+            for provider in providers:
+                try:
+                    async with self.backend_worker_lock:
+                        data = await asyncio.to_thread(
+                            self.provider_data_sync, provider, True
+                        )
+                    failed = failed or not data["success"]
+                    self.apply_provider_data(data, preserve_missing=True)
+                except Exception:
+                    failed = True
+                finally:
+                    self.busy_providers.discard(provider)
+        finally:
+            self.busy_providers.difference_update(providers)
+        if failed:
+            self.set_status(
+                "Some catalogs could not refresh; cached models were retained",
+                error=True,
+            )
+        else:
+            self.update_status_hint()
+
+    def action_refresh(self) -> None:
+        if self.too_small:
+            return
+        provider = self.draft.provider
+        if provider == "azure":
+            self.set_status("Azure uses a fixed model catalog")
+            return
+        if self.operation_busy or self.busy_providers:
+            self.set_status("A catalog or configuration operation is already running", error=True)
+            return
+        self.run_worker(
+            self.refresh_provider_worker(provider),
+            name=f"refresh-{provider}",
+            group="catalogs",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def refresh_provider_worker(self, provider: str) -> None:
+        self.busy_providers.add(provider)
+        self.set_status(f"Refreshing {PROVIDER_LABELS[provider]} catalog…")
+        try:
+            async with self.backend_worker_lock:
+                data = await asyncio.to_thread(
+                    self.provider_data_sync, provider, True
+                )
+            if not data["success"]:
+                self.set_status(
+                    "Catalog refresh failed; the existing catalog was retained",
+                    error=True,
+                )
+                return
+            self.apply_provider_data(data, preserve_missing=True)
+            self.set_status(f"{PROVIDER_LABELS[provider]} catalog refreshed")
+        except Exception as exc:
+            self.set_status(str(exc) or "Catalog refresh failed", error=True)
+        finally:
+            self.busy_providers.discard(provider)
+
+    # ---------- Apply and launch workers ----------
+
+    def workflow_disabled(self, disabled: bool) -> None:
+        for selector in ("#sources", "#models", "#reasoning", "#model-filter"):
+            self.query_one(selector).disabled = disabled
+
+    def validate_draft(self) -> bool:
+        if self.model_filter_query:
+            option = self.query_one("#models", OptionList).highlighted_option
+            if self.search_has_no_results or option is None or not option.id:
+                self.set_status("No matching model to apply or start", error=True)
+                self.query_one("#model-filter", Input).focus()
+                return False
+            model = option.id.split(":", 1)[1]
+            self.draft = replace(self.draft, model=model, reasoning=None)
+            self.unavailable_draft = False
+            self.close_model_filter()
+        if not self.draft.model:
+            self.set_status("Select a model first", error=True)
+            self.action_models()
+            return False
+        if self.unavailable_draft:
+            self.set_status(
+                "The pending model is no longer available; select another model",
+                error=True,
+            )
+            self.action_models()
+            return False
+        if self.draft.provider in self.busy_providers:
+            self.set_status("Wait for the provider refresh to finish", error=True)
+            return False
+        return True
+
+    def apply_selection_sync(
+        self,
+        selection: Selection,
+        original: Selection,
+        original_account: str | None,
+    ) -> tuple[bool, str, str]:
+        messages: list[str] = []
+        needs_account_switch = (
+            selection.provider == "openai"
+            and selection.account is not None
+            and selection.account != original_account
+        )
+
+        def rollback_config() -> str:
+            if not original.model:
+                return "original model is unknown"
+            try:
+                result, output = self.capture(
+                    self.backend["update_codex_config"],
+                    original.provider,
+                    original.model,
+                    original.reasoning,
+                )
+            except Exception as exc:
+                return str(exc) or "configuration rollback failed"
+            if isinstance(result, SystemExit):
+                return output or "configuration rollback failed"
+            return ""
+
+        try:
+            result, output = self.capture(
+                self.backend["validate_provider_model"],
+                selection.provider,
+                selection.model,
+            )
+            if isinstance(result, SystemExit):
+                return False, output or "Invalid provider or model", "models"
+            result, output = self.capture(
+                self.backend["update_codex_config"],
+                selection.provider,
+                selection.model,
+                selection.reasoning,
+            )
+            if isinstance(result, SystemExit):
+                return False, output or "Could not activate selection", "reasoning"
+            if output:
+                messages.append(output)
+            if needs_account_switch:
+                try:
+                    result, output = self.capture(
+                        self.backend["use_openai_account"], selection.account
+                    )
+                except Exception as exc:
+                    rollback_error = rollback_config()
+                    message = str(exc) or "Could not activate account"
+                    if rollback_error:
+                        message += f"; {rollback_error}"
+                    return False, message, "sources"
+                if isinstance(result, SystemExit):
+                    rollback_error = rollback_config()
+                    message = output or "Could not activate account"
+                    if rollback_error:
+                        message += f"; {rollback_error}"
+                    return False, message, "sources"
+                if output:
+                    messages.append(output)
+            return True, messages[-1] if messages else "Selection applied", ""
+        except Exception as exc:
+            return False, str(exc) or "Could not activate selection", "models"
+
+    def request_apply(self, launch: bool) -> None:
+        if self.too_small:
+            return
+        if self.operation_busy:
+            self.set_status("A configuration operation is already running", error=True)
+            return
+        if not self.validate_draft():
+            return
+        if launch and not self.selection_is_dirty():
+            self.launch_codex = True
+            self.exit()
+            return
+        snapshot = self.draft
+        original = self.active
+        original_account = self.current_openai_account()
+        origin = self.focused.id if self.focused is not None else "sources"
+        self.run_worker(
+            self.apply_worker(
+                snapshot, original, launch, origin, original_account
+            ),
+            name="apply-selection",
+            group="configuration",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def apply_worker(
+        self,
+        selection: Selection,
+        original: Selection,
+        launch: bool,
+        origin: str,
+        original_account: str | None,
+    ) -> None:
+        self.operation_busy = True
+        self.workflow_disabled(True)
+        self.set_status("Applying selection…")
+        error_message: str | None = None
+        error_focus = origin
+        try:
+            async with self.backend_worker_lock:
+                success, message, error_focus = await asyncio.to_thread(
+                    self.apply_selection_sync,
+                    selection,
+                    original,
+                    original_account,
+                )
+            if not success:
+                error_message = message
+                return
+            self.active = self.read_active_selection()
+            self.draft = self.active
+            self.load_sources(self.source_target_id(self.active))
+            self.load_models(preserve_missing=True)
+            if self.runtime_drift:
+                error_message = (
+                    "Selection was written, but Codex runtime and "
+                    "CodexSwitch state are still out of sync"
+                )
+                return
+            if launch:
+                self.launch_codex = True
+                self.exit()
+                return
+            self.set_status(
+                f"Active · {self.status_selection_label(self.active)}", hold=True
+            )
+        finally:
+            self.operation_busy = False
+            if not self.launch_codex:
+                if not self.too_small:
+                    self.workflow_disabled(False)
+                try:
+                    self.query_one(f"#{error_focus if error_message else origin}").focus()
+                except Exception:
+                    self.query_one("#sources", OptionList).focus()
+                if error_message:
+                    self.set_status(error_message, error=True)
 
     def action_apply(self) -> None:
-        if not self.model:
-            self.set_status("Select a model first", error=True)
+        self.request_apply(launch=False)
+
+    def action_codex(self) -> None:
+        self.request_apply(launch=True)
+
+    def action_status(self) -> None:
+        if self.too_small:
             return
-        try:
-            output = []
-            if self.provider == "openai" and self.account:
-                result, text = self.capture(
-                    BACKEND["use_openai_account"], self.account
-                )
-                if isinstance(result, SystemExit):
-                    self.set_status(
-                        text or "Could not activate account", error=True
-                    )
-                    return
-                output.append(text)
-            result, text = self.capture(
-                BACKEND["validate_provider_model"], self.provider, self.model
+        if self.operation_busy:
+            self.set_status("A configuration operation is still running", error=True)
+            return
+        self.active = self.read_active_selection()
+        self.draft = self.active
+        field = self.query_one("#model-filter", Input)
+        self.model_filter_query = ""
+        self.search_has_no_results = False
+        field.value = ""
+        field.styles.display = "none"
+        self.load_sources(self.source_target_id(self.active))
+        self.load_models()
+        if self.runtime_drift:
+            self.set_status(
+                "Out of sync · Codex runtime and CodexSwitch state differ; "
+                "F6 reapplies this selection",
+                error=True,
             )
-            if isinstance(result, SystemExit):
-                self.set_status(
-                    text or "Invalid provider or model", error=True
-                )
-                return
-            effort = self.selected_reasoning()
-            result, text = self.capture(
-                BACKEND["update_codex_config"], self.provider, self.model, effort
+        else:
+            self.set_status(
+                f"Active status reloaded · {self.status_selection_label(self.active)}",
+                hold=True,
             )
-            if isinstance(result, SystemExit):
-                self.set_status(
-                    text or "Could not activate selection", error=True
-                )
-                return
-            output.append(text)
-            self.load_state()
-            self.load_sources()
-            self.load_models()
-            applied_state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
-            active_effort = applied_state.get("reasoning_effort")
-            self.set_status(f"Active: {self.selection_label(active_effort)}")
-        except Exception as exc:
-            self.set_status(str(exc) or "Could not activate selection", error=True)
+
+    # ---------- Authentication ----------
 
     def action_auth(self) -> None:
-        if self.provider == "openai":
-            return self.push_screen(OpenAIAuthScreen())
-        if self.provider == "azure":
-            return self.push_screen(AzureAuthScreen(), self.store_azure_credentials)
-        if self.provider in {"opencode-go", "openrouter"}:
-            return self.push_screen(
-                ApiKeyScreen(self.provider), self.store_api_key
+        self.open_auth(self.draft.provider)
+
+    def open_auth(self, provider: str) -> None:
+        if self.too_small:
+            return
+        if self.operation_busy or self.busy_providers:
+            self.set_status("A configuration operation is already running", error=True)
+            return
+        self.remember_modal_focus()
+        if provider == "openai":
+            self.push_screen(
+                OpenAIAuthScreen(),
+                lambda result: self.finish_openai_auth(result),
             )
-        self.set_status(f"Starting {self.provider} authentication...")
-        try:
-            with self.suspend():
-                subprocess.run(
-                    [str(BACKEND_PATH), "auth", self.provider],
-                    check=True,
-                    env={**os.environ, "HOME": str(BACKEND["HOME"])},
-                )
-            self.load_state()
-            self.load_sources()
-            self.set_status(f"{self.provider} authentication completed")
-        except subprocess.CalledProcessError:
-            self.set_status("Authentication was not completed", error=True)
-
-    def store_azure_credentials(self, payload) -> None:
-        if not payload:
             return
-        endpoint, key, api_version = payload
-        result, output = self.capture(
-            BACKEND["save_azure_credentials"], endpoint, key, api_version
+        if provider == "azure":
+            credential = self.safe_call("azure_credentials", {})
+            if not isinstance(credential, dict):
+                credential = {}
+            endpoint = credential.get("endpoint") or self.backend.get(
+                "AZURE_DEFAULT_ENDPOINT", ""
+            )
+            version = credential.get("api_version") or self.backend.get(
+                "AZURE_DEFAULT_API_VERSION", ""
+            )
+            self.push_screen(
+                AzureAuthScreen(str(endpoint), str(version)),
+                lambda payload: self.finish_credential_modal(provider, payload),
+            )
+            return
+        self.push_screen(
+            ApiKeyScreen(provider),
+            lambda payload: self.finish_credential_modal(provider, payload),
         )
-        if isinstance(result, SystemExit):
-            self.set_status(output or "Azure credentials were not saved", error=True)
-            return
-        self.load_models()
-        self.set_status("Azure credentials saved")
 
-    def store_api_key(self, key: str | None) -> None:
-        if not key:
+    def finish_openai_auth(self, result: str | None) -> None:
+        if result != "start":
+            self.restore_modal_focus()
             return
-        try:
-            if self.provider == "openrouter":
-                result, output = self.capture(BACKEND["save_openrouter_key"], key)
-                refresh_result, refresh_output = self.capture(
-                    BACKEND["refresh_openrouter_models"], False
-                )
-            elif self.provider == "opencode-go":
-                result, output = self.capture(BACKEND["save_opencode_go_key"], key)
-                refresh_result, refresh_output = self.capture(
-                    BACKEND["refresh_opencode_models"], False
-                )
-            else:
-                return
-            if isinstance(result, SystemExit):
-                self.set_status(output or "API key was not saved", error=True)
-                return
-            self.load_models()
-            refresh_message = refresh_output.splitlines()[-1] if refresh_output else ""
-            suffix = f"; {refresh_message}" if refresh_message and not isinstance(refresh_result, SystemExit) else ""
-            self.set_status(f"{self.provider} API key saved{suffix}")
-        except Exception as exc:
-            self.set_status(str(exc) or "API key was not saved", error=True)
+        self.run_openai_device_auth()
 
     def run_openai_device_auth(self) -> None:
-        self.set_status("Starting OpenAI device sign-in...")
+        self.set_status("Starting OpenAI device sign-in…")
         try:
             with self.suspend():
                 subprocess.run(
                     [str(BACKEND_PATH), "auth", "openai"],
                     check=True,
-                    env={**os.environ, "HOME": str(BACKEND["HOME"])},
+                    env={**os.environ, "HOME": str(self.backend.get("HOME", Path.home()))},
                 )
-            auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
-            email = BACKEND["openai_auth_email"](auth)
+            auth_path = Path(self.backend["CODEX_HOME"]) / "auth.json"
+            auth = self.read_backend_json(auth_path, {})
+            email = self.safe_call("openai_auth_email", None, auth)
             if not email:
                 self.set_status(
                     "OpenAI login completed, but no account email was detected",
                     error=True,
                 )
                 return
-            self.account = email
-            self.provider = "openai"
-            self.load_state()
-            self.load_sources()
+            same_provider = self.draft.provider == "openai"
+            self.draft = Selection(
+                "openai",
+                email,
+                self.draft.model if same_provider else None,
+                self.draft.reasoning if same_provider else None,
+            )
+            self.load_sources(f"account:{email}")
             self.load_models()
-            self.set_status(f"OpenAI account added: {email}")
+            self.set_status(f"OpenAI account added · {email}", hold=True)
         except subprocess.CalledProcessError:
             self.set_status("OpenAI sign-in was not completed", error=True)
         except Exception as exc:
             self.set_status(str(exc) or "OpenAI sign-in failed", error=True)
+        finally:
+            self.restore_modal_focus(update_status=False)
 
-    def action_status(self) -> None:
-        self.load_state()
-        self.load_sources()
-        self.load_models()
-        self.set_status(f"Active: {self.selection_label()}")
+    def finish_credential_modal(self, provider: str, payload: Any) -> None:
+        if not payload:
+            self.restore_modal_focus()
+            return
+        origin = self.modal_origin or "sources"
+        self.modal_origin = None
+        self.run_worker(
+            self.save_credentials_worker(provider, payload, origin),
+            name=f"auth-{provider}",
+            group="configuration",
+            exclusive=True,
+            exit_on_error=False,
+        )
 
-    def selection_is_dirty(self) -> bool:
-        """Check if current selection differs from the active config."""
-        state = BACKEND["read_json"](BACKEND["SWITCH_CONFIG"], {})
-        codex_state = BACKEND["codex_config_state"]()
-        if self.provider != state.get("provider"):
-            return True
-        if self.provider != codex_state.get("model_provider"):
-            return True
-        if self.model and self.model != state.get("model"):
-            return True
-        if self.model and self.model != codex_state.get("model"):
-            return True
-        if self.provider == "openai" and self.account:
-            auth = BACKEND["read_json"](BACKEND["CODEX_HOME"] / "auth.json", {})
-            active_account = BACKEND["openai_auth_email"](auth)
-            if self.account != active_account:
-                return True
-        effort = self.selected_reasoning()
-        if effort and effort != state.get("reasoning_effort"):
-            return True
-        if effort and effort != codex_state.get("model_reasoning_effort"):
-            return True
-        return False
+    def save_credentials_sync(
+        self, provider: str, payload: Any
+    ) -> tuple[bool, str, dict[str, Any], bool]:
+        saved = False
+        try:
+            if provider == "azure":
+                endpoint, key, version = payload
+                result, output = self.capture(
+                    self.backend["save_azure_credentials"], endpoint, key, version
+                )
+            elif provider == "opencode-go":
+                result, output = self.capture(
+                    self.backend["save_opencode_go_key"], payload
+                )
+            else:
+                result, output = self.capture(
+                    self.backend["save_openrouter_key"], payload
+                )
+            if isinstance(result, SystemExit):
+                return False, output or "Credentials were not saved", {}, False
+            saved = True
+            data = self.provider_data_sync(provider, provider != "azure")
+            return True, output or "Credentials saved", data, bool(data["success"])
+        except Exception as exc:
+            if saved:
+                return True, str(exc) or "Catalog refresh failed", {}, False
+            return False, str(exc) or "Credentials were not saved", {}, False
 
-    def action_codex(self) -> None:
-        if self.selection_is_dirty():
-            self.set_status("Applying selection...")
-            self.action_apply()
-            if self.selection_is_dirty():
-                self.set_status("Could not apply selection; press F6 to retry", error=True)
+    async def save_credentials_worker(
+        self, provider: str, payload: Any, origin: str
+    ) -> None:
+        self.operation_busy = True
+        self.busy_providers.add(provider)
+        self.set_status(f"Saving {PROVIDER_LABELS[provider]} credentials…")
+        final_message = ""
+        final_error = False
+        try:
+            async with self.backend_worker_lock:
+                success, message, data, refresh_ok = await asyncio.to_thread(
+                    self.save_credentials_sync, provider, payload
+                )
+            if not success:
+                final_message = message
+                final_error = True
                 return
-        self.launch_codex = True
-        self.exit()
+            if data and refresh_ok:
+                self.apply_provider_data(data, preserve_missing=True)
+            if refresh_ok:
+                final_message = f"{PROVIDER_LABELS[provider]} credentials saved"
+            else:
+                final_message = (
+                    f"{PROVIDER_LABELS[provider]} credentials saved; "
+                    "catalog refresh failed and the existing catalog was retained"
+                )
+                final_error = True
+        finally:
+            self.operation_busy = False
+            self.busy_providers.discard(provider)
+            try:
+                self.query_one(f"#{origin}").focus()
+            except Exception:
+                self.query_one("#sources", OptionList).focus()
+            if final_message:
+                self.set_status(final_message, error=final_error, hold=True)
+
+
+def codex_launch_argv(binary: str | None = None) -> list[str]:
+    binary = binary or BACKEND["codex_bin"]()
+    return [binary, *CODEX_TUI_LAUNCH_ARGS]
 
 
 def main() -> int:
@@ -1188,11 +2263,6 @@ def main() -> int:
         argv = codex_launch_argv()
         os.execvp(argv[0], argv)
     return 0
-
-
-def codex_launch_argv(binary: str | None = None) -> list[str]:
-    binary = binary or BACKEND["codex_bin"]()
-    return [binary, *CODEX_TUI_LAUNCH_ARGS]
 
 
 if __name__ == "__main__":

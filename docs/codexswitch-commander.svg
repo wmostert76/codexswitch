@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1482 1026" role="img" aria-labelledby="title desc">
   <title id="title">CodexSwitch Commander TUI screenshot</title>
-  <desc id="desc">A sanitized full-color Commander-style terminal interface for CodexSwitch.</desc>
+  <desc id="desc">A sanitized full-color wide CodexSwitch Commander terminal with Providers and Accounts, Models and Reasoning panels, full-width model details, an action-first pending status and complete F1 through F10 labels.</desc>
   <defs>
     <style>
       .frame { fill: #1e1e1e; stroke: rgba(255,255,255,.35); stroke-width: 1; }
@@ -13,14 +13,19 @@
       .active-title-bg { fill: #ffff00; }
       .select { fill: #00afaf; }
       .keybar { fill: #00afaf; }
-      .key-no { fill: #000087; }
-      .txt { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 25px; fill: #bcbcbc; }
-      .txt-small { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 22px; fill: #bcbcbc; }
-      .txt-dim { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 22px; fill: #8a8a8a; }
-      .txt-black { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 25px; fill: #000000; font-weight: 700; }
-      .txt-white { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 24px; fill: #ffffff; }
-      .txt-yellow { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 25px; fill: #ffff00; font-weight: 700; }
-      .txt-cyan { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 25px; fill: #5fd7ff; }
+      .keycap { fill: #000087; }
+      .txt { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 24px; fill: #bcbcbc; }
+      .txt-small { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 21px; fill: #bcbcbc; }
+      .txt-dim { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 20px; fill: #8a8a8a; }
+      .txt-black { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 24px; fill: #000000; font-weight: 700; }
+      .txt-white { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 20px; fill: #ffffff; }
+      .txt-yellow { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 24px; fill: #ffff00; font-weight: 700; }
+      .txt-cyan { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 21px; fill: #5fd7ff; }
+      .status-action { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 18px; fill: #ffffff; }
+      .status-state { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 18px; fill: #ffff00; font-weight: 700; }
+      .status-selection { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 18px; fill: #5fd7ff; }
+      .keycap-text { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 17px; fill: #ffffff; font-weight: 700; }
+      .key-label { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 18px; fill: #000000; font-weight: 700; }
       .window-title { font-family: "DejaVu Sans Mono", "SFMono-Regular", Consolas, monospace; font-size: 18px; fill: #c5c8c6; }
     </style>
   </defs>
@@ -31,62 +36,105 @@
 
   <rect class="bar" x="18" y="44" width="1446" height="33"/>
   <text class="txt-black" x="36" y="69">◉</text>
-  <text class="txt-black" text-anchor="middle" x="741" y="69">CodexSwitch Commander — v0.6.2 · by WAM-Software since (c) 1988</text>
+  <text class="txt-black" text-anchor="middle" x="741" y="69">CodexSwitch Commander · v1.0.0</text>
   <text class="txt-black" text-anchor="end" x="1444" y="69">11:58:44</text>
 
-  <rect class="panel-active" x="32" y="98" width="930" height="620"/>
-  <rect class="title-bg" x="57" y="115" width="160" height="34"/>
-  <text class="txt-black" x="68" y="141">┤ MODELS ├</text>
+  <!-- Providers -->
+  <rect class="panel" x="32" y="98" width="369" height="550"/>
+  <rect class="title-bg" x="44" y="115" width="345" height="34"/>
+  <text class="txt-black" x="46" y="141">┤ PROVIDERS / ACCOUNTS ├</text>
 
-  <rect class="panel" x="980" y="98" width="450" height="620"/>
-  <rect class="title-bg" x="1005" y="115" width="365" height="34"/>
-  <text class="txt-black" x="1017" y="141">┤ PROVIDERS / ACCOUNTS ├</text>
+  <text class="txt" x="53" y="190">○ OPENAI</text>
+  <text class="txt-small" x="53" y="230">  └─ pilot@example.test</text>
+  <text class="txt-small" x="53" y="270">  + Add account</text>
+  <text class="txt" x="53" y="326">○ AZURE</text>
+  <text class="txt" x="53" y="374">● OPENCODE GO</text>
+  <text class="txt" x="53" y="422">○ OPENROUTER</text>
 
-  <rect class="select" x="52" y="164" width="890" height="34"/>
-  <text class="txt-black" x="70" y="190"> ●  openai/gpt-5.5</text>
-  <text class="txt" x="70" y="232"> ○  anthropic/claude-sonnet-4.5</text>
-  <text class="txt" x="70" y="274"> ○  deepseek/deepseek-v4-pro</text>
-  <text class="txt" x="70" y="316"> ○  google/gemini-2.5-pro</text>
-  <text class="txt" x="70" y="358"> ○  moonshotai/kimi-k2.7-code</text>
-  <text class="txt" x="70" y="400"> ○  openrouter/auto</text>
-  <text class="txt" x="70" y="442"> ○  qwen/qwen3-coder</text>
-  <text class="txt-dim" x="70" y="484"> ○  z-ai/glm-5.2</text>
+  <!-- Models: the yellow border and cyan row show keyboard focus -->
+  <rect class="panel-active" x="419" y="98" width="669" height="550"/>
+  <rect class="active-title-bg" x="442" y="115" width="158" height="34"/>
+  <text class="txt-black" x="453" y="141">┤ MODELS ├</text>
 
-  <text class="txt" x="1006" y="190">○ OPENAI</text>
-  <text class="txt-small" x="1006" y="232">  ├─ ○ user-one@example.test</text>
-  <text class="txt-small" x="1006" y="274">  ├─ ○ user-two@example.test</text>
-  <text class="txt-small" x="1006" y="316">  └─ + add OpenAI account</text>
-  <rect class="select" x="998" y="342" width="414" height="34"/>
-  <text class="txt-black" x="1006" y="368">● OPENCODE GO</text>
-  <text class="txt" x="1006" y="410">○ OPENROUTER</text>
+  <text class="txt" x="445" y="190">● opencode/atlas-code-demo</text>
+  <rect class="select" x="439" y="204" width="629" height="38"/>
+  <text class="txt-black" x="445" y="232">◆ opencode/nebula-code-pro-demo</text>
+  <text class="txt" x="445" y="274">○ opencode/cascade-mini-demo</text>
+  <text class="txt" x="445" y="316">○ opencode/meridian-code-demo</text>
+  <text class="txt" x="445" y="358">○ opencode/vertex-lab-demo</text>
+  <text class="txt" x="445" y="400">○ opencode/solstice-demo</text>
+  <text class="txt" x="445" y="442">○ opencode/harbor-code-demo</text>
+  <text class="txt" x="445" y="484">○ opencode/orbit-preview-demo</text>
+  <text class="txt" x="445" y="526">○ opencode/horizon-code-demo</text>
 
-  <rect class="panel" x="32" y="748" width="930" height="168"/>
-  <rect class="title-bg" x="57" y="765" width="238" height="34"/>
-  <text class="txt-black" x="68" y="791">┤ MODEL DETAILS ├</text>
-  <text class="txt-yellow" x="70" y="840">OpenRouter Auto</text>
-  <text class="txt-cyan" x="330" y="840">OpenRouter</text>
-  <text class="txt" x="70" y="882">Context: dynamic   Input: text   Auth: ok</text>
+  <!-- Reasoning -->
+  <rect class="panel" x="1106" y="98" width="324" height="550"/>
+  <rect class="title-bg" x="1129" y="115" width="210" height="34"/>
+  <text class="txt-black" x="1140" y="141">┤ REASONING ├</text>
 
-  <rect class="panel" x="980" y="748" width="450" height="168"/>
-  <rect class="title-bg" x="1005" y="765" width="170" height="34"/>
-  <text class="txt-black" x="1017" y="791">┤ REASONING ├</text>
-  <text class="txt" x="1017" y="840"> ●  medium</text>
-  <text class="txt" x="1017" y="882"> ○  high</text>
+  <text class="txt" x="1130" y="200">○ low</text>
+  <text class="txt" x="1130" y="248">○ medium</text>
+  <text class="txt-yellow" x="1130" y="296">◆ high</text>
+  <text class="txt" x="1130" y="344">○ xhigh</text>
 
+  <!-- Full-width details -->
+  <rect class="panel" x="32" y="668" width="1398" height="248"/>
+  <rect class="title-bg" x="55" y="685" width="238" height="34"/>
+  <text class="txt-black" x="66" y="711">┤ MODEL DETAILS ├</text>
+
+  <text class="txt-yellow" x="66" y="759">Nebula Code Pro (Demo)</text>
+  <text class="txt-small" x="380" y="759"> · </text>
+  <text class="txt-cyan" x="425" y="759">OpenCode Go</text>
+  <text class="txt-small" x="66" y="802">ID: opencode/nebula-code-pro-demo</text>
+  <text class="txt-small" x="66" y="845">Context: 128,000 · Output: 16,000 · Reasoning: high</text>
+  <text class="txt-small" x="66" y="888">Auth: ok · Input: text · Tools: yes</text>
+
+  <!-- Action-first status -->
   <rect class="status" x="32" y="936" width="1398" height="31"/>
-  <text class="txt-white" x="52" y="961">Ready</text>
+  <text class="status-action" x="50" y="959">Enter: start (sandbox bypass) · </text>
+  <text class="status-state" x="401" y="959">PENDING</text>
+  <text class="status-selection" x="493" y="959"> · opencode-go / opencode/nebula-code-pro-demo / high</text>
 
+  <!-- Clickable Commander-style F1–F10 bar -->
   <rect class="keybar" x="18" y="967" width="1446" height="29"/>
-  <g class="txt-black">
-    <text x="34" y="991"><tspan class="key-no"> 1</tspan> Help</text>
-    <text x="180" y="991"><tspan class="key-no"> 2</tspan> Prov</text>
-    <text x="326" y="991"><tspan class="key-no"> 3</tspan> Model</text>
-    <text x="472" y="991"><tspan class="key-no"> 4</tspan> Think</text>
-    <text x="618" y="991"><tspan class="key-no"> 5</tspan> Fresh</text>
-    <text x="764" y="991"><tspan class="key-no"> 6</tspan> Apply</text>
-    <text x="910" y="991"><tspan class="key-no"> 7</tspan> Auth</text>
-    <text x="1056" y="991"><tspan class="key-no"> 8</tspan> Stat</text>
-    <text x="1202" y="991"><tspan class="key-no"> 9</tspan> Codex</text>
-    <text x="1340" y="991"><tspan class="key-no">10</tspan> Quit</text>
-  </g>
+
+  <rect class="keycap" x="22" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="41" y="988">F1</text>
+  <text class="key-label" x="67" y="989">Help</text>
+
+  <rect class="keycap" x="167" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="186" y="988">F2</text>
+  <text class="key-label" x="212" y="989">Providers</text>
+
+  <rect class="keycap" x="311" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="330" y="988">F3</text>
+  <text class="key-label" x="356" y="989">Models</text>
+
+  <rect class="keycap" x="456" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="475" y="988">F4</text>
+  <text class="key-label" x="501" y="989">Reasoning</text>
+
+  <rect class="keycap" x="600" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="619" y="988">F5</text>
+  <text class="key-label" x="645" y="989">Refresh</text>
+
+  <rect class="keycap" x="745" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="764" y="988">F6</text>
+  <text class="key-label" x="790" y="989">Apply</text>
+
+  <rect class="keycap" x="890" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="909" y="988">F7</text>
+  <text class="key-label" x="935" y="989">Auth</text>
+
+  <rect class="keycap" x="1034" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="1053" y="988">F8</text>
+  <text class="key-label" x="1079" y="989">Status</text>
+
+  <rect class="keycap" x="1179" y="969" width="38" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="1198" y="988">F9</text>
+  <text class="key-label" x="1224" y="989">Start</text>
+
+  <rect class="keycap" x="1323" y="969" width="46" height="25"/>
+  <text class="keycap-text" text-anchor="middle" x="1346" y="988">F10</text>
+  <text class="key-label" x="1375" y="989">Quit</text>
 </svg>

@@ -2,6 +2,42 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.0.0] - 2026-07-10
+
+### Changed
+
+- Redesigned the Commander TUI around a responsive three-pane
+  `Providers → Models → Reasoning` workflow with full-width model details.
+- Added complete arrow, Home/End, PageUp/PageDown, Tab and Shift+Tab navigation,
+  plus `?`, `p`, `m`, `t`, `r`, `a`, `l`, `s`, `c` and `q` alternatives for
+  the existing `F1`–`F10` actions.
+- Separated active and pending selections visually: browsing no longer changes
+  Codex until `F6`/`a` applies it or the final `Enter`/`F9`/`c` launches it.
+- Catalog startup and refresh now run in the background so the interface stays
+  responsive, retains the last usable catalog on failure and reports busy or
+  unavailable selections clearly.
+- `Esc` now closes the current dialog or search, or resets pending choices to
+  the active configuration; `q`/`F10` handles quitting and confirms when
+  unapplied changes exist.
+
+### Fixed
+
+- Fixed provider authentication so `F7` always targets the pending provider
+  and cancelling a credentials dialog leaves provider/model state untouched.
+- Kept the current OpenAI account synchronized with CodexSwitch state and made
+  account changes transactional with model-config rollback on activation error.
+- Fixed Help and credential dialogs to stay centered and inside the supported
+  `80x24` viewport, including visible button focus and keyboard-first Azure
+  field validation.
+- Fixed external model/account text containing Rich markup characters so it is
+  displayed literally instead of being interpreted as styling.
+
+### Added
+
+- Added case-insensitive `/` model search across display names and full model
+  IDs, with arrow-key result selection and Enter-to-Reasoning flow.
+- Added a once-per-version Commander splash that remains accessible from Help.
+
 ## [0.9.0] - 2026-07-09
 
 ### Changed

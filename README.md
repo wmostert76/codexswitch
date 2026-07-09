@@ -34,7 +34,7 @@ It is built for three workflows:
 
 ## Highlights
 
-- Commander-style TUI with provider/account and model panes
+- Commander-style TUI with Providers, Models and Reasoning panes
 - OpenAI multi-account management without losing rotated refresh tokens
 - Azure OpenAI selection for a single configured `gpt-5.5` deployment
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
@@ -103,18 +103,44 @@ SHA256SUMS
 
 ## Keyboard workflow
 
+The Commander TUI follows a left-to-right `Providers → Models → Reasoning`
+workflow, with full-width model details below the three selection panes. The
+cyan cursor shows the item being inspected, `●` marks the active Codex
+configuration and `◆` marks a pending selection. Moving through choices only
+updates the pending selection; Codex configuration is not changed until you
+apply or launch it. The responsive layout supports terminals from `80x24`
+upward and shows a resize message below that minimum.
+
 | Key | Action |
 | --- | --- |
-| `F1` | Help |
-| `F2` | Provider/account panel |
-| `F3` | Model panel |
-| `F4` | Reasoning selector |
-| `F5` | Refresh selected provider catalog (including native OpenAI Codex models) |
-| `F6` | Apply selected provider/model without starting Codex |
-| `F7` | Authenticate selected provider |
-| `F8` | Reload active status |
-| `F9` | Resume Codex with sandbox bypass and search |
-| `F10` | Quit |
+| `↑` / `↓` | Move through choices in the focused pane |
+| `Home` / `End` | Jump to the first or last choice |
+| `PageUp` / `PageDown` | Move one page through a long list |
+| `←` / `→` | Move to the previous or next pane |
+| `Tab` / `Shift+Tab` | Cycle forward or backward through the panes |
+| `Enter` | Confirm and move right; from Reasoning, apply and launch Codex |
+| `/` | Search models by display name or full model ID |
+| `F1` or `?` | Help |
+| `F2` or `p` | Providers/accounts pane |
+| `F3` or `m` | Models pane |
+| `F4` or `t` | Reasoning pane |
+| `F5` or `r` | Refresh the selected provider catalog, including native OpenAI Codex models |
+| `F6` or `a` | Apply the pending selection without starting Codex |
+| `F7` or `l` | Authenticate the pending provider |
+| `F8` or `s` | Reload active status |
+| `F9` or `c` | Apply and resume Codex with sandbox bypass and search |
+| `F10` or `q` | Quit; pending changes require confirmation |
+| `Esc` | Close a dialog/search, or reset the pending selection to active |
+
+Model search is case-insensitive. Use `↑`/`↓` inside the filtered results,
+`Enter` to accept a model and continue to Reasoning, or `Esc` to clear the
+filter. Single-letter aliases apply only on the main screen, so they do not
+interfere with typing in search or credential dialogs.
+
+Catalogs load and refresh in the background, keeping navigation responsive.
+The last usable catalog remains visible if a refresh fails, and Apply/Launch
+stays unavailable while the selected provider is still busy. The Commander
+splash appears once per installed version and remains available from Help.
 
 ## CLI reference
 
