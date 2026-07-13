@@ -2,6 +2,15 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.1.0] - 2026-07-13
+
+### Changed
+
+- Updated the fixed Azure OpenAI model from `gpt-5.5` to `gpt-5.6-sol`.
+- Added Azure reasoning selection for `low` (default), `medium`, `high`,
+  `xhigh`, `max` and `ultra`, with matching validation in the CLI and
+  Commander TUI.
+
 ## [1.0.0] - 2026-07-10
 
 ### Changed

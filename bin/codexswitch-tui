@@ -710,7 +710,7 @@ class CodexSwitchApp(App):
         }
         self.model_lists: dict[str, list[str]] = {
             "openai": list(self.backend.get("OPENAI_FALLBACK_MODELS", ["gpt-5.5"])),
-            "azure": list(self.backend.get("AZURE_MODELS", ["gpt-5.5"])),
+            "azure": list(self.backend.get("AZURE_MODELS", ["gpt-5.6-sol"])),
             "opencode-go": list(self.catalogs["opencode-go"]),
             "openrouter": list(
                 self.backend.get("OPENROUTER_FALLBACK_MODELS", ["openrouter/auto"])
@@ -1035,7 +1035,7 @@ class CodexSwitchApp(App):
             return self.active.model
         defaults = {
             "openai": "gpt-5.5",
-            "azure": self.backend.get("AZURE_MODEL", "gpt-5.5"),
+            "azure": self.backend.get("AZURE_MODEL", "gpt-5.6-sol"),
             "opencode-go": self.backend.get("DEFAULT_OPENCODE_MODEL"),
             "openrouter": (
                 self.backend.get("OPENROUTER_FALLBACK_MODELS", [None]) or [None]
@@ -1151,7 +1151,12 @@ class CodexSwitchApp(App):
         if not model:
             return [("Model default", None)]
         if provider == "azure":
-            return [("Model default", None)]
+            choices = self.backend.get("AZURE_REASONING_CHOICES", [])
+            return [
+                (str(label), str(effort))
+                for label, effort in choices
+                if label and effort
+            ] or [("Model default", None)]
         meta = self.catalogs.get(provider, {}).get(model, {})
         if not isinstance(meta, dict):
             meta = {}
@@ -1219,6 +1224,9 @@ class CodexSwitchApp(App):
             return None
         provider = self.draft.provider
         model = self.draft.model
+        if provider == "azure":
+            default = self.backend.get("AZURE_DEFAULT_REASONING_EFFORT", "low")
+            return str(default) if default in values else choices[0][1]
         meta = self.catalogs.get(provider, {}).get(model or "", {})
         default = None
         if isinstance(meta, dict):

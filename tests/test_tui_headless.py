@@ -155,6 +155,15 @@ class FakeBackend(dict[str, Any]):
                 "OPENAI_FALLBACK_MODELS": list(self.openai_catalog),
                 "OPENAI_FALLBACK_CATALOG": dict(self.openai_catalog),
                 "AZURE_MODELS": ["azure-gpt"],
+                "AZURE_REASONING_CHOICES": [
+                    ("Low (default)", "low"),
+                    ("Medium", "medium"),
+                    ("High", "high"),
+                    ("Extra high", "xhigh"),
+                    ("Max", "max"),
+                    ("Ultra", "ultra"),
+                ],
+                "AZURE_DEFAULT_REASONING_EFFORT": "low",
                 "OPENCODE_GO_FALLBACK_CATALOG": dict(self.opencode_catalog),
                 "OPENROUTER_FALLBACK_MODELS": ["openrouter/auto"],
                 "AZURE_DEFAULT_ENDPOINT": "https://example.invalid/azure",
@@ -1320,6 +1329,33 @@ def test_model_switch_uses_metadata_default_reasoning_instead_of_first_choice(
             assert "◆" in option_plain(
                 option_by_id(reasoning, "reason:high")
             )
+
+    asyncio.run(run())
+
+
+def test_azure_shows_all_reasoning_levels_and_defaults_to_low(
+    app_factory, fake_backend: FakeBackend
+):
+    app = app_factory(fake_backend)
+
+    async def run() -> None:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await settle(pilot)
+            sources = app.query_one("#sources", OptionList)
+            highlight(sources, "provider:azure")
+            await settle(pilot)
+
+            reasoning = app.query_one("#reasoning", OptionList)
+            assert app.draft.reasoning == "low"
+            assert [option.id for option in reasoning.options] == [
+                "reason:low",
+                "reason:medium",
+                "reason:high",
+                "reason:xhigh",
+                "reason:max",
+                "reason:ultra",
+            ]
+            assert "◆" in option_plain(option_by_id(reasoning, "reason:low"))
 
     asyncio.run(run())
 

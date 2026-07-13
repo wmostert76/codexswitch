@@ -83,6 +83,19 @@ def test_cli_help_contains_credits_and_tui_command():
     assert "codexswitch commander" not in proc.stdout
 
 
+def test_azure_model_and_reasoning_levels_are_current():
+    assert cs.AZURE_MODEL == "gpt-5.6-sol"
+    assert cs.AZURE_DEFAULT_REASONING_EFFORT == "low"
+    assert cs.azure_reasoning_choices(cs.AZURE_MODEL) == [
+        ("Low (default)", "low"),
+        ("Medium", "medium"),
+        ("High", "high"),
+        ("Extra high", "xhigh"),
+        ("Max", "max"),
+        ("Ultra", "ultra"),
+    ]
+
+
 def test_cli_without_args_shows_help_not_tui():
     proc = subprocess.run(
         [str(BIN_DIR / "codexswitch")],
@@ -630,6 +643,37 @@ class TestAccountSwitchSafety:
 
 
 class TestUpdateState:
+    def test_azure_uses_low_reasoning_by_default(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(cs, "azure_credentials_present", lambda: True)
+        monkeypatch.setattr(
+            cs,
+            "azure_credentials",
+            lambda: {
+                "endpoint": "https://example.invalid/openai",
+                "api_key": "fixture-value",
+                "api_version": "2026-01-01",
+            },
+        )
+
+        cs.update_codex_config("azure", cs.AZURE_MODEL)
+
+        text = config.read_text()
+        state = json.loads(state_path.read_text())
+        assert 'model = "gpt-5.6-sol"' in text
+        assert 'model_reasoning_effort = "low"' in text
+        assert state["reasoning_effort"] == "low"
+
     def test_openai_records_the_current_authenticated_account(
         self, tmp_path, monkeypatch
     ):

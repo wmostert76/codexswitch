@@ -28,7 +28,7 @@ It is built for three workflows:
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
-| Azure OpenAI | Endpoint/API-key storage and fixed `gpt-5.5` model selection |
+| Azure OpenAI | Endpoint/API-key storage and fixed `gpt-5.6-sol` model selection |
 | OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
 | OpenRouter | API-key storage, model catalog refresh and Codex provider config |
 
@@ -36,7 +36,7 @@ It is built for three workflows:
 
 - Commander-style TUI with Providers, Models and Reasoning panes
 - OpenAI multi-account management without losing rotated refresh tokens
-- Azure OpenAI selection for a single configured `gpt-5.5` deployment
+- Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - OpenCode Go compatibility proxy with tool-call translation
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
@@ -177,7 +177,7 @@ codexswitch tui
 codexswitch account add
 codexswitch auth openrouter
 codexswitch auth azure
-codexswitch use azure gpt-5.5
+codexswitch use azure gpt-5.6-sol low
 codexswitch use openai gpt-5.5
 codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
