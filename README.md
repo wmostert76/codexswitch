@@ -254,9 +254,9 @@ codexswitch account add
 
 Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
-and API key and normalizes the URL to `/openai/v1`. Codex receives keys via
-launch-time environment headers or installed token command helpers, not via
-plain text in `~/.codex/config.toml`.
+and API key and normalizes the URL to `/openai/v1`. Codex receives Azure and
+OpenRouter keys through launch-time environment variables and OpenCode Go via
+its installed token helper, never as plain text in `~/.codex/config.toml`.
 
 ```bash
 codexswitch auth azure

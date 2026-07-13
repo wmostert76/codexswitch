@@ -66,6 +66,7 @@ OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_PROXY_URL = "http://127.0.0.1:14555/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_CONFIG_BACKUPS = 5
 PROXY_SERVICE = "codex-opencode-go-proxy.service"
@@ -766,8 +767,12 @@ def save_openrouter_key(key: str) -> None:
 
 
 def openrouter_key_present() -> bool:
+    return bool(openrouter_credentials().get("api_key"))
+
+
+def openrouter_credentials() -> dict:
     data = vault_read_secret_json(OPENROUTER_AUTH, {}, SWITCH_HOME)
-    return bool(isinstance(data, dict) and data.get("api_key"))
+    return data if isinstance(data, dict) else {}
 
 
 def migrate_secret_file(path: Path) -> bool:
@@ -942,6 +947,10 @@ def codex_launch_environment() -> dict[str, str]:
         key = azure_credentials().get("api_key")
         if key:
             env[AZURE_API_KEY_ENV] = str(key)
+    if codex_config_state().get("model_provider") == "openrouter":
+        key = openrouter_credentials().get("api_key")
+        if key:
+            env[OPENROUTER_API_KEY_ENV] = str(key)
     return env
 
 
@@ -1661,20 +1670,13 @@ env_http_headers = {{ "api-key" = "{AZURE_API_KEY_ENV}" }}
         lines.append(provider_block)
 
     if provider == "openrouter":
-        if not Path(OPENROUTER_TOKEN_HELPER).exists():
-            die(f"OpenRouter token helper ontbreekt: {OPENROUTER_TOKEN_HELPER}")
         provider_block = f'''
 
 [model_providers.openrouter]
 name = "OpenRouter"
 base_url = "{OPENROUTER_BASE_URL}"
 wire_api = "responses"
-
-[model_providers.openrouter.auth]
-command = {toml_string(sys.executable)}
-args = [{toml_string(OPENROUTER_TOKEN_HELPER)}]
-timeout_ms = 5000
-refresh_interval_ms = 0
+env_key = "{OPENROUTER_API_KEY_ENV}"
 '''
         lines.append(provider_block)
 

@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.2.2] - 2026-07-13
+
+### Fixed
+
+- OpenRouter now uses Codex's native `env_key` provider authentication with a
+  launch-time key loaded from the shared vault. This avoids a reproducible
+  Windows Codex crash in the custom token-command authentication path.
+
 ## [1.2.1] - 2026-07-13
 
 ### Added

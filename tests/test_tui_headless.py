@@ -1320,7 +1320,11 @@ def test_details_render_markup_like_and_unicode_metadata_literally(app_factory):
             await settle(pilot)
             models = app.query_one("#models", OptionList)
             highlight(models, "model:gpt-alpha")
-            await settle(pilot)
+            await wait_until(
+                pilot,
+                lambda: "gpt-alpha"
+                in app.query_one("#model-detail").render().plain,
+            )
             detail = app.query_one("#model-detail").render().plain
             assert "Alpha [Preview] Ω" in detail
             assert "gpt-alpha" in detail

@@ -755,6 +755,22 @@ class TestUpdateState:
         assert "api-version" not in text
         assert state["reasoning_effort"] == "low"
 
+    def test_openrouter_launch_environment_reads_key_from_vault(
+        self, tmp_path, monkeypatch
+    ):
+        config = tmp_path / "config.toml"
+        config.write_text('model_provider = "openrouter"\n')
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(
+            cs, "openrouter_credentials", lambda: {"api_key": "fixture-value"}
+        )
+        monkeypatch.delenv(cs.OPENROUTER_API_KEY_ENV, raising=False)
+
+        environment = cs.codex_launch_environment()
+
+        assert environment[cs.OPENROUTER_API_KEY_ENV] == "fixture-value"
+        assert cs.OPENROUTER_API_KEY_ENV not in cs.os.environ
+
     def test_openai_records_the_current_authenticated_account(
         self, tmp_path, monkeypatch
     ):
@@ -863,7 +879,7 @@ class TestUpdateState:
         with pytest.raises(SystemExit):
             cs.update_codex_config("openrouter", "openrouter/auto")
 
-    def test_openrouter_config_uses_secret_helper_and_clears_openai_state(self, tmp_path, monkeypatch):
+    def test_openrouter_config_uses_env_key_and_clears_openai_state(self, tmp_path, monkeypatch):
         codex_home = tmp_path / ".codex"
         switch_home = tmp_path / ".config" / "codexswitch"
         codex_home.mkdir(parents=True)
@@ -885,9 +901,6 @@ class TestUpdateState:
                 }
             )
         )
-        token_helper = tmp_path / "openrouter-token"
-        token_helper.write_text("")
-
         monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
         monkeypatch.setattr(cs, "CODEX_CONFIG", config)
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
@@ -897,7 +910,6 @@ class TestUpdateState:
             "OPENROUTER_CODEX_MODELS",
             switch_home / "openrouter/codex-models.json",
         )
-        monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
         monkeypatch.setattr(
             cs,
@@ -921,8 +933,9 @@ class TestUpdateState:
             in text
         )
         assert 'base_url = "https://openrouter.ai/api/v1"' in text
-        assert f"command = {cs.toml_string(cs.sys.executable)}" in text
-        assert f"args = [{cs.toml_string(str(token_helper))}]" in text
+        assert 'env_key = "OPENROUTER_API_KEY"' in text
+        assert "[model_providers.openrouter.auth]" not in text
+        assert "command =" not in text
         assert "model_reasoning_effort" not in text
         assert "api_key" not in text
         assert "openai_account" not in state
