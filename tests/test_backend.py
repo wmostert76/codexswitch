@@ -234,6 +234,7 @@ def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
 
     monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
     monkeypatch.setattr(cs, "CODEX_CONFIG", codex_home / "config.toml")
+    monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
     monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_config)
     monkeypatch.setattr(cs, "codex_bin", lambda: "/tmp/codex")
     monkeypatch.setattr(cs, "_common_opencode_bin", lambda: None)
