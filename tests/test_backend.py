@@ -85,6 +85,7 @@ def test_cli_help_contains_credits_and_tui_command():
 
 def test_azure_model_and_reasoning_levels_are_current():
     assert cs.AZURE_MODEL == "gpt-5.6-sol"
+    assert cs.azure_models() == ["gpt-5.6-sol"]
     assert cs.AZURE_DEFAULT_REASONING_EFFORT == "low"
     assert cs.azure_reasoning_choices(cs.AZURE_MODEL) == [
         ("Low (default)", "low"),
@@ -94,6 +95,13 @@ def test_azure_model_and_reasoning_levels_are_current():
         ("Max", "max"),
         ("Ultra", "ultra"),
     ]
+
+
+def test_azure_rejects_retired_gpt_5_5():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        cs.validate_provider_model("azure", "gpt-5.5")
 
 
 def test_cli_without_args_shows_help_not_tui():

@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.1.1] - 2026-07-13
+
+### Changed
+
+- Removed `gpt-5.5` from the current Azure model selection; Azure now
+  exclusively offers `gpt-5.6-sol`.
+
 ## [1.1.0] - 2026-07-13
 
 ### Changed
