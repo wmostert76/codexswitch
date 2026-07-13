@@ -1399,14 +1399,16 @@ class CodexSwitchApp(App):
     ) -> None:
         status = self.query_one("#status", Static)
         self.status_hint_held = error or hold
-        prefix = f"VAULT {self.vault_label} · "
-        status.update(
-            Text(
-                ("ERROR · " if error else "") + prefix + message,
-                no_wrap=True,
-                overflow="ellipsis",
-            )
-        )
+        text = Text(no_wrap=True, overflow="ellipsis")
+        if error:
+            text.append("ERROR · ")
+        badge_style = {
+            "ONLINE": "bold #ffffff on #008700",
+            "OFFLINE": "bold #ffffff on #af0000",
+        }.get(self.vault_label, "bold #ffffff")
+        text.append(f"VAULT {self.vault_label}", style=badge_style)
+        text.append(f" · {message}")
+        status.update(text)
         status.styles.background = (
             "#870000" if error or self.vault_label == "OFFLINE" else "#000000"
         )

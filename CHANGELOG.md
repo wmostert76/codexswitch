@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.2.3] - 2026-07-13
+
+### Changed
+
+- The Commander vault badge now renders `VAULT ONLINE` in white on green and
+  `VAULT OFFLINE` in white on red for immediate visual recognition.
+
 ## [1.2.2] - 2026-07-13
 
 ### Fixed

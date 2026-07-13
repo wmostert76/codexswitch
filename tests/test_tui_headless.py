@@ -353,6 +353,13 @@ def highlight(option_list: OptionList, option_id: str) -> None:
     )
 
 
+def literal_style(text: Text, literal: str) -> Any:
+    span = next(
+        span for span in text.spans if text.plain[span.start : span.end] == literal
+    )
+    return span.style
+
+
 def test_tui_header_is_compact_and_credits_move_out_of_it():
     assert tui.CodexSwitchApp.TITLE == "CodexSwitch Commander"
     assert f"v{cs.VERSION}" in tui.CodexSwitchApp.SUB_TITLE
@@ -781,6 +788,33 @@ def test_remote_vault_offline_is_persistent_and_visible_in_status_bar(
             status = app.query_one("#status").render().plain.upper()
             assert "VAULT OFFLINE" in status
             assert "ERROR" in status
+            badge = literal_style(app.query_one("#status").render(), "VAULT OFFLINE")
+            assert badge.foreground == Color.parse("#ffffff")
+            assert badge.background == Color.parse("#af0000")
+
+    asyncio.run(run())
+
+
+def test_remote_vault_online_badge_is_white_on_green(
+    app_factory, fake_backend: FakeBackend
+):
+    fake_backend["vault_status"] = lambda: {
+        "mode": "remote",
+        "online": True,
+        "label": "ONLINE",
+    }
+    app = app_factory(fake_backend, refresh_on_start=True)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await wait_until(
+                pilot,
+                lambda: "VAULT ONLINE"
+                in app.query_one("#status").render().plain.upper(),
+            )
+            badge = literal_style(app.query_one("#status").render(), "VAULT ONLINE")
+            assert badge.foreground == Color.parse("#ffffff")
+            assert badge.background == Color.parse("#008700")
 
     asyncio.run(run())
 
