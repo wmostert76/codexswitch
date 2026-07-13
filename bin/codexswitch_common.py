@@ -15,10 +15,12 @@ import os
 import re
 import shutil
 import subprocess
+import copy
 import base64
 import hashlib
 import hmac
 import secrets
+import threading
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -30,7 +32,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "1.2.3"
+VERSION = "1.2.4"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -56,6 +58,10 @@ REMOTE_DEFAULT_ENDPOINT = "https://fsn1.your-objectstorage.com"
 REMOTE_DEFAULT_BUCKET = "wmostert"
 REMOTE_DEFAULT_OBJECT = "codexswitch/vault.enc"
 REMOTE_DEFAULT_REGION = "fsn1"
+_VAULT_SESSION_CACHE: dict[str, dict] = {}
+_VAULT_SESSION_ERRORS: dict[str, str] = {}
+_VAULT_SESSION_HOMES: set[str] = set()
+_VAULT_SESSION_LOCK = threading.RLock()
 
 
 def user_home() -> Path:
@@ -83,6 +89,42 @@ def vault_key_path(home: Path | None = None) -> Path:
 
 def remote_vault_config_path(home: Path | None = None) -> Path:
     return (home or switch_home()) / REMOTE_CONFIG_NAME
+
+
+def _vault_session_key(home: Path | None = None) -> str:
+    return str((home or switch_home()).expanduser().resolve())
+
+
+def enable_vault_session_cache(home: Path | None = None) -> None:
+    """Enable process-local decrypted vault caching for one config home."""
+    with _VAULT_SESSION_LOCK:
+        _VAULT_SESSION_HOMES.add(_vault_session_key(home))
+
+
+def refresh_vault_session_cache(home: Path | None = None) -> dict:
+    """Discard the process-local entry and fetch the remote vault again."""
+    key = _vault_session_key(home)
+    with _VAULT_SESSION_LOCK:
+        _VAULT_SESSION_HOMES.add(key)
+        _VAULT_SESSION_CACHE.pop(key, None)
+        _VAULT_SESSION_ERRORS.pop(key, None)
+    return vault_load(home)
+
+
+def disable_vault_session_cache(home: Path | None = None) -> None:
+    """Disable and erase the process-local cache entry, primarily for tests."""
+    key = _vault_session_key(home)
+    with _VAULT_SESSION_LOCK:
+        _VAULT_SESSION_HOMES.discard(key)
+        _VAULT_SESSION_CACHE.pop(key, None)
+        _VAULT_SESSION_ERRORS.pop(key, None)
+
+
+def _invalidate_vault_session_cache(home: Path | None = None) -> None:
+    key = _vault_session_key(home)
+    with _VAULT_SESSION_LOCK:
+        _VAULT_SESSION_CACHE.pop(key, None)
+        _VAULT_SESSION_ERRORS.pop(key, None)
 
 
 def remote_credential_dir(home: Path | None = None) -> Path:
@@ -118,6 +160,7 @@ def write_remote_vault_config(config: dict, home: Path | None = None) -> None:
         _chmod_secret(tmp)
         os.replace(tmp, path)
         _chmod_secret(path)
+        _invalidate_vault_session_cache(home)
     finally:
         tmp.unlink(missing_ok=True)
 
@@ -463,11 +506,31 @@ def remove_local_vault_material(home: Path | None = None) -> None:
 
 def vault_load(home: Path | None = None) -> dict:
     remote = remote_vault_enabled(home)
+    cache_key = _vault_session_key(home)
+    if remote:
+        with _VAULT_SESSION_LOCK:
+            if cache_key in _VAULT_SESSION_HOMES:
+                if cache_key in _VAULT_SESSION_CACHE:
+                    return copy.deepcopy(_VAULT_SESSION_CACHE[cache_key])
+                if cache_key in _VAULT_SESSION_ERRORS:
+                    raise RuntimeError(_VAULT_SESSION_ERRORS[cache_key])
     path = vault_path(home)
-    token = remote_vault_request("GET", home=home) if remote else (
-        path.read_bytes() if path.exists() else None
-    )
+    try:
+        token = remote_vault_request("GET", home=home) if remote else (
+            path.read_bytes() if path.exists() else None
+        )
+    except Exception as exc:
+        if remote:
+            with _VAULT_SESSION_LOCK:
+                if cache_key in _VAULT_SESSION_HOMES:
+                    _VAULT_SESSION_ERRORS[cache_key] = str(exc)
+        raise
     if token is None:
+        data = {}
+        if remote:
+            with _VAULT_SESSION_LOCK:
+                if cache_key in _VAULT_SESSION_HOMES:
+                    _VAULT_SESSION_CACHE[cache_key] = data
         return {}
     Fernet = _fernet()
     try:
@@ -476,8 +539,19 @@ def vault_load(home: Path | None = None) -> dict:
         data = json.loads(plaintext.decode("utf-8"))
     except Exception as exc:
         location = "remote credential vault" if remote else "credential vault"
-        raise RuntimeError(f"kan {location} niet openen: {type(exc).__name__}") from exc
-    return data if isinstance(data, dict) else {}
+        error = f"kan {location} niet openen: {type(exc).__name__}"
+        if remote:
+            with _VAULT_SESSION_LOCK:
+                if cache_key in _VAULT_SESSION_HOMES:
+                    _VAULT_SESSION_ERRORS[cache_key] = error
+        raise RuntimeError(error) from exc
+    data = data if isinstance(data, dict) else {}
+    if remote:
+        with _VAULT_SESSION_LOCK:
+            if cache_key in _VAULT_SESSION_HOMES:
+                _VAULT_SESSION_CACHE[cache_key] = copy.deepcopy(data)
+                _VAULT_SESSION_ERRORS.pop(cache_key, None)
+    return data
 
 
 def vault_save(data: dict, home: Path | None = None) -> None:
@@ -489,6 +563,11 @@ def vault_save(data: dict, home: Path | None = None) -> None:
     )
     if remote:
         remote_vault_request("PUT", token, home)
+        cache_key = _vault_session_key(home)
+        with _VAULT_SESSION_LOCK:
+            if cache_key in _VAULT_SESSION_HOMES:
+                _VAULT_SESSION_CACHE[cache_key] = copy.deepcopy(data)
+                _VAULT_SESSION_ERRORS.pop(cache_key, None)
         return
     path = vault_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)

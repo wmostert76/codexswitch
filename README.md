@@ -204,7 +204,7 @@ Vault flow:
 | --- | --- |
 | 1 | De wizard migreert de lokale vault client-side versleuteld naar Hetzner S3 |
 | 2 | S3-credentials en de gedeelde passphrase staan alleen in de OS-keyring, encrypted systemd credentials of environment |
-| 3 | Iedere vault-read doet een nieuwe S3 GET; offline is er geen lokale credentialfallback |
+| 3 | CLI/proxy-reads halen S3 opnieuw op; Commander gebruikt één RAM-cache per TUI-sessie en F5 ververst die expliciet |
 | 4 | Na verificatie verwijdert de wizard lokaal `vault.enc` en `vault.key` |
 | 5 | De TUI toont vooraan in de statusbalk `VAULT ONLINE` of `VAULT OFFLINE` |
 | 6 | Actieve Codex config blijft apart in `~/.codex/auth.json` en `~/.codex/config.toml` |

@@ -140,6 +140,62 @@ class TestRemoteVault:
         assert common.vault_load(tmp_path)["remote"]["api_key"] == "remote-value"
         assert len(calls) == 2
 
+    def test_tui_session_cache_fetches_once_until_explicit_refresh(
+        self, tmp_path, monkeypatch
+    ):
+        enable_remote(tmp_path)
+        remote_environment(monkeypatch)
+        Fernet = common._fernet()
+        remote_token = Fernet(common.remote_vault_key(tmp_path)).encrypt(
+            json.dumps({"remote": {"api_key": "remote-value"}}).encode()
+        )
+        calls = []
+
+        def fake_urlopen(request, timeout=0):
+            calls.append(request.full_url)
+            return FakeResponse(remote_token)
+
+        monkeypatch.setattr(common.urllib.request, "urlopen", fake_urlopen)
+        common.enable_vault_session_cache(tmp_path)
+        try:
+            first = common.vault_load(tmp_path)
+            first["remote"]["api_key"] = "mutated-copy"
+            assert common.vault_load(tmp_path)["remote"]["api_key"] == "remote-value"
+            assert len(calls) == 1
+
+            assert (
+                common.refresh_vault_session_cache(tmp_path)["remote"]["api_key"]
+                == "remote-value"
+            )
+            assert len(calls) == 2
+        finally:
+            common.disable_vault_session_cache(tmp_path)
+
+    def test_tui_session_cache_remembers_offline_until_refresh(
+        self, tmp_path, monkeypatch
+    ):
+        enable_remote(tmp_path)
+        remote_environment(monkeypatch)
+        calls = []
+
+        def offline(*args, **kwargs):
+            calls.append("GET")
+            raise urllib.error.URLError("offline")
+
+        monkeypatch.setattr(common.urllib.request, "urlopen", offline)
+        common.enable_vault_session_cache(tmp_path)
+        try:
+            with pytest.raises(RuntimeError):
+                common.vault_load(tmp_path)
+            with pytest.raises(RuntimeError):
+                common.vault_load(tmp_path)
+            assert len(calls) == 1
+            with pytest.raises(RuntimeError):
+                common.refresh_vault_session_cache(tmp_path)
+            assert len(calls) == 2
+        finally:
+            common.disable_vault_session_cache(tmp_path)
+
     def test_remote_offline_never_falls_back_to_local_vault(
         self, tmp_path, monkeypatch
     ):

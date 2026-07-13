@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.2.4] - 2026-07-13
+
+### Changed
+
+- Commander fetches and decrypts the shared vault once per TUI session and
+  keeps the decrypted data only in process memory. Navigation no longer causes
+  an S3 request per highlighted option; F5 explicitly reloads the RAM cache.
+
 ## [1.2.3] - 2026-07-13
 
 ### Changed

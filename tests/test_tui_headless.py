@@ -210,6 +210,13 @@ class FakeBackend(dict[str, Any]):
                 ),
                 "codex_bin": lambda: "/usr/bin/codex-test",
                 "codex_launch_environment": lambda: {"TEST_CODEX_ENV": "1"},
+                "enable_vault_session_cache": lambda home: self.calls.append(
+                    ("vault-cache-enable", Path(home))
+                ),
+                "refresh_vault_session_cache": lambda home: self.calls.append(
+                    ("vault-cache-refresh", Path(home))
+                )
+                or {},
                 "vault_status": lambda: {
                     "mode": "local",
                     "online": True,
@@ -764,6 +771,30 @@ def test_startup_loads_cached_catalogs_without_refreshing_providers(
             await app.workers.wait_for_complete()
             await settle(pilot)
             assert not [call for call in fake_backend.calls if call[0] == "refresh"]
+            assert [
+                call for call in fake_backend.calls if call[0] == "vault-cache-enable"
+            ]
+
+    asyncio.run(run())
+
+
+def test_f5_explicitly_refreshes_vault_session_cache(
+    app_factory, fake_backend: FakeBackend
+):
+    app = app_factory(fake_backend)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            await pilot.press("f5")
+            await wait_until(
+                pilot,
+                lambda: any(
+                    call[0] == "vault-cache-refresh"
+                    for call in fake_backend.calls
+                ),
+            )
+            await app.workers.wait_for_complete()
 
     asyncio.run(run())
 

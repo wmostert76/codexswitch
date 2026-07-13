@@ -663,6 +663,12 @@ class CodexSwitchApp(App):
         super().__init__()
         self.backend = backend or BACKEND
         switch_home = Path(self.backend.get("SWITCH_HOME", Path.home() / ".config/codexswitch"))
+        cache_enable = self.backend.get("enable_vault_session_cache")
+        if cache_enable:
+            try:
+                cache_enable(switch_home)
+            except Exception:
+                pass
         self.state_path = Path(state_path) if state_path else switch_home / "tui-state.json"
         self.refresh_on_start = refresh_on_start
 
@@ -1319,7 +1325,10 @@ class CodexSwitchApp(App):
         return "ok" if self.safe_call(function, False) else "missing"
 
     def update_details(self) -> None:
-        detail = self.query_one("#model-detail", Static)
+        try:
+            detail = self.query_one("#model-detail", Static)
+        except NoMatches:
+            return
         model = self.draft.model
         provider = self.draft.provider
         if not model:
@@ -1853,9 +1862,6 @@ class CodexSwitchApp(App):
         if self.too_small:
             return
         provider = self.draft.provider
-        if provider == "azure":
-            self.set_status("Azure uses a fixed model catalog")
-            return
         if self.operation_busy or self.busy_providers:
             self.set_status("A catalog or configuration operation is already running", error=True)
             return
@@ -1869,9 +1875,20 @@ class CodexSwitchApp(App):
 
     async def refresh_provider_worker(self, provider: str) -> None:
         self.busy_providers.add(provider)
-        self.set_status(f"Refreshing {PROVIDER_LABELS[provider]} catalog…")
+        self.set_status(f"Refreshing shared vault and {PROVIDER_LABELS[provider]} catalog…")
         try:
             async with self.backend_worker_lock:
+                vault_refresh = self.backend.get("refresh_vault_session_cache")
+                if vault_refresh:
+                    await asyncio.to_thread(
+                        vault_refresh,
+                        Path(
+                            self.backend.get(
+                                "SWITCH_HOME",
+                                Path.home() / ".config/codexswitch",
+                            )
+                        ),
+                    )
                 data = await asyncio.to_thread(
                     self.provider_data_sync, provider, True
                 )
