@@ -12,6 +12,7 @@ import getpass
 import tomllib
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -26,6 +27,14 @@ from codexswitch_common import (
     CREDITS_OWNER,
     VERSION,
     read_secret_json as vault_read_secret_json,
+    remote_vault_config_path,
+    remote_vault_enabled,
+    remote_vault_request,
+    remove_local_vault_material,
+    store_remote_credentials,
+    vault_save,
+    vault_status as _common_vault_status,
+    write_remote_vault_config,
     write_secret_json as vault_write_secret_json,
     vault_load,
     user_home as _common_user_home,
@@ -49,8 +58,9 @@ AZURE_REASONING_CHOICES = [
     ("Ultra", "ultra"),
 ]
 AZURE_DEFAULT_REASONING_EFFORT = "low"
-AZURE_DEFAULT_ENDPOINT = "https://emmausopenaieurespwerner.cognitiveservices.azure.com/openai"
-AZURE_DEFAULT_API_VERSION = "2025-04-01-preview"
+AZURE_DEFAULT_ENDPOINT = ""
+AZURE_DEFAULT_API_VERSION = "v1"
+AZURE_API_KEY_ENV = "AZURE_OPENAI_API_KEY"
 DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
 OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
@@ -782,6 +792,61 @@ def migrate_vault() -> None:
     print(f"Gemigreerde legacy secret-bestanden: {migrated}")
 
 
+def vault_status() -> dict[str, object]:
+    return _common_vault_status(SWITCH_HOME)
+
+
+def configure_remote_vault() -> None:
+    if remote_vault_enabled(SWITCH_HOME):
+        die("remote vault is al geconfigureerd")
+    migrate_vault()
+    local_data = vault_load(SWITCH_HOME)
+    endpoint = (
+        input("S3 endpoint [https://fsn1.your-objectstorage.com]: ").strip()
+        or "https://fsn1.your-objectstorage.com"
+    )
+    bucket = input("S3 bucket [wmostert]: ").strip() or "wmostert"
+    access_key = getpass.getpass("S3 Access Key ID: ").strip()
+    secret_key = getpass.getpass("S3 Secret Access Key: ").strip()
+    passphrase = getpass.getpass("Shared vault passphrase: ")
+    confirmation = getpass.getpass("Repeat shared vault passphrase: ")
+    if not access_key or not secret_key or not passphrase:
+        die("S3 credentials en shared vault passphrase zijn verplicht")
+    if passphrase != confirmation:
+        die("Shared vault passphrases komen niet overeen")
+    if len(passphrase) < 16:
+        die("Shared vault passphrase moet minimaal 16 tekens bevatten")
+    store_remote_credentials(access_key, secret_key, passphrase)
+    config = {
+        "enabled": True,
+        "endpoint": endpoint,
+        "bucket": bucket,
+        "object": "codexswitch/vault.enc",
+        "region": "fsn1",
+    }
+    config_path = remote_vault_config_path(SWITCH_HOME)
+    write_remote_vault_config(config, SWITCH_HOME)
+    try:
+        existing = remote_vault_request("GET", home=SWITCH_HOME)
+        if existing is None:
+            vault_save(local_data, SWITCH_HOME)
+        else:
+            remote_data = vault_load(SWITCH_HOME)
+            if local_data and remote_data != local_data:
+                raise RuntimeError(
+                    "remote vault bestaat al en verschilt van de lokale vault; "
+                    "samenvoegen is vereist"
+                )
+        status = vault_status()
+        if not status.get("online"):
+            raise RuntimeError(str(status.get("error") or "remote vault offline"))
+    except Exception as exc:
+        config_path.unlink(missing_ok=True)
+        die(str(exc))
+    remove_local_vault_material(SWITCH_HOME)
+    print("Remote vault ONLINE; lokale credentialcache verwijderd")
+
+
 def save_opencode_go_key(key: str) -> None:
     normalized = key.strip()
     if not normalized:
@@ -790,12 +855,30 @@ def save_opencode_go_key(key: str) -> None:
     print("OpenCode Go API-key opgeslagen")
 
 
-def save_azure_credentials(endpoint: str, key: str, api_version: str = AZURE_DEFAULT_API_VERSION) -> None:
-    normalized_endpoint = endpoint.strip().rstrip("/")
+def normalize_azure_endpoint(endpoint: str) -> str:
+    """Return the Azure OpenAI Responses v1 base URL."""
+    parsed = urlsplit(endpoint.strip().rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        die("Azure endpoint moet een geldige http(s)-URL zijn")
+    if parsed.query or parsed.fragment:
+        die("Azure endpoint mag geen query of fragment bevatten")
+    path = parsed.path.rstrip("/")
+    if path.endswith("/openai/v1/responses"):
+        path = path[: -len("/responses")]
+    if path.endswith("/openai/v1"):
+        pass
+    elif path.endswith("/openai"):
+        path += "/v1"
+    elif not path:
+        path = "/openai/v1"
+    else:
+        die("Azure endpoint moet eindigen op de resource-host, /openai of /openai/v1")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def save_azure_credentials(endpoint: str, key: str) -> None:
+    normalized_endpoint = normalize_azure_endpoint(endpoint)
     normalized_key = key.strip()
-    normalized_version = api_version.strip() or AZURE_DEFAULT_API_VERSION
-    if not normalized_endpoint:
-        die("Azure endpoint is leeg")
     if not normalized_key:
         die("Azure API-key is leeg")
     vault_write_secret_json(
@@ -803,7 +886,6 @@ def save_azure_credentials(endpoint: str, key: str, api_version: str = AZURE_DEF
         {
             "endpoint": normalized_endpoint,
             "api_key": normalized_key,
-            "api_version": normalized_version,
         },
         SWITCH_HOME,
     )
@@ -824,6 +906,8 @@ def opencode_go_key_present() -> bool:
     data = vault_read_secret_json(OPENCODE_GO_AUTH, {}, SWITCH_HOME)
     if isinstance(data, dict) and data.get("api_key"):
         return True
+    if remote_vault_enabled(SWITCH_HOME):
+        return False
     legacy = read_json(OPENCODE_AUTH, {})
     credential = legacy.get("opencode-go", {}) if isinstance(legacy, dict) else {}
     return bool(isinstance(credential, dict) and credential.get("key"))
@@ -834,6 +918,31 @@ def codex_bin() -> str:
     if not found:
         die("codex niet gevonden in PATH")
     return found
+
+
+def codex_launch_bin() -> str:
+    """Resolve the native Codex executable behind an npm Windows shim."""
+    binary = codex_bin()
+    if os.name != "nt":
+        return binary
+    shim = Path(binary)
+    if shim.suffix.lower() not in {".cmd", ".bat"}:
+        return binary
+    package_root = shim.parent / "node_modules" / "@openai" / "codex"
+    candidates = sorted(
+        package_root.glob("node_modules/@openai/codex-win32-*/vendor/*/bin/codex.exe")
+    )
+    return str(candidates[0]) if candidates else binary
+
+
+def codex_launch_environment() -> dict[str, str]:
+    """Build a Codex environment without persisting provider secrets in TOML."""
+    env = dict(os.environ)
+    if codex_config_state().get("model_provider") == "azure":
+        key = azure_credentials().get("api_key")
+        if key:
+            env[AZURE_API_KEY_ENV] = str(key)
+    return env
 
 
 def opencode_bin() -> str:
@@ -865,7 +974,8 @@ def ensure_proxy() -> None:
         die(f"proxy ontbreekt: {PROXY_BIN}")
     log = SWITCH_HOME / "proxy.log"
     SWITCH_HOME.mkdir(parents=True, exist_ok=True)
-    subprocess.Popen([PROXY_BIN], stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
+    proxy_argv = [sys.executable, PROXY_BIN] if os.name == "nt" else [PROXY_BIN]
+    subprocess.Popen(proxy_argv, stdout=log.open("ab"), stderr=subprocess.STDOUT, start_new_session=True)
     time.sleep(0.5)
     if not proxy_healthy():
         die(f"OpenCode Go proxy startte niet; zie {log}")
@@ -891,7 +1001,7 @@ def proxy_service_unit() -> str:
     user = os.environ.get("SUDO_USER") if os.geteuid() == 0 else None
     user = user or command_output(["id", "-un"])
     group = command_output(["id", "-gn", user])
-    home = Path(command_output(["getent", "passwd", user]).split(":")[5])
+    home = command_output(["getent", "passwd", user]).split(":")[5]
     return f"""[Unit]
 Description=CodexSwitch OpenCode Go compatibility proxy
 After=network-online.target
@@ -1378,17 +1488,17 @@ def set_top_level(lines: list[str], key: str, value: str) -> list[str]:
     for line in lines:
         if any_section_re.match(line):
             if in_top and not inserted:
-                output.append(f'{key} = "{value}"\n')
+                output.append(f"{key} = {toml_string(value)}\n")
                 inserted = True
             in_top = False
         if in_top and key_re.match(line):
             if not inserted:
-                output.append(f'{key} = "{value}"\n')
+                output.append(f"{key} = {toml_string(value)}\n")
                 inserted = True
             continue
         output.append(line)
     if not inserted:
-        output.insert(0, f'{key} = "{value}"\n')
+        output.insert(0, f"{key} = {toml_string(value)}\n")
     return output
 
 
@@ -1530,7 +1640,8 @@ base_url = "{OPENCODE_PROXY_URL}"
 wire_api = "responses"
 
 [model_providers.opencode-go.auth]
-command = "{TOKEN_HELPER}"
+command = {toml_string(sys.executable)}
+args = [{toml_string(TOKEN_HELPER)}]
 timeout_ms = 5000
 refresh_interval_ms = 0
 '''
@@ -1539,16 +1650,13 @@ refresh_interval_ms = 0
     if provider == "azure":
         credential = azure_credentials()
         endpoint = str(credential.get("endpoint", "")).rstrip("/")
-        api_key = str(credential.get("api_key", ""))
-        api_version = str(credential.get("api_version") or AZURE_DEFAULT_API_VERSION)
         provider_block = f'''
 
 [model_providers.azure]
 name = "Azure"
 base_url = {toml_string(endpoint)}
 wire_api = "responses"
-http_headers = {{ "api-key" = {toml_string(api_key)} }}
-query_params = {{ api-version = {toml_string(api_version)} }}
+env_http_headers = {{ "api-key" = "{AZURE_API_KEY_ENV}" }}
 '''
         lines.append(provider_block)
 
@@ -1563,7 +1671,8 @@ base_url = "{OPENROUTER_BASE_URL}"
 wire_api = "responses"
 
 [model_providers.openrouter.auth]
-command = "{OPENROUTER_TOKEN_HELPER}"
+command = {toml_string(sys.executable)}
+args = [{toml_string(OPENROUTER_TOKEN_HELPER)}]
 timeout_ms = 5000
 refresh_interval_ms = 0
 '''
@@ -1725,10 +1834,9 @@ def auth(provider: str | None = None) -> None:
         refresh_opencode_models(strict=False)
         return
     if provider == "azure":
-        endpoint = input(f"Azure endpoint [{AZURE_DEFAULT_ENDPOINT}]: ").strip() or AZURE_DEFAULT_ENDPOINT
-        api_version = input(f"Azure API version [{AZURE_DEFAULT_API_VERSION}]: ").strip() or AZURE_DEFAULT_API_VERSION
+        endpoint = input("Azure resource endpoint: ").strip()
         key = getpass.getpass("Azure API-key: ")
-        save_azure_credentials(endpoint, key, api_version)
+        save_azure_credentials(endpoint, key)
         return
     if provider == "openrouter":
         key = getpass.getpass("OpenRouter API-key: ")
@@ -1760,6 +1868,8 @@ Usage:
   codexswitch account use EMAIL      activate saved OpenAI account
   codexswitch refresh                refresh OpenCode Go and OpenRouter models
   codexswitch vault migrate          encrypt legacy CodexSwitch secret files
+  codexswitch vault status           show local/remote vault availability
+  codexswitch vault remote configure configure encrypted Hetzner S3 vault
   codexswitch update [--check]       update from latest GitHub release
   codexswitch list                   list known models
   codexswitch status                 show active config and auth status
@@ -1833,7 +1943,14 @@ def main(argv: list[str]) -> int:
         if len(argv) == 2 and argv[1] == "migrate":
             migrate_vault()
             return 0
-        die("gebruik: codexswitch vault migrate")
+        if len(argv) == 2 and argv[1] == "status":
+            current = vault_status()
+            print(f"Vault: {current['mode']} / {current['label']}")
+            return 0 if current.get("online") else 1
+        if len(argv) == 3 and argv[1:] == ["remote", "configure"]:
+            configure_remote_vault()
+            return 0
+        die("gebruik: codexswitch vault migrate | status | remote configure")
     if cmd == "update":
         if len(argv) > 2 or (len(argv) == 2 and argv[1] != "--check"):
             die("gebruik: codexswitch update [--check]")
@@ -1875,7 +1992,8 @@ def main(argv: list[str]) -> int:
         update_codex_config(argv[1], argv[2], effort)
         return 0
     if cmd == "run":
-        os.execvp(codex_bin(), [codex_bin(), *argv[1:]])
+        binary = codex_launch_bin()
+        os.execvpe(binary, [binary, *argv[1:]], codex_launch_environment())
     usage()
     return 2
 

@@ -16,9 +16,13 @@ import re
 import shutil
 import subprocess
 import base64
+import hashlib
+import hmac
 import secrets
 import urllib.error
+import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 try:
     import pwd
@@ -26,7 +30,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "1.1.3"
+VERSION = "1.2.0"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -42,6 +46,15 @@ COMMANDER_CENTERED = COMMANDER_SPACED.rjust(
 BRAND_BANNER = f"{ASCII_LOGO}\n{COMMANDER_CENTERED}"
 VAULT_SERVICE = "CodexSwitch"
 VAULT_USER = "default"
+REMOTE_VAULT_SERVICE = "CodexSwitch Remote Vault"
+REMOTE_ACCESS_USER = "s3-access-key-id"
+REMOTE_SECRET_USER = "s3-secret-access-key"
+REMOTE_PASSPHRASE_USER = "vault-passphrase"
+REMOTE_CONFIG_NAME = "remote-vault.json"
+REMOTE_DEFAULT_ENDPOINT = "https://fsn1.your-objectstorage.com"
+REMOTE_DEFAULT_BUCKET = "wmostert"
+REMOTE_DEFAULT_OBJECT = "codexswitch/vault.enc"
+REMOTE_DEFAULT_REGION = "fsn1"
 
 
 def user_home() -> Path:
@@ -65,6 +78,193 @@ def vault_path(home: Path | None = None) -> Path:
 
 def vault_key_path(home: Path | None = None) -> Path:
     return (home or switch_home()) / "vault.key"
+
+
+def remote_vault_config_path(home: Path | None = None) -> Path:
+    return (home or switch_home()) / REMOTE_CONFIG_NAME
+
+
+def remote_vault_config(home: Path | None = None) -> dict:
+    path = remote_vault_config_path(home)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except FileNotFoundError:
+        return {}
+    except (OSError, json.JSONDecodeError) as exc:
+        raise RuntimeError(f"ongeldige remote-vaultconfig: {exc}") from exc
+    return data if isinstance(data, dict) and data.get("enabled") else {}
+
+
+def remote_vault_enabled(home: Path | None = None) -> bool:
+    return bool(remote_vault_config(home))
+
+
+def write_remote_vault_config(config: dict, home: Path | None = None) -> None:
+    path = remote_vault_config_path(home)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    _chmod_secret(path.parent, directory=True)
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        tmp.write_text(json.dumps(config, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        _chmod_secret(tmp)
+        os.replace(tmp, path)
+        _chmod_secret(path)
+    finally:
+        tmp.unlink(missing_ok=True)
+
+
+def _remote_keyring_value(user: str) -> str | None:
+    try:
+        import keyring
+        return keyring.get_password(REMOTE_VAULT_SERVICE, user)
+    except Exception:
+        return None
+
+
+def store_remote_credentials(
+    access_key: str, secret_key: str, passphrase: str
+) -> None:
+    try:
+        import keyring
+        keyring.set_password(REMOTE_VAULT_SERVICE, REMOTE_ACCESS_USER, access_key)
+        keyring.set_password(REMOTE_VAULT_SERVICE, REMOTE_SECRET_USER, secret_key)
+        keyring.set_password(
+            REMOTE_VAULT_SERVICE, REMOTE_PASSPHRASE_USER, passphrase
+        )
+    except Exception as exc:
+        environment_matches = (
+            os.environ.get("CODEXSWITCH_S3_ACCESS_KEY_ID") == access_key
+            and os.environ.get("CODEXSWITCH_S3_SECRET_ACCESS_KEY") == secret_key
+            and os.environ.get("CODEXSWITCH_REMOTE_VAULT_PASSPHRASE")
+            == passphrase
+        )
+        if environment_matches:
+            return
+        raise RuntimeError(
+            "remote-vault secrets konden niet in de OS-keyring worden opgeslagen; "
+            "zet de drie CODEXSWITCH remote-vault environmentvariabelen"
+        ) from exc
+
+
+def remote_credentials() -> tuple[str, str]:
+    access_key = os.environ.get("CODEXSWITCH_S3_ACCESS_KEY_ID") or _remote_keyring_value(
+        REMOTE_ACCESS_USER
+    )
+    secret_key = os.environ.get("CODEXSWITCH_S3_SECRET_ACCESS_KEY") or _remote_keyring_value(
+        REMOTE_SECRET_USER
+    )
+    if not access_key or not secret_key:
+        raise RuntimeError(
+            "remote-vault S3-credentials ontbreken in environment of OS-keyring"
+        )
+    return access_key, secret_key
+
+
+def remote_vault_key(home: Path | None = None) -> bytes:
+    passphrase = os.environ.get(
+        "CODEXSWITCH_REMOTE_VAULT_PASSPHRASE"
+    ) or _remote_keyring_value(REMOTE_PASSPHRASE_USER)
+    if not passphrase:
+        raise RuntimeError(
+            "remote-vault passphrase ontbreekt in environment of OS-keyring"
+        )
+    endpoint, bucket, object_name, _ = _remote_settings(home)
+    salt = hashlib.sha256(
+        f"CodexSwitch Remote Vault\0{endpoint}\0{bucket}\0{object_name}".encode(
+            "utf-8"
+        )
+    ).digest()[:16]
+    derived = hashlib.pbkdf2_hmac(
+        "sha256", passphrase.encode("utf-8"), salt, 600_000, dklen=32
+    )
+    return base64.urlsafe_b64encode(derived)
+
+
+def _remote_settings(home: Path | None = None) -> tuple[str, str, str, str]:
+    config = remote_vault_config(home)
+    if not config:
+        raise RuntimeError("remote vault is niet geconfigureerd")
+    endpoint = str(config.get("endpoint") or REMOTE_DEFAULT_ENDPOINT).rstrip("/")
+    bucket = str(config.get("bucket") or REMOTE_DEFAULT_BUCKET).strip()
+    object_name = str(config.get("object") or REMOTE_DEFAULT_OBJECT).strip("/")
+    region = str(config.get("region") or REMOTE_DEFAULT_REGION).strip()
+    parsed = urllib.parse.urlsplit(endpoint)
+    if parsed.scheme != "https" or not parsed.netloc or parsed.path.rstrip("/"):
+        raise RuntimeError("remote-vault endpoint moet een HTTPS host-URL zijn")
+    if not bucket or not object_name or not region:
+        raise RuntimeError("remote-vault bucket, object en region zijn verplicht")
+    return endpoint, bucket, object_name, region
+
+
+def remote_vault_request(
+    method: str, body: bytes | None = None, home: Path | None = None
+) -> bytes | None:
+    endpoint, bucket, object_name, region = _remote_settings(home)
+    access_key, secret_key = remote_credentials()
+    parsed = urllib.parse.urlsplit(endpoint)
+    canonical_uri = "/" + "/".join(
+        urllib.parse.quote(part, safe="-_.~")
+        for part in (bucket, *object_name.split("/"))
+    )
+    payload = body or b""
+    payload_hash = hashlib.sha256(payload).hexdigest()
+    now = datetime.now(timezone.utc)
+    amz_date = now.strftime("%Y%m%dT%H%M%SZ")
+    date_stamp = now.strftime("%Y%m%d")
+    canonical_headers = (
+        f"host:{parsed.netloc}\n"
+        f"x-amz-content-sha256:{payload_hash}\n"
+        f"x-amz-date:{amz_date}\n"
+    )
+    signed_headers = "host;x-amz-content-sha256;x-amz-date"
+    canonical_request = "\n".join(
+        [method, canonical_uri, "", canonical_headers, signed_headers, payload_hash]
+    )
+    scope = f"{date_stamp}/{region}/s3/aws4_request"
+    string_to_sign = "\n".join(
+        [
+            "AWS4-HMAC-SHA256",
+            amz_date,
+            scope,
+            hashlib.sha256(canonical_request.encode("utf-8")).hexdigest(),
+        ]
+    )
+
+    def sign(key: bytes, message: str) -> bytes:
+        return hmac.new(key, message.encode("utf-8"), hashlib.sha256).digest()
+
+    date_key = sign(("AWS4" + secret_key).encode("utf-8"), date_stamp)
+    region_key = sign(date_key, region)
+    service_key = sign(region_key, "s3")
+    signing_key = sign(service_key, "aws4_request")
+    signature = hmac.new(
+        signing_key, string_to_sign.encode("utf-8"), hashlib.sha256
+    ).hexdigest()
+    authorization = (
+        f"AWS4-HMAC-SHA256 Credential={access_key}/{scope}, "
+        f"SignedHeaders={signed_headers}, Signature={signature}"
+    )
+    request = urllib.request.Request(
+        urllib.parse.urlunsplit((parsed.scheme, parsed.netloc, canonical_uri, "", "")),
+        data=payload if method == "PUT" else None,
+        method=method,
+        headers={
+            "Authorization": authorization,
+            "Host": parsed.netloc,
+            "X-Amz-Content-Sha256": payload_hash,
+            "X-Amz-Date": amz_date,
+            "Content-Type": "application/octet-stream",
+        },
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.read()
+    except urllib.error.HTTPError as exc:
+        if method == "GET" and exc.code == 404:
+            return None
+        raise RuntimeError(f"remote vault HTTP {exc.code}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"remote vault niet bereikbaar: {type(exc).__name__}") from exc
 
 
 def _chmod_secret(path: Path, directory: bool = False) -> None:
@@ -142,27 +342,51 @@ def vault_key(home: Path | None = None) -> bytes:
     return key
 
 
+def remove_local_vault_material(home: Path | None = None) -> None:
+    vault_path(home).unlink(missing_ok=True)
+    vault_key_path(home).unlink(missing_ok=True)
+    use_keyring = home is None or home == switch_home()
+    if use_keyring:
+        try:
+            import keyring
+
+            keyring.delete_password(VAULT_SERVICE, VAULT_USER)
+        except Exception:
+            pass
+
+
 def vault_load(home: Path | None = None) -> dict:
+    remote = remote_vault_enabled(home)
     path = vault_path(home)
-    if not path.exists():
+    token = remote_vault_request("GET", home=home) if remote else (
+        path.read_bytes() if path.exists() else None
+    )
+    if token is None:
         return {}
     Fernet = _fernet()
     try:
-        plaintext = Fernet(vault_key(home)).decrypt(path.read_bytes())
+        key = remote_vault_key(home) if remote else vault_key(home)
+        plaintext = Fernet(key).decrypt(token)
         data = json.loads(plaintext.decode("utf-8"))
     except Exception as exc:
-        raise RuntimeError(f"kan credential vault niet openen: {exc}") from exc
+        location = "remote credential vault" if remote else "credential vault"
+        raise RuntimeError(f"kan {location} niet openen: {type(exc).__name__}") from exc
     return data if isinstance(data, dict) else {}
 
 
 def vault_save(data: dict, home: Path | None = None) -> None:
     Fernet = _fernet()
+    remote = remote_vault_enabled(home)
+    key = remote_vault_key(home) if remote else vault_key(home)
+    token = Fernet(key).encrypt(
+        json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
+    )
+    if remote:
+        remote_vault_request("PUT", token, home)
+        return
     path = vault_path(home)
     path.parent.mkdir(parents=True, exist_ok=True)
     _chmod_secret(path.parent, directory=True)
-    token = Fernet(vault_key(home)).encrypt(
-        json.dumps(data, indent=2, sort_keys=True).encode("utf-8")
-    )
     tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
     try:
         tmp.write_bytes(token)
@@ -171,6 +395,21 @@ def vault_save(data: dict, home: Path | None = None) -> None:
         _chmod_secret(path)
     finally:
         tmp.unlink(missing_ok=True)
+
+
+def vault_status(home: Path | None = None) -> dict[str, object]:
+    if not remote_vault_enabled(home):
+        return {"mode": "local", "online": True, "label": "LOCAL"}
+    try:
+        vault_load(home)
+    except Exception as exc:
+        return {
+            "mode": "remote",
+            "online": False,
+            "label": "OFFLINE",
+            "error": str(exc),
+        }
+    return {"mode": "remote", "online": True, "label": "ONLINE"}
 
 
 def secret_id(path: Path, home: Path | None = None) -> str:
@@ -187,6 +426,8 @@ def read_secret_json(path: Path, default, home: Path | None = None):
     data = vault_load(home)
     if sid in data:
         return data[sid]
+    if remote_vault_enabled(home):
+        return default
     try:
         legacy = json.loads(path.read_text())
     except FileNotFoundError:

@@ -5,7 +5,11 @@ from pathlib import Path
 
 # Import shared helpers from the sibling module
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from codexswitch_common import read_secret_json, user_home  # noqa: E402
+from codexswitch_common import (  # noqa: E402
+    read_secret_json,
+    remote_vault_enabled,
+    user_home,
+)
 
 
 def main() -> int:
@@ -21,7 +25,7 @@ def main() -> int:
         return 1
 
     key = data.get("api_key") if isinstance(data, dict) else None
-    if not key:
+    if not key and not remote_vault_enabled():
         try:
             legacy = json.loads(legacy_auth_path.read_text())
         except FileNotFoundError:

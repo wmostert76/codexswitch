@@ -65,8 +65,7 @@ class FakeBackend(dict[str, Any]):
         }
         self.auth_state: dict[str, Any] = {"email": "tester@example.invalid"}
         self.azure_state: dict[str, Any] = {
-            "endpoint": "https://example.invalid/azure",
-            "api_version": "2026-01-01",
+            "endpoint": "https://example.invalid/openai/v1",
         }
         self.openai_catalog: dict[str, dict[str, Any]] = {
             "gpt-main": {
@@ -210,6 +209,12 @@ class FakeBackend(dict[str, Any]):
                     ("preflight",)
                 ),
                 "codex_bin": lambda: "/usr/bin/codex-test",
+                "codex_launch_environment": lambda: {"TEST_CODEX_ENV": "1"},
+                "vault_status": lambda: {
+                    "mode": "local",
+                    "online": True,
+                    "label": "LOCAL",
+                },
             }
         )
 
@@ -258,11 +263,9 @@ class FakeBackend(dict[str, Any]):
         self.auth_state = {"email": email}
         self.config_state["openai_account"] = email
 
-    def save_azure_credentials(
-        self, endpoint: str, key: str, api_version: str
-    ) -> None:
+    def save_azure_credentials(self, endpoint: str, key: str) -> None:
         self.calls.append(("save-key", "azure"))
-        self.azure_state = {"endpoint": endpoint, "api_version": api_version}
+        self.azure_state = {"endpoint": endpoint}
 
     def refresher(self, provider: str) -> Callable[[bool], bool]:
         def refresh(strict: bool = False) -> bool:
@@ -744,6 +747,44 @@ def test_model_search_matches_full_id_and_display_name(app_factory):
     asyncio.run(run())
 
 
+def test_startup_loads_cached_catalogs_without_refreshing_providers(
+    app_factory, fake_backend: FakeBackend
+):
+    app = app_factory(fake_backend, refresh_on_start=True)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await app.workers.wait_for_complete()
+            await settle(pilot)
+            assert not [call for call in fake_backend.calls if call[0] == "refresh"]
+
+    asyncio.run(run())
+
+
+def test_remote_vault_offline_is_persistent_and_visible_in_status_bar(
+    app_factory, fake_backend: FakeBackend
+):
+    fake_backend["vault_status"] = lambda: {
+        "mode": "remote",
+        "online": False,
+        "label": "OFFLINE",
+    }
+    app = app_factory(fake_backend, refresh_on_start=True)
+
+    async def run() -> None:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await wait_until(
+                pilot,
+                lambda: "UNAVAILABLE"
+                in app.query_one("#status").render().plain.upper(),
+            )
+            status = app.query_one("#status").render().plain.upper()
+            assert "VAULT OFFLINE" in status
+            assert "ERROR" in status
+
+    asyncio.run(run())
+
+
 def test_model_search_no_results_blocks_apply_and_start(
     app_factory, fake_backend: FakeBackend
 ):
@@ -1139,20 +1180,17 @@ def test_azure_modal_fits_80x24_and_validates_in_field_order(
             dialog = app.screen.query_one("#azure-dialog")
             assert dialog.region.right <= 80 and dialog.region.bottom <= 24
             endpoint = app.screen.query_one("#azure-endpoint-input", Input)
-            version = app.screen.query_one("#azure-version-input", Input)
             key = app.screen.query_one("#api-key-input", Input)
             save = app.screen.query_one("#api-key-save", Button)
             cancel = app.screen.query_one("#api-key-cancel", Button)
             assert endpoint.has_focus
-            await pilot.press("tab", "tab", "tab")
+            await pilot.press("tab", "tab")
             assert save.has_focus
             assert save.styles.background == Color.parse("#ffff00")
             await pilot.press("tab")
             assert cancel.has_focus
             assert cancel.styles.background == Color.parse("#ffff00")
             endpoint.focus()
-            await pilot.press("enter")
-            assert version.has_focus
             await pilot.press("enter")
             assert key.has_focus
 
@@ -1360,6 +1398,29 @@ def test_azure_shows_all_reasoning_levels_and_defaults_to_low(
     asyncio.run(run())
 
 
+def test_azure_apply_updates_codex_provider_model_and_reasoning(
+    app_factory, fake_backend: FakeBackend
+):
+    app = app_factory(fake_backend)
+
+    async def run() -> None:
+        async with app.run_test(size=(120, 40)) as pilot:
+            await settle(pilot)
+            sources = app.query_one("#sources", OptionList)
+            highlight(sources, "provider:azure")
+            await settle(pilot)
+            await pilot.press("f6")
+            await wait_until(pilot, lambda: not app.operation_busy)
+            assert fake_backend.codex_state == {
+                "model_provider": "azure",
+                "model": "azure-gpt",
+                "model_reasoning_effort": "low",
+            }
+            assert ("apply", "azure", "azure-gpt", "low") in fake_backend.calls
+
+    asyncio.run(run())
+
+
 def test_reasoning_options_are_derived_from_loaded_catalog_without_backend_io(
     app_factory, fake_backend: FakeBackend
 ):
@@ -1540,6 +1601,7 @@ def test_main_checks_codex_runtime_before_exec(
         "preflight"
     )
     monkeypatch.setattr(tui, "BACKEND", fake_backend)
+    monkeypatch.setattr(tui.os, "name", "posix")
     monkeypatch.setattr(tui, "CodexSwitchApp", FakeApp)
     monkeypatch.setattr(tui, "codex_launch_argv", lambda: ["/bin/echo", "codex"])
 
@@ -1579,7 +1641,7 @@ def test_main_waits_for_codex_subprocess_on_windows(
     monkeypatch.setattr(
         tui.subprocess,
         "run",
-        lambda argv: calls.append(("run-codex", argv)) or tui.subprocess.CompletedProcess(
+        lambda argv, **kwargs: calls.append(("run-codex", argv, kwargs)) or tui.subprocess.CompletedProcess(
             argv, 23
         ),
     )
@@ -1593,8 +1655,30 @@ def test_main_waits_for_codex_subprocess_on_windows(
     assert calls == [
         "run",
         "preflight",
-        ("run-codex", ["codex.cmd", "--search"]),
+        (
+            "run-codex",
+            ["codex.cmd", "--search"],
+            {
+                "env": {"TEST_CODEX_ENV": "1"},
+            },
+        ),
     ]
+
+
+def test_windows_launch_uses_native_npm_codex_executable(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+):
+    shim = tmp_path / "codex.cmd"
+    native = (
+        tmp_path
+        / "node_modules/@openai/codex/node_modules/@openai/codex-win32-x64"
+        / "vendor/x86_64-pc-windows-msvc/bin/codex.exe"
+    )
+    native.parent.mkdir(parents=True)
+    native.write_bytes(b"")
+    monkeypatch.setattr(tui.os, "name", "nt")
+
+    assert tui.codex_launch_argv(str(shim))[0] == str(native)
 
 
 def test_headless_driver_uses_requested_terminal_size(app_factory):

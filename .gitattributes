@@ -1,0 +1,7 @@
+*.sh text eol=lf
+bin/codexswitch text eol=lf
+bin/codexswitch-tui text eol=lf
+bin/codex-opencode-go-proxy text eol=lf
+bin/opencode-go-token text eol=lf
+bin/openrouter-token text eol=lf
+bin/codexswitch_common.py text eol=lf

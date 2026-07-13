@@ -2,6 +2,36 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.2.0] - 2026-07-13
+
+### Changed
+
+- Azure authentication now asks only for the resource URL and API key, uses
+  the Azure OpenAI Responses v1 endpoint and keeps the key exclusively in the
+  encrypted vault instead of copying it into `config.toml`.
+- Commander now loads cached model catalogs at startup without refreshing
+  OpenCode Go or other remote catalogs; `F5` remains the explicit refresh.
+- Provider credentials and saved OpenAI accounts can now live exclusively in
+  a client-side encrypted shared Hetzner S3 vault. Every read fetches the
+  object again and remote mode never falls back to a local credential cache.
+
+### Added
+
+- Added `codexswitch vault remote configure` as a new-machine/first-machine
+  wizard using OS-keyring protected S3 credentials and a shared passphrase.
+- Added persistent `VAULT ONLINE`, `VAULT OFFLINE` or `VAULT LOCAL` state at
+  the front of the Commander status bar.
+
+### Fixed
+
+- Azure and OpenAI Apply/Start continue to write the selected provider, model
+  and reasoning effort to Codex `config.toml` before launch.
+- Windows Commander launches the native Codex executable when installed via
+  npm, gives it the inherited console streams and provider environment, and
+  starts Python-backed proxy/token helpers through the active interpreter.
+- Generated Codex TOML now escapes Windows paths and other string values
+  correctly, including the OpenRouter model-catalog path.
+
 ## [1.1.3] - 2026-07-13
 
 ### Fixed

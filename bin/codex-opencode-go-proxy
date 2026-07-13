@@ -17,6 +17,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from codexswitch_common import (
     user_home,
     read_secret_json,
+    remote_vault_enabled,
     opencode_catalog_from_binary,
     opencode_catalog_from_cache,
     opencode_catalog_from_upstream,
@@ -71,7 +72,7 @@ def opencode_key() -> str:
     except FileNotFoundError:
         data = {}
     key = data.get("api_key") if isinstance(data, dict) else None
-    if not key:
+    if not key and not remote_vault_enabled():
         try:
             legacy = json.loads(LEGACY_AUTH_PATH.read_text())
         except FileNotFoundError:

@@ -450,6 +450,12 @@ class TestHandler:
         legacy_auth.write_text(json.dumps({"opencode-go": {"key": "legacy-token"}}))
         monkeypatch.setattr(proxy, "AUTH_PATH", switch_auth)
         monkeypatch.setattr(proxy, "LEGACY_AUTH_PATH", legacy_auth)
+        monkeypatch.setattr(proxy, "remote_vault_enabled", lambda: False)
+        monkeypatch.setattr(
+            proxy,
+            "read_secret_json",
+            lambda path, default: json.loads(path.read_text()),
+        )
 
         assert proxy.opencode_key() == "switch-token"
 

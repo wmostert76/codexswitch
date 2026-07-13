@@ -16,6 +16,7 @@ from rich.text import Text
 from textual.app import App, ComposeResult
 from textual.binding import Binding
 from textual.containers import Horizontal, Vertical, VerticalScroll
+from textual.css.query import NoMatches
 from textual.events import Click, DescendantFocus, Key, Resize
 from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, OptionList, Static
@@ -272,13 +273,12 @@ class ApiKeyScreen(ModalScreen[str | None]):
             self.submit()
 
 
-class AzureAuthScreen(ModalScreen[tuple[str, str, str] | None]):
+class AzureAuthScreen(ModalScreen[tuple[str, str] | None]):
     BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
 
-    def __init__(self, endpoint: str, api_version: str) -> None:
+    def __init__(self, endpoint: str) -> None:
         super().__init__()
         self.endpoint = endpoint
-        self.api_version = api_version
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="modal-dialog", id="azure-dialog"):
@@ -292,13 +292,6 @@ class AzureAuthScreen(ModalScreen[tuple[str, str, str] | None]):
                 value=self.endpoint,
                 placeholder="https://…",
                 id="azure-endpoint-input",
-                classes="form-input",
-            )
-            yield Label("API version", classes="field-label")
-            yield Input(
-                value=self.api_version,
-                placeholder="API version",
-                id="azure-version-input",
                 classes="form-input",
             )
             yield Label("API key", classes="field-label")
@@ -321,8 +314,6 @@ class AzureAuthScreen(ModalScreen[tuple[str, str, str] | None]):
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "azure-endpoint-input":
-            self.query_one("#azure-version-input", Input).focus()
-        elif event.input.id == "azure-version-input":
             self.query_one("#api-key-input", Input).focus()
         else:
             self.submit()
@@ -335,25 +326,19 @@ class AzureAuthScreen(ModalScreen[tuple[str, str, str] | None]):
 
     def submit(self) -> None:
         endpoint_field = self.query_one("#azure-endpoint-input", Input)
-        version_field = self.query_one("#azure-version-input", Input)
         key_field = self.query_one("#api-key-input", Input)
         error = self.query_one("#form-error", Label)
         endpoint = endpoint_field.value.strip()
-        version = version_field.value.strip()
         key = key_field.value.strip()
         if not endpoint:
             error.update("Endpoint is required")
             endpoint_field.focus()
             return
-        if not version:
-            error.update("API version is required")
-            version_field.focus()
-            return
         if not key:
             error.update("API key is required")
             key_field.focus()
             return
-        self.dismiss((endpoint, key, version))
+        self.dismiss((endpoint, key))
 
 
 class CodexSwitchApp(App):
@@ -699,6 +684,7 @@ class CodexSwitchApp(App):
         self.too_small = False
         self.last_focus_id: str | None = None
         self.status_hint_held = False
+        self.vault_label = "LOCAL"
         self.backend_worker_lock = asyncio.Lock()
 
         self.catalogs: dict[str, dict[str, dict]] = {
@@ -1286,7 +1272,10 @@ class CodexSwitchApp(App):
             self.loading_reasoning = False
 
     def update_reasoning_markers(self) -> None:
-        reasoning = self.query_one("#reasoning", OptionList)
+        try:
+            reasoning = self.query_one("#reasoning", OptionList)
+        except NoMatches:
+            return
         same_active_model = (
             self.active.provider == self.draft.provider
             and self.active.model == self.draft.model
@@ -1410,14 +1399,17 @@ class CodexSwitchApp(App):
     ) -> None:
         status = self.query_one("#status", Static)
         self.status_hint_held = error or hold
+        prefix = f"VAULT {self.vault_label} · "
         status.update(
             Text(
-                ("ERROR · " if error else "") + message,
+                ("ERROR · " if error else "") + prefix + message,
                 no_wrap=True,
                 overflow="ellipsis",
             )
         )
-        status.styles.background = "#870000" if error else "#000000"
+        status.styles.background = (
+            "#870000" if error or self.vault_label == "OFFLINE" else "#000000"
+        )
 
     def update_status_hint_if_clear(self) -> None:
         """Keep an operation result visible across its programmatic focus change."""
@@ -1819,14 +1811,25 @@ class CodexSwitchApp(App):
     async def startup_refresh_worker(self) -> None:
         providers = ("openai", "opencode-go", "openrouter")
         self.busy_providers.update(providers)
-        self.set_status("Loading model catalogs in the background…")
+        self.vault_label = "CHECKING"
+        self.set_status("Checking shared vault…")
         failed = False
         try:
+            status_function = self.backend.get("vault_status")
+            if status_function:
+                try:
+                    status = await asyncio.to_thread(status_function)
+                except Exception:
+                    status = {"mode": "remote", "online": False, "label": "OFFLINE"}
+                label = str(status.get("label") or "OFFLINE").upper()
+                self.vault_label = label if label in {"LOCAL", "ONLINE", "OFFLINE"} else "OFFLINE"
+                failed = failed or not bool(status.get("online"))
+            self.set_status("Loading cached model catalogs…")
             for provider in providers:
                 try:
                     async with self.backend_worker_lock:
                         data = await asyncio.to_thread(
-                            self.provider_data_sync, provider, True
+                            self.provider_data_sync, provider, False
                         )
                     failed = failed or not data["success"]
                     self.apply_provider_data(data, preserve_missing=True)
@@ -1838,7 +1841,7 @@ class CodexSwitchApp(App):
             self.busy_providers.difference_update(providers)
         if failed:
             self.set_status(
-                "Some catalogs could not refresh; cached models were retained",
+                "Shared vault or a cached catalog is unavailable",
                 error=True,
             )
         else:
@@ -2123,11 +2126,8 @@ class CodexSwitchApp(App):
             endpoint = credential.get("endpoint") or self.backend.get(
                 "AZURE_DEFAULT_ENDPOINT", ""
             )
-            version = credential.get("api_version") or self.backend.get(
-                "AZURE_DEFAULT_API_VERSION", ""
-            )
             self.push_screen(
-                AzureAuthScreen(str(endpoint), str(version)),
+                AzureAuthScreen(str(endpoint)),
                 lambda payload: self.finish_credential_modal(provider, payload),
             )
             return
@@ -2197,9 +2197,9 @@ class CodexSwitchApp(App):
         saved = False
         try:
             if provider == "azure":
-                endpoint, key, version = payload
+                endpoint, key = payload
                 result, output = self.capture(
-                    self.backend["save_azure_credentials"], endpoint, key, version
+                    self.backend["save_azure_credentials"], endpoint, key
                 )
             elif provider == "opencode-go":
                 result, output = self.capture(
@@ -2258,7 +2258,18 @@ class CodexSwitchApp(App):
 
 
 def codex_launch_argv(binary: str | None = None) -> list[str]:
-    binary = binary or BACKEND["codex_bin"]()
+    binary = binary or BACKEND.get("codex_launch_bin", BACKEND["codex_bin"])()
+    if os.name == "nt":
+        shim = Path(binary)
+        if shim.suffix.lower() in {".cmd", ".bat"}:
+            package_root = shim.parent / "node_modules" / "@openai" / "codex"
+            candidates = sorted(
+                package_root.glob(
+                    "node_modules/@openai/codex-win32-*/vendor/*/bin/codex.exe"
+                )
+            )
+            if candidates:
+                binary = str(candidates[0])
     return [binary, *CODEX_TUI_LAUNCH_ARGS]
 
 
@@ -2269,7 +2280,10 @@ def main() -> int:
         BACKEND["ensure_codex_runtime_writable"]()
         argv = codex_launch_argv()
         if os.name == "nt":
-            return subprocess.run(argv).returncode
+            return subprocess.run(
+                argv,
+                env=BACKEND["codex_launch_environment"](),
+            ).returncode
         os.execvp(argv[0], argv)
     return 0
 

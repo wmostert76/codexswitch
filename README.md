@@ -28,7 +28,7 @@ It is built for three workflows:
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
-| Azure OpenAI | Endpoint/API-key storage and fixed `gpt-5.6-sol` model selection |
+| Azure OpenAI | Responses v1 endpoint/API-key vault storage and fixed `gpt-5.6-sol` model selection |
 | OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
 | OpenRouter | API-key storage, model catalog refresh and Codex provider config |
 
@@ -137,8 +137,9 @@ Model search is case-insensitive. Use `↑`/`↓` inside the filtered results,
 filter. Single-letter aliases apply only on the main screen, so they do not
 interfere with typing in search or credential dialogs.
 
-Catalogs load and refresh in the background, keeping navigation responsive.
-The last usable catalog remains visible if a refresh fails, and Apply/Launch
+Cached catalogs load in the background without a network refresh at startup.
+Use `F5` to refresh only the selected provider. The last usable catalog
+remains visible if a refresh fails, and Apply/Launch
 stays unavailable while the selected provider is still busy. The Commander
 splash appears once per installed version and remains available from Help.
 
@@ -192,25 +193,50 @@ out of the repository.
 | Secret | Nu opgeslagen in | Hoe het werkt |
 | --- | --- | --- |
 | Actieve OpenAI login | `~/.codex/auth.json` | `codex login` blijft eigenaar van de actieve login |
-| Opgeslagen OpenAI accounts | `~/.config/codexswitch/vault.enc` | CodexSwitch bewaart en herstelt accounts uit de vault |
-| Azure OpenAI credentials | `~/.config/codexswitch/vault.enc` | Endpoint, API key en API version zitten versleuteld in de vault |
-| OpenCode Go API key | `~/.config/codexswitch/vault.enc` | De token helper leest de key uit de vault |
-| OpenRouter API key | `~/.config/codexswitch/vault.enc` | De token helper leest de key uit de vault |
+| Opgeslagen OpenAI accounts | Gedeelde versleutelde vault | CodexSwitch haalt accounts bij ieder gebruik opnieuw uit Object Storage |
+| Azure OpenAI credentials | Gedeelde versleutelde vault | Endpoint en API-key blijven uit `config.toml` en lokale caches |
+| OpenCode Go API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
+| OpenRouter API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
 
 Vault flow:
 
 | Stap | Wat gebeurt er |
 | --- | --- |
-| 1 | CodexSwitch schrijft secrets naar `~/.config/codexswitch/vault.enc` |
-| 2 | De vault master key komt uit de OS keyring als die beschikbaar is |
-| 3 | Zonder keyring valt CodexSwitch terug op `~/.config/codexswitch/vault.key` |
-| 4 | Active Codex config blijft apart in `~/.codex/auth.json` en `~/.codex/config.toml` |
+| 1 | De wizard migreert de lokale vault client-side versleuteld naar Hetzner S3 |
+| 2 | S3-credentials en de gedeelde passphrase staan alleen in de OS-keyring of environment |
+| 3 | Iedere vault-read doet een nieuwe S3 GET; offline is er geen lokale credentialfallback |
+| 4 | Na verificatie verwijdert de wizard lokaal `vault.enc` en `vault.key` |
+| 5 | De TUI toont vooraan in de statusbalk `VAULT ONLINE` of `VAULT OFFLINE` |
+| 6 | Actieve Codex config blijft apart in `~/.codex/auth.json` en `~/.codex/config.toml` |
 
 Run this after upgrading an existing install:
 
 ```bash
 codexswitch vault migrate
 ```
+
+Configure the shared vault on the first or a new machine with the interactive
+wizard. The endpoint and bucket defaults are prefilled:
+
+```bash
+codexswitch vault remote configure
+codexswitch vault status
+```
+
+The wizard asks for the S3 Access Key ID, S3 Secret Access Key and the same
+shared vault passphrase on every machine. It uses
+`https://fsn1.your-objectstorage.com`, bucket `wmostert` and object
+`codexswitch/vault.enc` by default. On headless hosts where the OS keyring is
+not available, provide these only through the service environment:
+
+```text
+CODEXSWITCH_S3_ACCESS_KEY_ID
+CODEXSWITCH_S3_SECRET_ACCESS_KEY
+CODEXSWITCH_REMOTE_VAULT_PASSPHRASE
+```
+
+`remote-vault.json` contains only endpoint, bucket, region and object name;
+it never contains credentials or provider secrets.
 
 Codex itself still owns the active `~/.codex/auth.json` file, and Azure
 activation still writes the active provider settings required by Codex into
@@ -223,8 +249,10 @@ codexswitch account add
 ```
 
 Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
-through a paste/renew popup in the TUI. Codex receives keys via
-installed token command helpers, not via plain text in `~/.codex/config.toml`.
+through a paste/renew popup in the TUI. Azure asks only for the resource URL
+and API key and normalizes the URL to `/openai/v1`. Codex receives keys via
+launch-time environment headers or installed token command helpers, not via
+plain text in `~/.codex/config.toml`.
 
 ```bash
 codexswitch auth azure

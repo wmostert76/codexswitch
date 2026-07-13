@@ -6,6 +6,7 @@ import json
 import os
 import tempfile
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -28,7 +29,7 @@ def test_version_constant_is_release_version():
     import re
     assert re.match(r"^\d+\.\d+\.\d+$", cs.VERSION), f"Invalid version: {cs.VERSION}"
     proc = subprocess.run(
-        [str(BIN_DIR / "codexswitch"), "version"],
+        [sys.executable, str(BIN_DIR / "codexswitch"), "version"],
         text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True,
     )
     assert proc.stdout.strip() == f"codexswitch {cs.VERSION}"
@@ -43,7 +44,7 @@ def test_version_constant_is_release_version():
 
 def test_cli_version_output():
     proc = subprocess.run(
-        [str(BIN_DIR / "codexswitch"), "version"],
+        [sys.executable, str(BIN_DIR / "codexswitch"), "version"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -54,7 +55,7 @@ def test_cli_version_output():
 
 def test_cli_dash_version_still_works_as_compatibility_alias():
     proc = subprocess.run(
-        [str(BIN_DIR / "codexswitch"), "--version"],
+        [sys.executable, str(BIN_DIR / "codexswitch"), "--version"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -65,7 +66,7 @@ def test_cli_dash_version_still_works_as_compatibility_alias():
 
 def test_cli_help_contains_credits_and_tui_command():
     proc = subprocess.run(
-        [str(BIN_DIR / "codexswitch"), "--help"],
+        [sys.executable, str(BIN_DIR / "codexswitch"), "--help"],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -104,9 +105,24 @@ def test_azure_rejects_retired_gpt_5_5():
         cs.validate_provider_model("azure", "gpt-5.5")
 
 
+def test_azure_endpoint_is_normalized_to_responses_v1():
+    assert cs.normalize_azure_endpoint("https://example.invalid") == (
+        "https://example.invalid/openai/v1"
+    )
+    assert cs.normalize_azure_endpoint("https://example.invalid/openai/") == (
+        "https://example.invalid/openai/v1"
+    )
+    assert cs.normalize_azure_endpoint(
+        "https://example.invalid/openai/v1/"
+    ) == "https://example.invalid/openai/v1"
+    assert cs.normalize_azure_endpoint(
+        "https://example.invalid/openai/v1/responses"
+    ) == "https://example.invalid/openai/v1"
+
+
 def test_cli_without_args_shows_help_not_tui():
     proc = subprocess.run(
-        [str(BIN_DIR / "codexswitch")],
+        [sys.executable, str(BIN_DIR / "codexswitch")],
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -145,6 +161,59 @@ def test_banner_contains_credits(capsys):
     output = capsys.readouterr().out
     assert "by WAM-Software since (c) 1988" in output
     assert "AI-assisted implementation: OpenAI Codex" in output
+
+
+def test_remote_vault_configure_wizard_uploads_then_removes_local_material(
+    tmp_path, monkeypatch, capsys
+):
+    calls = []
+    answers = iter(["", ""])
+    secrets = iter(
+        [
+            "fixture-access",
+            "fixture-s3-secret",
+            "fixture-shared-passphrase-long",
+            "fixture-shared-passphrase-long",
+        ]
+    )
+    monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path)
+    monkeypatch.setattr(cs, "remote_vault_enabled", lambda home: False)
+    monkeypatch.setattr(cs, "migrate_vault", lambda: calls.append(("migrate",)))
+    monkeypatch.setattr(cs, "vault_load", lambda home: {"saved": {"value": 1}})
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+    monkeypatch.setattr(cs.getpass, "getpass", lambda prompt="": next(secrets))
+    monkeypatch.setattr(
+        cs,
+        "store_remote_credentials",
+        lambda access, secret, passphrase: calls.append(
+            ("credentials", access, secret, passphrase)
+        ),
+    )
+    monkeypatch.setattr(
+        cs,
+        "write_remote_vault_config",
+        lambda config, home: calls.append(("config", config, home)),
+    )
+    monkeypatch.setattr(cs, "remote_vault_request", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        cs, "vault_save", lambda data, home: calls.append(("upload", data, home))
+    )
+    monkeypatch.setattr(
+        cs,
+        "vault_status",
+        lambda: {"mode": "remote", "online": True, "label": "ONLINE"},
+    )
+    monkeypatch.setattr(
+        cs,
+        "remove_local_vault_material",
+        lambda home: calls.append(("remove-local", home)),
+    )
+
+    cs.configure_remote_vault()
+
+    assert any(call[0] == "upload" for call in calls)
+    assert ("remove-local", tmp_path) in calls
+    assert "ONLINE" in capsys.readouterr().out
 
 
 def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
@@ -283,7 +352,7 @@ def test_proxy_service_unit_uses_proxy_binary_and_current_user(tmp_path, monkeyp
     proxy_bin = tmp_path / "codex-opencode-go-proxy"
     proxy_bin.write_text("")
     monkeypatch.setattr(cs, "PROXY_BIN", str(proxy_bin))
-    monkeypatch.setattr(cs.os, "geteuid", lambda: 1000)
+    monkeypatch.setattr(cs.os, "geteuid", lambda: 1000, raising=False)
     monkeypatch.setattr(cs, "command_output", lambda cmd: {
         ("id", "-un"): "tester",
         ("id", "-gn", "tester"): "testers",
@@ -668,9 +737,8 @@ class TestUpdateState:
             cs,
             "azure_credentials",
             lambda: {
-                "endpoint": "https://example.invalid/openai",
+                "endpoint": "https://example.invalid/openai/v1",
                 "api_key": "fixture-value",
-                "api_version": "2026-01-01",
             },
         )
 
@@ -680,6 +748,10 @@ class TestUpdateState:
         state = json.loads(state_path.read_text())
         assert 'model = "gpt-5.6-sol"' in text
         assert 'model_reasoning_effort = "low"' in text
+        assert 'base_url = "https://example.invalid/openai/v1"' in text
+        assert 'env_http_headers = { "api-key" = "AZURE_OPENAI_API_KEY" }' in text
+        assert "fixture-value" not in text
+        assert "api-version" not in text
         assert state["reasoning_effort"] == "low"
 
     def test_openai_records_the_current_authenticated_account(
@@ -843,9 +915,13 @@ class TestUpdateState:
         text = config.read_text()
         state = json.loads(state_path.read_text())
         assert 'model_provider = "openrouter"' in text
-        assert f'model_catalog_json = "{switch_home}/openrouter/codex-models.json"' in text
+        assert (
+            f"model_catalog_json = {cs.toml_string(str(cs.OPENROUTER_CODEX_MODELS))}"
+            in text
+        )
         assert 'base_url = "https://openrouter.ai/api/v1"' in text
-        assert f'command = "{token_helper}"' in text
+        assert f"command = {cs.toml_string(cs.sys.executable)}" in text
+        assert f"args = [{cs.toml_string(str(token_helper))}]" in text
         assert "model_reasoning_effort" not in text
         assert "api_key" not in text
         assert "openai_account" not in state

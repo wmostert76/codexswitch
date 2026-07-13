@@ -1,10 +1,120 @@
 """Tests for codexswitch_common shared helpers."""
 import json
 import os
+import urllib.error
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 import codexswitch_common as common
+
+
+class FakeResponse:
+    def __init__(self, payload: bytes = b"") -> None:
+        self.payload = payload
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *args):
+        return False
+
+    def read(self) -> bytes:
+        return self.payload
+
+
+def enable_remote(home: Path) -> None:
+    common.write_remote_vault_config(
+        {
+            "enabled": True,
+            "endpoint": "https://fsn1.your-objectstorage.com",
+            "bucket": "test-bucket",
+            "object": "codexswitch/vault.enc",
+            "region": "fsn1",
+        },
+        home,
+    )
+
+
+def remote_environment(monkeypatch) -> None:
+    monkeypatch.setenv("CODEXSWITCH_S3_ACCESS_KEY_ID", "fixture-access")
+    monkeypatch.setenv("CODEXSWITCH_S3_SECRET_ACCESS_KEY", "fixture-secret")
+    monkeypatch.setenv(
+        "CODEXSWITCH_REMOTE_VAULT_PASSPHRASE",
+        "fixture-shared-passphrase-long-enough",
+    )
+
+
+class TestRemoteVault:
+    def test_shared_passphrase_derives_same_key_on_new_machine(
+        self, tmp_path, monkeypatch
+    ):
+        first = tmp_path / "first"
+        second = tmp_path / "second"
+        enable_remote(first)
+        enable_remote(second)
+        remote_environment(monkeypatch)
+        assert common.remote_vault_key(first) == common.remote_vault_key(second)
+
+    def test_remote_load_fetches_every_time_without_using_local_cache(
+        self, tmp_path, monkeypatch
+    ):
+        enable_remote(tmp_path)
+        remote_environment(monkeypatch)
+        Fernet = common._fernet()
+        remote_token = Fernet(common.remote_vault_key(tmp_path)).encrypt(
+            json.dumps({"remote": {"api_key": "remote-value"}}).encode()
+        )
+        common.vault_path(tmp_path).write_bytes(
+            Fernet(common.vault_key(tmp_path)).encrypt(b'{"local": true}')
+        )
+        calls = []
+
+        def fake_urlopen(request, timeout=0):
+            calls.append(request.full_url)
+            return FakeResponse(remote_token)
+
+        monkeypatch.setattr(common.urllib.request, "urlopen", fake_urlopen)
+        assert common.vault_load(tmp_path)["remote"]["api_key"] == "remote-value"
+        assert common.vault_load(tmp_path)["remote"]["api_key"] == "remote-value"
+        assert len(calls) == 2
+
+    def test_remote_offline_never_falls_back_to_local_vault(
+        self, tmp_path, monkeypatch
+    ):
+        enable_remote(tmp_path)
+        remote_environment(monkeypatch)
+        common.vault_path(tmp_path).write_bytes(b"local-cache-must-not-be-read")
+        monkeypatch.setattr(
+            common.urllib.request,
+            "urlopen",
+            lambda *args, **kwargs: (_ for _ in ()).throw(
+                urllib.error.URLError("offline")
+            ),
+        )
+        with pytest.raises(RuntimeError, match="niet bereikbaar"):
+            common.vault_load(tmp_path)
+        assert common.vault_status(tmp_path)["label"] == "OFFLINE"
+
+    def test_remote_save_uploads_encrypted_object_without_local_vault(
+        self, tmp_path, monkeypatch
+    ):
+        enable_remote(tmp_path)
+        remote_environment(monkeypatch)
+        uploads = []
+
+        def fake_urlopen(request, timeout=0):
+            uploads.append(request)
+            return FakeResponse()
+
+        monkeypatch.setattr(common.urllib.request, "urlopen", fake_urlopen)
+        common.vault_save({"secret": "fixture-provider-key"}, tmp_path)
+        assert len(uploads) == 1
+        request = uploads[0]
+        assert request.get_method() == "PUT"
+        assert request.full_url.endswith("/test-bucket/codexswitch/vault.enc")
+        assert b"fixture-provider-key" not in request.data
+        assert not common.vault_path(tmp_path).exists()
 
 
 class TestUserHome:
@@ -17,7 +127,7 @@ class TestUserHome:
         monkeypatch.delenv("SUDO_USER", raising=False)
         monkeypatch.setenv("HOME", "/tmp/test-home-xyz")
         result = common.user_home()
-        assert result.is_absolute()
+        assert result == Path("/tmp/test-home-xyz")
 
     def test_sudo_user_respected(self, monkeypatch):
         monkeypatch.setenv("SUDO_USER", "root")
