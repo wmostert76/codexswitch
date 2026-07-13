@@ -30,7 +30,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _
@@ -51,6 +51,7 @@ REMOTE_ACCESS_USER = "s3-access-key-id"
 REMOTE_SECRET_USER = "s3-secret-access-key"
 REMOTE_PASSPHRASE_USER = "vault-passphrase"
 REMOTE_CONFIG_NAME = "remote-vault.json"
+REMOTE_CREDENTIAL_DIR_NAME = "remote-credentials"
 REMOTE_DEFAULT_ENDPOINT = "https://fsn1.your-objectstorage.com"
 REMOTE_DEFAULT_BUCKET = "wmostert"
 REMOTE_DEFAULT_OBJECT = "codexswitch/vault.enc"
@@ -82,6 +83,14 @@ def vault_key_path(home: Path | None = None) -> Path:
 
 def remote_vault_config_path(home: Path | None = None) -> Path:
     return (home or switch_home()) / REMOTE_CONFIG_NAME
+
+
+def remote_credential_dir(home: Path | None = None) -> Path:
+    return (home or switch_home()) / REMOTE_CREDENTIAL_DIR_NAME
+
+
+def remote_credential_path(user: str, home: Path | None = None) -> Path:
+    return remote_credential_dir(home) / f"{user}.cred"
 
 
 def remote_vault_config(home: Path | None = None) -> dict:
@@ -121,9 +130,95 @@ def _remote_keyring_value(user: str) -> str | None:
         return None
 
 
+def _systemd_credentials_binary() -> str | None:
+    if os.name == "nt":
+        return None
+    return shutil.which("systemd-creds")
+
+
+def _remote_systemd_credential_value(
+    user: str, home: Path | None = None
+) -> str | None:
+    path = remote_credential_path(user, home)
+    binary = _systemd_credentials_binary()
+    if not binary or not path.is_file():
+        return None
+    try:
+        result = subprocess.run(
+            [
+                binary,
+                "--user",
+                f"--name={user}",
+                "decrypt",
+                str(path),
+                "-",
+            ],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode:
+        return None
+    value = result.stdout.decode("utf-8", errors="strict").rstrip("\r\n")
+    return value or None
+
+
+def _store_remote_systemd_credentials(
+    values: dict[str, str], home: Path | None = None
+) -> bool:
+    binary = _systemd_credentials_binary()
+    if not binary:
+        return False
+    directory = remote_credential_dir(home)
+    directory.mkdir(parents=True, exist_ok=True)
+    _chmod_secret(directory, directory=True)
+    pending: list[tuple[Path, Path]] = []
+    try:
+        for user, value in values.items():
+            path = remote_credential_path(user, home)
+            tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+            result = subprocess.run(
+                [
+                    binary,
+                    "--user",
+                    f"--name={user}",
+                    "encrypt",
+                    "-",
+                    str(tmp),
+                ],
+                input=value.encode("utf-8"),
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                check=False,
+                timeout=10,
+            )
+            if result.returncode or not tmp.is_file():
+                tmp.unlink(missing_ok=True)
+                return False
+            _chmod_secret(tmp)
+            pending.append((tmp, path))
+        for tmp, path in pending:
+            os.replace(tmp, path)
+            _chmod_secret(path)
+        return True
+    except (OSError, subprocess.SubprocessError):
+        return False
+    finally:
+        for tmp, _ in pending:
+            tmp.unlink(missing_ok=True)
+
+
 def store_remote_credentials(
     access_key: str, secret_key: str, passphrase: str
 ) -> None:
+    values = {
+        REMOTE_ACCESS_USER: access_key,
+        REMOTE_SECRET_USER: secret_key,
+        REMOTE_PASSPHRASE_USER: passphrase,
+    }
     try:
         import keyring
         keyring.set_password(REMOTE_VAULT_SERVICE, REMOTE_ACCESS_USER, access_key)
@@ -131,7 +226,10 @@ def store_remote_credentials(
         keyring.set_password(
             REMOTE_VAULT_SERVICE, REMOTE_PASSPHRASE_USER, passphrase
         )
+        return
     except Exception as exc:
+        if _store_remote_systemd_credentials(values):
+            return
         environment_matches = (
             os.environ.get("CODEXSWITCH_S3_ACCESS_KEY_ID") == access_key
             and os.environ.get("CODEXSWITCH_S3_SECRET_ACCESS_KEY") == secret_key
@@ -141,17 +239,23 @@ def store_remote_credentials(
         if environment_matches:
             return
         raise RuntimeError(
-            "remote-vault secrets konden niet in de OS-keyring worden opgeslagen; "
-            "zet de drie CODEXSWITCH remote-vault environmentvariabelen"
+            "remote-vault secrets konden niet in de OS-keyring of versleutelde "
+            "systemd credentialopslag worden opgeslagen; zet de drie "
+            "CODEXSWITCH remote-vault environmentvariabelen"
         ) from exc
 
 
 def remote_credentials() -> tuple[str, str]:
-    access_key = os.environ.get("CODEXSWITCH_S3_ACCESS_KEY_ID") or _remote_keyring_value(
-        REMOTE_ACCESS_USER
+    home = switch_home()
+    access_key = (
+        os.environ.get("CODEXSWITCH_S3_ACCESS_KEY_ID")
+        or _remote_keyring_value(REMOTE_ACCESS_USER)
+        or _remote_systemd_credential_value(REMOTE_ACCESS_USER, home)
     )
-    secret_key = os.environ.get("CODEXSWITCH_S3_SECRET_ACCESS_KEY") or _remote_keyring_value(
-        REMOTE_SECRET_USER
+    secret_key = (
+        os.environ.get("CODEXSWITCH_S3_SECRET_ACCESS_KEY")
+        or _remote_keyring_value(REMOTE_SECRET_USER)
+        or _remote_systemd_credential_value(REMOTE_SECRET_USER, home)
     )
     if not access_key or not secret_key:
         raise RuntimeError(
@@ -163,7 +267,9 @@ def remote_credentials() -> tuple[str, str]:
 def remote_vault_key(home: Path | None = None) -> bytes:
     passphrase = os.environ.get(
         "CODEXSWITCH_REMOTE_VAULT_PASSPHRASE"
-    ) or _remote_keyring_value(REMOTE_PASSPHRASE_USER)
+    ) or _remote_keyring_value(REMOTE_PASSPHRASE_USER) or _remote_systemd_credential_value(
+        REMOTE_PASSPHRASE_USER, home or switch_home()
+    )
     if not passphrase:
         raise RuntimeError(
             "remote-vault passphrase ontbreekt in environment of OS-keyring"

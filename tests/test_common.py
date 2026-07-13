@@ -1,8 +1,10 @@
 """Tests for codexswitch_common shared helpers."""
 import json
 import os
+import sys
 import urllib.error
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -46,6 +48,65 @@ def remote_environment(monkeypatch) -> None:
 
 
 class TestRemoteVault:
+    def test_systemd_credentials_are_encrypted_and_read_back(
+        self, tmp_path, monkeypatch
+    ):
+        encrypted_payloads = {}
+
+        def fake_run(argv, **kwargs):
+            name = next(arg.split("=", 1)[1] for arg in argv if arg.startswith("--name="))
+            if "encrypt" in argv:
+                ciphertext = b"encrypted:" + kwargs["input"][::-1]
+                Path(argv[-1]).write_bytes(ciphertext)
+                encrypted_payloads[name] = ciphertext
+                return SimpleNamespace(returncode=0, stdout=b"")
+            value = encrypted_payloads[name][len(b"encrypted:") :][::-1]
+            return SimpleNamespace(returncode=0, stdout=value)
+
+        monkeypatch.setattr(
+            common, "_systemd_credentials_binary", lambda: "systemd-creds"
+        )
+        monkeypatch.setattr(common.subprocess, "run", fake_run)
+        values = {
+            common.REMOTE_ACCESS_USER: "fixture-access",
+            common.REMOTE_SECRET_USER: "fixture-secret",
+            common.REMOTE_PASSPHRASE_USER: "fixture-passphrase",
+        }
+
+        assert common._store_remote_systemd_credentials(values, tmp_path)
+        for name, plaintext in values.items():
+            path = common.remote_credential_path(name, tmp_path)
+            if os.name != "nt":
+                assert path.stat().st_mode & 0o777 == 0o600
+            assert plaintext.encode() not in path.read_bytes()
+            assert common._remote_systemd_credential_value(name, tmp_path) == plaintext
+
+    def test_store_uses_systemd_when_keyring_is_unavailable(
+        self, monkeypatch
+    ):
+        captured = {}
+        fake_keyring = SimpleNamespace(
+            set_password=lambda *args: (_ for _ in ()).throw(
+                RuntimeError("no keyring")
+            )
+        )
+        monkeypatch.setitem(sys.modules, "keyring", fake_keyring)
+        monkeypatch.setattr(
+            common,
+            "_store_remote_systemd_credentials",
+            lambda values: captured.update(values) or True,
+        )
+
+        common.store_remote_credentials(
+            "fixture-access", "fixture-secret", "fixture-passphrase"
+        )
+
+        assert captured == {
+            common.REMOTE_ACCESS_USER: "fixture-access",
+            common.REMOTE_SECRET_USER: "fixture-secret",
+            common.REMOTE_PASSPHRASE_USER: "fixture-passphrase",
+        }
+
     def test_shared_passphrase_derives_same_key_on_new_machine(
         self, tmp_path, monkeypatch
     ):

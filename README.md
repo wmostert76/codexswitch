@@ -203,7 +203,7 @@ Vault flow:
 | Stap | Wat gebeurt er |
 | --- | --- |
 | 1 | De wizard migreert de lokale vault client-side versleuteld naar Hetzner S3 |
-| 2 | S3-credentials en de gedeelde passphrase staan alleen in de OS-keyring of environment |
+| 2 | S3-credentials en de gedeelde passphrase staan alleen in de OS-keyring, encrypted systemd credentials of environment |
 | 3 | Iedere vault-read doet een nieuwe S3 GET; offline is er geen lokale credentialfallback |
 | 4 | Na verificatie verwijdert de wizard lokaal `vault.enc` en `vault.key` |
 | 5 | De TUI toont vooraan in de statusbalk `VAULT ONLINE` of `VAULT OFFLINE` |
@@ -226,8 +226,12 @@ codexswitch vault status
 The wizard asks for the S3 Access Key ID, S3 Secret Access Key and the same
 shared vault passphrase on every machine. It uses
 `https://fsn1.your-objectstorage.com`, bucket `wmostert` and object
-`codexswitch/vault.enc` by default. On headless hosts where the OS keyring is
-not available, provide these only through the service environment:
+`codexswitch/vault.enc` by default. On headless Linux hosts without an OS
+keyring, the wizard automatically stores these three bootstrap secrets as
+machine-bound encrypted systemd user credentials. CLI, TUI, token helpers and
+the proxy read that same protected storage after every restart.
+
+Environment injection remains available for ephemeral deployments:
 
 ```text
 CODEXSWITCH_S3_ACCESS_KEY_ID

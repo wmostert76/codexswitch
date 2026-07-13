@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.2.1] - 2026-07-13
+
+### Added
+
+- Headless Linux installations now persist shared-vault bootstrap secrets in
+  machine-bound encrypted systemd user credentials when no OS keyring is
+  available. CLI, TUI, token helpers and proxy all use the same storage.
+
 ## [1.2.0] - 2026-07-13
 
 ### Changed
