@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.1.3] - 2026-07-13
+
+### Fixed
+
+- Fixed Codex sessions closing immediately after launch on Windows by keeping
+  the Commander process alive while the Windows Codex subprocess is running.
+
 ## [1.1.2] - 2026-07-13
 
 ### Changed

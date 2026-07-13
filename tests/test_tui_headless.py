@@ -1558,6 +1558,45 @@ def test_main_checks_codex_runtime_before_exec(
     ]
 
 
+def test_main_waits_for_codex_subprocess_on_windows(
+    monkeypatch: pytest.MonkeyPatch, fake_backend: FakeBackend
+):
+    calls: list[Any] = []
+
+    class FakeApp:
+        launch_codex = True
+
+        def run(self) -> None:
+            calls.append("run")
+
+    fake_backend["ensure_codex_runtime_writable"] = lambda: calls.append(
+        "preflight"
+    )
+    monkeypatch.setattr(tui, "BACKEND", fake_backend)
+    monkeypatch.setattr(tui, "CodexSwitchApp", FakeApp)
+    monkeypatch.setattr(tui, "codex_launch_argv", lambda: ["codex.cmd", "--search"])
+    monkeypatch.setattr(tui.os, "name", "nt")
+    monkeypatch.setattr(
+        tui.subprocess,
+        "run",
+        lambda argv: calls.append(("run-codex", argv)) or tui.subprocess.CompletedProcess(
+            argv, 23
+        ),
+    )
+    monkeypatch.setattr(
+        tui.os,
+        "execvp",
+        lambda *args: pytest.fail("Windows launch must not replace the TUI process"),
+    )
+
+    assert tui.main() == 23
+    assert calls == [
+        "run",
+        "preflight",
+        ("run-codex", ["codex.cmd", "--search"]),
+    ]
+
+
 def test_headless_driver_uses_requested_terminal_size(app_factory):
     """Guard the two canonical viewport sizes used by the visual QA checks."""
 

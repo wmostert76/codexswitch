@@ -2268,6 +2268,8 @@ def main() -> int:
     if app.launch_codex:
         BACKEND["ensure_codex_runtime_writable"]()
         argv = codex_launch_argv()
+        if os.name == "nt":
+            return subprocess.run(argv).returncode
         os.execvp(argv[0], argv)
     return 0
 
