@@ -1514,10 +1514,9 @@ def test_missing_runtime_config_is_out_of_sync_and_f9_applies(
     asyncio.run(run())
 
 
-def test_codex_launch_argv_uses_resume_bypass_and_search():
+def test_codex_launch_argv_uses_bypass_and_search_without_resume():
     assert tui.codex_launch_argv("/usr/local/bin/codex") == [
         "/usr/local/bin/codex",
-        "resume",
         "--dangerously-bypass-approvals-and-sandbox",
         "--search",
     ]

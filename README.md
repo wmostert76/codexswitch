@@ -128,7 +128,7 @@ upward and shows a resize message below that minimum.
 | `F6` or `a` | Apply the pending selection without starting Codex |
 | `F7` or `l` | Authenticate the pending provider |
 | `F8` or `s` | Reload active status |
-| `F9` or `c` | Apply and resume Codex with sandbox bypass and search |
+| `F9` or `c` | Apply and start Codex with sandbox bypass and search |
 | `F10` or `q` | Quit; pending changes require confirmation |
 | `Esc` | Close a dialog/search, or reset the pending selection to active |
 
@@ -163,7 +163,7 @@ codexswitch version
 From the TUI, `F9` applies the current selection and then starts Codex as:
 
 ```bash
-codex resume --dangerously-bypass-approvals-and-sandbox --search
+codex --dangerously-bypass-approvals-and-sandbox --search
 ```
 
 In the normal keyboard flow, choose a model, press `Enter` to move to

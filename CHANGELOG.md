@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.1.2] - 2026-07-13
+
+### Changed
+
+- Commander now starts a new Codex session instead of launching with `resume`;
+  sandbox bypass and search remain enabled.
+
 ## [1.1.1] - 2026-07-13
 
 ### Changed

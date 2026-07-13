@@ -26,7 +26,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "1.1.1"
+VERSION = "1.1.2"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _

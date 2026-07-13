@@ -27,7 +27,6 @@ BACKEND_PATH = PROJECT / "bin/codexswitch"
 BACKEND = runpy.run_path(str(BACKEND_PATH))
 
 CODEX_TUI_LAUNCH_ARGS = (
-    "resume",
     "--dangerously-bypass-approvals-and-sandbox",
     "--search",
 )
@@ -143,7 +142,7 @@ class HelpScreen(ModalScreen[None]):
 [black]MARKERS[/]  ● Active   ◆ Pending   ○ Other
 
 [black]LAUNCH[/]  Enter from Reasoning or F9 applies and starts Codex
-  resume with sandbox bypass and search. F6 only applies.
+  with sandbox bypass and search. F6 only applies.
 
 [black]ABOUT[/]
 """
