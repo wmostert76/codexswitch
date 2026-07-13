@@ -31,6 +31,8 @@ All notable CodexSwitch changes are documented here.
   starts Python-backed proxy/token helpers through the active interpreter.
 - Generated Codex TOML now escapes Windows paths and other string values
   correctly, including the OpenRouter model-catalog path.
+- Windows-launch coverage no longer makes `pathlib` instantiate Windows paths
+  on Linux CI runners.
 
 ## [1.1.3] - 2026-07-13
 

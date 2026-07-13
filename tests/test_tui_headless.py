@@ -1668,6 +1668,7 @@ def test_main_waits_for_codex_subprocess_on_windows(
 def test_windows_launch_uses_native_npm_codex_executable(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path
 ):
+    host_path_type = type(tmp_path)
     shim = tmp_path / "codex.cmd"
     native = (
         tmp_path
@@ -1677,6 +1678,7 @@ def test_windows_launch_uses_native_npm_codex_executable(
     native.parent.mkdir(parents=True)
     native.write_bytes(b"")
     monkeypatch.setattr(tui.os, "name", "nt")
+    monkeypatch.setattr(tui, "Path", host_path_type)
 
     assert tui.codex_launch_argv(str(shim))[0] == str(native)
 
