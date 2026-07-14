@@ -444,7 +444,12 @@ def test_ensure_provider_proxy_starts_unified_proxy_only_when_required(
     cs.ensure_provider_proxy("openai")
     cs.ensure_provider_proxy("azure")
 
-    assert calls == [[cs.sys.executable, str(proxy_bin)]]
+    expected = (
+        [cs.sys.executable, str(proxy_bin)]
+        if cs.os.name == "nt"
+        else [str(proxy_bin)]
+    )
+    assert calls == [expected]
 
 
 def test_proxy_statuses_reports_unified_health(monkeypatch):
