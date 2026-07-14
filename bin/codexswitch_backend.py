@@ -65,6 +65,53 @@ AZURE_DEFAULT_API_VERSION = "v1"
 AZURE_API_KEY_ENV = "AZURE_OPENAI_API_KEY"
 DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
 OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
+OPENROUTER_CODEX_COMPATIBILITY_TESTED_AT = "2026-07-14"
+OPENROUTER_CODEX_COMPATIBILITY = {
+    # Basic shell tooling passed, but an edit-and-test Codex workflow did not.
+    **{
+        model: "limited"
+        for model in (
+            "cohere/north-mini-code:free",
+            "google/gemma-4-26b-a4b-it:free",
+            "nvidia/nemotron-3-nano-omni-30b-a3b-reasoning:free",
+            "nvidia/nemotron-3-super-120b-a12b:free",
+            "nvidia/nemotron-3-ultra-550b-a55b:free",
+            "nvidia/nemotron-nano-9b-v2:free",
+            "openai/gpt-oss-20b:free",
+            "openrouter/free",
+            "poolside/laguna-m.1:free",
+            "poolside/laguna-xs-2.1:free",
+            "tencent/hy3:free",
+        )
+    },
+    # A tool was emitted, but it did not complete the requested read correctly.
+    "nvidia/nemotron-3-nano-30b-a3b:free": "tool-failed",
+    "nvidia/nemotron-nano-12b-v2-vl:free": "tool-failed",
+    # Both the initial run and a separate retry were rejected upstream with 429.
+    "google/gemma-4-31b-it:free": "rate-limited",
+    "meta-llama/llama-3.3-70b-instruct:free": "rate-limited",
+    "qwen/qwen3-coder:free": "rate-limited",
+    "qwen/qwen3-next-80b-a3b-instruct:free": "rate-limited",
+    # No usable Codex tooling endpoint was available during the matrix.
+    "cognitivecomputations/dolphin-mistral-24b-venice-edition:free": "unsupported",
+    "google/lyria-3-clip-preview": "unsupported",
+    "google/lyria-3-pro-preview": "unsupported",
+    "meta-llama/llama-3.2-3b-instruct:free": "unsupported",
+    "nousresearch/hermes-3-llama-3.1-405b:free": "unsupported",
+    "nvidia/nemotron-3.5-content-safety:free": "unsupported",
+}
+OPENROUTER_CODEX_COMPATIBILITY_DESCRIPTIONS = {
+    "limited": "basic shell tool passed; edit/test workflow failed",
+    "tool-failed": "Codex tool call did not complete correctly",
+    "rate-limited": "free endpoint was rate-limited in both test runs",
+    "unsupported": "no usable Codex tooling endpoint",
+}
+OPENROUTER_CODEX_COMPATIBILITY_MARKERS = {
+    "limited": "!",
+    "tool-failed": "x",
+    "rate-limited": "~",
+    "unsupported": "x",
+}
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 PROVIDER_PROXY_URL = "http://127.0.0.1:14555"
 OPENCODE_PROXY_URL = f"{PROVIDER_PROXY_URL}/opencode-go/v1"
@@ -1241,6 +1288,17 @@ def openrouter_models() -> list[str]:
     return sorted(catalog)
 
 
+def openrouter_codex_compatibility(model: str) -> tuple[str, str, str]:
+    status = OPENROUTER_CODEX_COMPATIBILITY.get(model, "")
+    if not status:
+        return "", "", ""
+    return (
+        OPENROUTER_CODEX_COMPATIBILITY_MARKERS.get(status, "!"),
+        status,
+        OPENROUTER_CODEX_COMPATIBILITY_DESCRIPTIONS.get(status, status),
+    )
+
+
 def resolve_openrouter_model(model: str) -> str:
     """Resolve short OpenRouter aliases like ``glm-5.2`` to vendor/model IDs."""
     models = openrouter_models()
@@ -1790,8 +1848,19 @@ def list_models() -> None:
     for model in opencode_models():
         print(f"  {model}")
     print("\nOpenRouter:")
+    marked = False
     for model in openrouter_models():
-        print(f"  {model}")
+        marker, _status, description = openrouter_codex_compatibility(model)
+        if marker:
+            marked = True
+            print(f"  {marker} {model} — {description}")
+        else:
+            print(f"    {model}")
+    if marked:
+        print(
+            "  C: ! basic shell only · x failed/unavailable tooling · "
+            "~ repeatedly rate-limited"
+        )
 
 
 def terminal_width(default: int = 88) -> int:

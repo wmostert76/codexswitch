@@ -2,6 +2,16 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.7.0] - 2026-07-14
+
+### Changed
+
+- OpenRouter's Commander model list now marks all 23 free models tested through
+  the native Codex CLI and unified Responses proxy: `!` for basic shell-only
+  compatibility, `x` for failed or unavailable Codex tooling and `~` for
+  repeatedly rate-limited endpoints. The selected model's measured limitation
+  is also shown in Model Details.
+
 ## [1.6.0] - 2026-07-14
 
 ### Changed

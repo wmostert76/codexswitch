@@ -166,6 +166,8 @@ class FakeBackend(dict[str, Any]):
                 "AZURE_DEFAULT_REASONING_EFFORT": "low",
                 "OPENCODE_GO_FALLBACK_CATALOG": dict(self.opencode_catalog),
                 "OPENROUTER_FALLBACK_MODELS": ["openrouter/auto"],
+                "OPENROUTER_CODEX_COMPATIBILITY": {},
+                "OPENROUTER_CODEX_COMPATIBILITY_DESCRIPTIONS": {},
                 "AZURE_DEFAULT_ENDPOINT": "https://example.invalid/azure",
                 "AZURE_DEFAULT_API_VERSION": "2026-01-01",
                 "read_json": self.read_json,
@@ -831,6 +833,66 @@ def test_openrouter_cost_column_sorting_and_persistent_search(
             assert [option.id for option in models.options] == [
                 "model:vendor/think"
             ]
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+def test_openrouter_marks_tested_codex_compatibility(
+    app_factory, fake_backend: FakeBackend, size: tuple[int, int]
+):
+    statuses = {
+        "vendor/limited:free": "limited",
+        "vendor/tool-failed:free": "tool-failed",
+        "vendor/rate-limited:free": "rate-limited",
+        "vendor/unsupported:free": "unsupported",
+    }
+    for model in statuses:
+        fake_backend.openrouter_catalog[model] = {
+            "name": model,
+            "pricing": {"prompt": "0", "completion": "0"},
+            "supported_parameters": ["tools", "tool_choice"],
+        }
+    fake_backend["OPENROUTER_CODEX_COMPATIBILITY"] = statuses
+    fake_backend["OPENROUTER_CODEX_COMPATIBILITY_DESCRIPTIONS"] = {
+        "limited": "basic shell tool passed; edit/test workflow failed",
+        "tool-failed": "Codex tool call did not complete correctly",
+        "rate-limited": "free endpoint was rate-limited in both test runs",
+        "unsupported": "no usable Codex tooling endpoint",
+    }
+    app = app_factory(fake_backend, refresh_on_start=True)
+
+    async def run() -> None:
+        async with app.run_test(size=size) as pilot:
+            await app.workers.wait_for_complete()
+            await settle(pilot)
+            sources = app.query_one("#sources", OptionList)
+            highlight(sources, "provider:openrouter")
+            await settle(pilot)
+
+            models = app.query_one("#models", OptionList)
+            rows = {
+                option.id: option_plain(option)
+                for option in models.options
+                if option.id in {f"model:{model}" for model in statuses}
+            }
+            assert " ! " in rows["model:vendor/limited:free"]
+            assert " x " in rows["model:vendor/tool-failed:free"]
+            assert " ~ " in rows["model:vendor/rate-limited:free"]
+            assert " x " in rows["model:vendor/unsupported:free"]
+            assert all(
+                len(row) <= models.scrollable_content_region.width
+                for row in rows.values()
+            )
+            assert app.query_one("#model-sort-model").render().plain.startswith(
+                "C MODEL"
+            )
+            assert "! limited" in app.query_one("#model-filter", Input).placeholder
+
+            highlight(models, "model:vendor/limited:free")
+            await settle(pilot)
+            detail = app.query_one("#model-detail").render().plain
+            assert "Codex: basic shell tool passed; edit/test workflow failed" in detail
 
     asyncio.run(run())
 

@@ -41,6 +41,12 @@ PROVIDER_LABELS = {
     "opencode-go": "OpenCode Go",
     "openrouter": "OpenRouter",
 }
+OPENROUTER_CODEX_STATUS_MARKERS = {
+    "limited": ("!", "#ffff00"),
+    "tool-failed": ("x", "#ff5f5f"),
+    "rate-limited": ("~", "#ffaf00"),
+    "unsupported": ("x", "#ff5f5f"),
+}
 
 # number, compact label, wide label, action
 FUNCTION_KEYS = (
@@ -1105,6 +1111,19 @@ class CodexSwitchApp(App):
         prompt, completion = self.openrouter_prices(model)
         return self.price_display(prompt), self.price_display(completion)
 
+    def openrouter_codex_compatibility(self, model: str) -> tuple[str, str]:
+        statuses = self.backend.get("OPENROUTER_CODEX_COMPATIBILITY", {})
+        descriptions = self.backend.get(
+            "OPENROUTER_CODEX_COMPATIBILITY_DESCRIPTIONS", {}
+        )
+        if not isinstance(statuses, dict) or not isinstance(descriptions, dict):
+            return "", ""
+        status = statuses.get(model)
+        if not isinstance(status, str):
+            return "", ""
+        description = descriptions.get(status)
+        return status, str(description) if description else status
+
     def sorted_model_ids(self, provider: str, models: list[str]) -> list[str]:
         if provider != "openrouter":
             return models
@@ -1138,7 +1157,7 @@ class CodexSwitchApp(App):
         )
         field = self.query_one("#model-filter", Input)
         field.placeholder = (
-            "Search models…"
+            "Search…  C: ! limited · x failed · ~ rate-limited"
             if is_openrouter
             else "Filter model ID or name…"
         )
@@ -1148,7 +1167,7 @@ class CodexSwitchApp(App):
             field.styles.display = "none"
 
         direction = "▼" if self.openrouter_sort_descending else "▲"
-        model_label = "MODEL"
+        model_label = "C MODEL"
         cost_label = "INPUT     OUTPUT"
         if self.openrouter_sort_column == "model":
             model_label += f" {direction}"
@@ -1171,12 +1190,19 @@ class CodexSwitchApp(App):
         if provider != "openrouter":
             return self.plain_option(marker, model, suffix=suffix)
         prompt_price, completion_price = self.openrouter_cost_display(model)
+        compatibility, _description = self.openrouter_codex_compatibility(model)
+        compatibility_marker, compatibility_style = OPENROUTER_CODEX_STATUS_MARKERS.get(
+            compatibility, (" ", "")
+        )
         # Reserve two cells for the marker and two for OptionList's scrollbar,
-        # so the final price never gets ellipsized at the 80-column minimum.
-        available = max(8, self.query_one("#models", OptionList).size.width - 21)
+        # plus a Codex compatibility marker, so the final price never gets
+        # ellipsized at the 80-column minimum.
+        available = max(8, self.query_one("#models", OptionList).size.width - 23)
         label = model if len(model) <= available else f"{model[: available - 1]}…"
         text = Text(no_wrap=True, overflow="ellipsis")
-        text.append(f"{marker} {label:<{available}}")
+        text.append(f"{marker} ")
+        text.append(compatibility_marker, style=compatibility_style)
+        text.append(f" {label:<{available}}")
         text.append(f"{prompt_price:>8} {completion_price:>8}")
         if suffix:
             text.append(suffix)
@@ -1535,6 +1561,17 @@ class CodexSwitchApp(App):
         text.append(name, style="bold #ffff00")
         text.append(" · ")
         text.append(PROVIDER_LABELS.get(provider, provider), style="#5fd7ff")
+        compatibility, compatibility_description = (
+            self.openrouter_codex_compatibility(model)
+            if provider == "openrouter"
+            else ("", "")
+        )
+        if compatibility:
+            _marker, compatibility_style = OPENROUTER_CODEX_STATUS_MARKERS.get(
+                compatibility, ("!", "#ffff00")
+            )
+            text.append(" · Codex: ")
+            text.append(compatibility_description, style=compatibility_style)
         text.append("\nID: ")
         text.append(model)
         if provider == "openai" and self.draft.account:

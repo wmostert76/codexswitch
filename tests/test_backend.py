@@ -53,6 +53,49 @@ def test_cli_dash_version_still_works_as_compatibility_alias():
     assert proc.stdout.strip() == f"codexswitch {cs.VERSION}"
 
 
+def test_openrouter_codex_compatibility_matrix_covers_all_tested_free_models():
+    statuses = cs.OPENROUTER_CODEX_COMPATIBILITY
+    assert cs.OPENROUTER_CODEX_COMPATIBILITY_TESTED_AT == "2026-07-14"
+    assert len(statuses) == 23
+    assert set(statuses.values()) == {
+        "limited",
+        "tool-failed",
+        "rate-limited",
+        "unsupported",
+    }
+    assert sum(status == "limited" for status in statuses.values()) == 11
+    assert sum(status == "tool-failed" for status in statuses.values()) == 2
+    assert sum(status == "rate-limited" for status in statuses.values()) == 4
+    assert sum(status == "unsupported" for status in statuses.values()) == 6
+    assert set(statuses.values()) == set(
+        cs.OPENROUTER_CODEX_COMPATIBILITY_DESCRIPTIONS
+    )
+    assert cs.openrouter_codex_compatibility("qwen/qwen3-coder:free") == (
+        "~",
+        "rate-limited",
+        "free endpoint was rate-limited in both test runs",
+    )
+    assert cs.openrouter_codex_compatibility("vendor/untested") == ("", "", "")
+
+
+def test_cli_model_list_marks_measured_openrouter_compatibility(monkeypatch, capsys):
+    monkeypatch.setattr(cs, "openai_models", lambda: [])
+    monkeypatch.setattr(cs, "azure_models", lambda: [])
+    monkeypatch.setattr(cs, "opencode_models", lambda: [])
+    monkeypatch.setattr(
+        cs,
+        "openrouter_models",
+        lambda: ["qwen/qwen3-coder:free", "vendor/untested"],
+    )
+
+    cs.list_models()
+
+    output = capsys.readouterr().out
+    assert "~ qwen/qwen3-coder:free — free endpoint was rate-limited" in output
+    assert "    vendor/untested" in output
+    assert "C: ! basic shell only · x failed/unavailable tooling" in output
+
+
 def test_cli_help_contains_credits_and_tui_command():
     proc = subprocess.run(
         [sys.executable, str(BIN_DIR / "codexswitch"), "--help"],
