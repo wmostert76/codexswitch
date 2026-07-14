@@ -2,6 +2,20 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.5.0] - 2026-07-14
+
+### Changed
+
+- Replaced the three provider proxy processes with one unified loopback proxy
+  on port `14555`. Stable `/opencode-go`, `/openrouter` and `/azure` route
+  prefixes dispatch to isolated provider engines without relying on model IDs.
+- Commander now shows one unified provider-proxy health indicator and starts
+  the single proxy on demand for every non-native provider.
+- The unified Azure route now serves the fixed model catalog locally instead
+  of logging a non-fatal `/models` 404 during Codex startup.
+- Linux installs one disabled-by-default `codex-provider-proxy.service` and
+  removes the three legacy proxy units and command symlinks during upgrades.
+
 ## [1.4.4] - 2026-07-14
 
 ### Changed

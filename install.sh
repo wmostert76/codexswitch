@@ -167,16 +167,24 @@ else
 fi
 
 sudo install -d -m 755 /usr/local/bin
-for command in codexswitch codex-opencode-go-proxy codex-openrouter-proxy codex-azure-proxy opencode-go-token openrouter-token; do
+for command in codexswitch codex-provider-proxy opencode-go-token openrouter-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
-sudo rm -f /usr/local/bin/openswitch
+sudo rm -f /usr/local/bin/openswitch \
+  /usr/local/bin/codex-opencode-go-proxy \
+  /usr/local/bin/codex-openrouter-proxy \
+  /usr/local/bin/codex-azure-proxy
+
+for legacy_service in codex-opencode-go-proxy codex-openrouter-proxy codex-azure-proxy; do
+  sudo systemctl disable --now "$legacy_service.service" 2>/dev/null || true
+  sudo rm -f "/etc/systemd/system/$legacy_service.service"
+done
 
 service_file=$(mktemp)
 trap 'rm -f "$service_file"' EXIT
 cat >"$service_file" <<EOF
 [Unit]
-Description=CodexSwitch OpenCode Go compatibility proxy
+Description=CodexSwitch unified provider proxy
 After=network-online.target
 Wants=network-online.target
 
@@ -185,7 +193,7 @@ Type=simple
 User=$TARGET_USER
 Group=$(id -gn "$TARGET_USER")
 Environment=HOME=$TARGET_HOME
-ExecStart=/usr/local/bin/codex-opencode-go-proxy
+ExecStart=/usr/local/bin/codex-provider-proxy
 Restart=on-failure
 RestartSec=2
 
@@ -193,55 +201,9 @@ RestartSec=2
 WantedBy=multi-user.target
 EOF
 
-sudo install -m 644 "$service_file" /etc/systemd/system/codex-opencode-go-proxy.service
+sudo install -m 644 "$service_file" /etc/systemd/system/codex-provider-proxy.service
 sudo systemctl daemon-reload
-sudo systemctl disable --now codex-opencode-go-proxy.service 2>/dev/null || true
-
-cat >"$service_file" <<EOF
-[Unit]
-Description=CodexSwitch OpenRouter compatibility proxy
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$TARGET_USER
-Group=$(id -gn "$TARGET_USER")
-Environment=HOME=$TARGET_HOME
-ExecStart=/usr/local/bin/codex-openrouter-proxy
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo install -m 644 "$service_file" /etc/systemd/system/codex-openrouter-proxy.service
-sudo systemctl daemon-reload
-sudo systemctl disable --now codex-openrouter-proxy.service 2>/dev/null || true
-
-cat >"$service_file" <<EOF
-[Unit]
-Description=CodexSwitch Azure Responses passthrough proxy
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$TARGET_USER
-Group=$(id -gn "$TARGET_USER")
-Environment=HOME=$TARGET_HOME
-ExecStart=/usr/local/bin/codex-azure-proxy
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo install -m 644 "$service_file" /etc/systemd/system/codex-azure-proxy.service
-sudo systemctl daemon-reload
-sudo systemctl disable --now codex-azure-proxy.service 2>/dev/null || true
+sudo systemctl disable --now codex-provider-proxy.service 2>/dev/null || true
 
 echo
 echo "Installed. Start with: codexswitch"

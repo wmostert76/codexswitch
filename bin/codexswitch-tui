@@ -721,11 +721,7 @@ class CodexSwitchApp(App):
         self.last_focus_id: str | None = None
         self.status_hint_held = False
         self.vault_label = "LOCAL"
-        self.proxy_states: dict[str, bool | None] = {
-            "opencode-go": None,
-            "openrouter": None,
-            "azure": None,
-        }
+        self.proxy_states: dict[str, bool | None] = {"unified": None}
         self.backend_worker_lock = asyncio.Lock()
 
         self.catalogs: dict[str, dict[str, dict]] = {
@@ -1573,33 +1569,23 @@ class CodexSwitchApp(App):
 
     def render_proxy_statuses(self) -> None:
         text = Text(no_wrap=True, overflow="ellipsis")
-        text.append("PROXIES ", style="bold #5fd7ff")
-        labels = (
-            ("opencode-go", "GO"),
-            ("openrouter", "ROUTER"),
-            ("azure", "AZURE"),
+        text.append("PROVIDER PROXY ", style="bold #5fd7ff")
+        state = self.proxy_states.get("unified")
+        value = "ON" if state is True else "OFF" if state is False else "…"
+        style = (
+            "bold #ffffff on #008700"
+            if state is True
+            else "bold #ffffff on #af0000"
+            if state is False
+            else "bold #000000 on #bcbcbc"
         )
-        for index, (provider, label) in enumerate(labels):
-            if index:
-                text.append("  ")
-            state = self.proxy_states.get(provider)
-            value = "ON" if state is True else "OFF" if state is False else "…"
-            style = (
-                "bold #ffffff on #008700"
-                if state is True
-                else "bold #ffffff on #af0000"
-                if state is False
-                else "bold #000000 on #bcbcbc"
-            )
-            text.append(f" {label} {value} ", style=style)
+        text.append(f" {value} ", style=style)
+        text.append(" · OpenCode Go / OpenRouter / Azure", style="#bcbcbc")
         self.query_one("#proxy-status", Static).update(text)
 
     def proxy_statuses_sync(self) -> dict[str, bool]:
         statuses = self.safe_call("proxy_statuses", {})
-        return {
-            provider: bool(statuses.get(provider))
-            for provider in ("opencode-go", "openrouter", "azure")
-        }
+        return {"unified": bool(statuses.get("unified"))}
 
     async def refresh_proxy_statuses(self) -> None:
         self.proxy_states = await asyncio.to_thread(self.proxy_statuses_sync)
@@ -2063,11 +2049,7 @@ class CodexSwitchApp(App):
             try:
                 self.proxy_states = await proxy_task
             except Exception:
-                self.proxy_states = {
-                    "opencode-go": False,
-                    "openrouter": False,
-                    "azure": False,
-                }
+                self.proxy_states = {"unified": False}
             self.render_proxy_statuses()
         if failed:
             self.set_status(

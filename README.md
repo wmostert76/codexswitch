@@ -28,9 +28,9 @@ It is built for three workflows:
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
-| Azure OpenAI | Responses v1 vault-backed loopback passthrough and fixed `gpt-5.6-sol` model selection |
-| OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
-| OpenRouter | API-key storage, model catalog and a tool-compatible Responses proxy |
+| Azure OpenAI | Unified-proxy Responses v1 passthrough and fixed `gpt-5.6-sol` model selection |
+| OpenCode Go | Own API-key store, unified Responses-compatible proxy and model catalog |
+| OpenRouter | API-key storage, model catalog and unified tool-compatible proxy routing |
 
 ## Highlights
 
@@ -39,7 +39,7 @@ It is built for three workflows:
 - Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - Persistent provider/model defaults with on-demand proxy startup from Commander
-- OpenCode Go compatibility proxy with tool-call translation
+- One provider proxy with isolated Azure, OpenCode Go and OpenRouter routes
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
 - Reproducible local install with dependency detection and on-demand proxy units
 - GitHub releases generated from `CHANGELOG.md`
@@ -197,19 +197,14 @@ codexswitch use opencode-go minimax-m3 thinking
 codexswitch use openrouter anthropic/claude-sonnet-4.5
 ```
 
-OpenRouter runs through a loopback compatibility proxy on port `14556`. It
-translates Codex native namespace and custom tools into standard OpenRouter
-function calls and maps the results back, so plugins, MCP tools, shell tools
-and `apply_patch` remain available. The OpenRouter key stays in the encrypted
-vault and is never written to `config.toml` or proxy logs.
-
-Azure uses a loopback passthrough on port `14557`. It reads the selected
-endpoint and API key from the protected CodexSwitch vault and adds the Azure
-`api-key` header upstream without exporting credentials into the shell.
-Commander shows compact health indicators for all three proxies and starts
-only the selected provider proxy after F9 closes the TUI. F5 refreshes the
-display. Windows creates no service or Scheduled Task; Linux units are also
-disabled at boot and are started on demand.
+All non-native providers share one loopback process on port `14555`, using
+stable provider routes: `/opencode-go/v1`, `/openrouter/v1` and `/azure/v1`.
+OpenRouter and OpenCode Go retain their isolated conversion behavior; Azure
+remains a passthrough that adds its vault-backed `api-key` header. Dispatch is
+never inferred from model names. Commander shows one compact health indicator
+and starts the unified proxy after F9 closes the TUI. F5 refreshes the display.
+Windows creates no service or Scheduled Task; the Linux unit is disabled at
+boot and started on demand.
 
 ## Authentication and storage
 
@@ -281,7 +276,7 @@ codexswitch account add
 Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
 and API key and normalizes the URL to `/openai/v1`. The Azure and OpenRouter
-loopback proxies read their keys from the protected vault, while OpenCode Go
+unified proxy routes read their keys from the protected vault, while OpenCode Go
 uses its installed token helper. Provider, model and reasoning remain selected,
 while Commander ensures the required proxy is running immediately before
 Codex starts. No API key is stored in `~/.codex/config.toml`.
@@ -292,10 +287,11 @@ codexswitch auth openrouter
 codexswitch auth opencode-go
 ```
 
-## OpenCode Go proxy
+## Unified provider proxy
 
 OpenCode Go exposes a chat-completions style API. Codex expects the Responses
-API. The local proxy bridges that gap on `127.0.0.1:14555` and handles:
+API. The unified local proxy bridges that gap and also routes OpenRouter and
+Azure on `127.0.0.1:14555`. Its OpenCode Go engine handles:
 
 - Responses input/output conversion
 - custom/function/namespace tool conversion
@@ -304,7 +300,7 @@ API. The local proxy bridges that gap on `127.0.0.1:14555` and handles:
 - proxy-local web-search fallback
 - optional bearer auth for manual clients
 
-Manage the Linux OpenCode Go systemd service independently when explicit
+Manage the unified Linux systemd service independently when explicit
 always-on behavior is desired:
 
 ```bash
@@ -317,9 +313,9 @@ codexswitch proxy uninstall
 To require a dedicated proxy token for manual clients:
 
 ```bash
-sudo systemctl edit codex-opencode-go-proxy.service
+sudo systemctl edit codex-provider-proxy.service
 # Add: Environment=CODEX_OPENCODE_PROXY_TOKEN=your-secret
-sudo systemctl restart codex-opencode-go-proxy.service
+sudo systemctl restart codex-provider-proxy.service
 ```
 
 CodexSwitch itself authenticates with
@@ -341,7 +337,7 @@ trigger the GitHub Release workflow.
 
 ## Uninstall
 
-Remove only the OpenCode Go proxy service:
+Remove only the unified provider proxy service:
 
 ```bash
 codexswitch proxy uninstall

@@ -393,7 +393,7 @@ def test_post_update_install_uses_shell_installer_off_windows(monkeypatch):
 
 
 def test_proxy_service_unit_uses_proxy_binary_and_current_user(tmp_path, monkeypatch):
-    proxy_bin = tmp_path / "codex-opencode-go-proxy"
+    proxy_bin = tmp_path / "codex-provider-proxy"
     proxy_bin.write_text("")
     monkeypatch.setattr(cs, "PROXY_BIN", str(proxy_bin))
     monkeypatch.setattr(cs.os, "geteuid", lambda: 1000, raising=False)
@@ -421,34 +421,35 @@ def test_install_proxy_service_installs_and_restarts_unit(monkeypatch):
     cs.install_proxy_service()
 
     assert calls[0][0][:4] == ["sudo", "install", "-m", "644"]
-    assert calls[0][0][-1] == "/etc/systemd/system/codex-opencode-go-proxy.service"
+    assert calls[0][0][-1] == "/etc/systemd/system/codex-provider-proxy.service"
     assert (["sudo", "systemctl", "daemon-reload"], True) in calls
     assert (["sudo", "systemctl", "enable", "--now", cs.PROXY_SERVICE], True) in calls
     assert (["sudo", "systemctl", "restart", cs.PROXY_SERVICE], True) in calls
 
 
-def test_ensure_provider_proxy_starts_only_selected_provider(monkeypatch):
+def test_ensure_provider_proxy_starts_unified_proxy_only_when_required(
+    tmp_path, monkeypatch
+):
+    proxy_bin = tmp_path / "codex-provider-proxy"
+    proxy_bin.write_text("")
+    health = iter([False, True])
     calls = []
-    monkeypatch.setattr(cs, "ensure_proxy", lambda: calls.append("opencode-go"))
-    monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: calls.append("openrouter"))
-    monkeypatch.setattr(cs, "ensure_azure_proxy", lambda: calls.append("azure"))
+    monkeypatch.setattr(cs, "PROXY_BIN", str(proxy_bin))
+    monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path / "switch")
+    monkeypatch.setattr(cs, "proxy_healthy", lambda: next(health))
+    monkeypatch.setattr(cs.shutil, "which", lambda command: None)
+    monkeypatch.setattr(cs.subprocess, "Popen", lambda argv, **kwargs: calls.append(argv))
+    monkeypatch.setattr(cs.time, "sleep", lambda _seconds: None)
 
     cs.ensure_provider_proxy("openai")
     cs.ensure_provider_proxy("azure")
 
-    assert calls == ["azure"]
+    assert calls == [[cs.sys.executable, str(proxy_bin)]]
 
 
-def test_proxy_statuses_reports_all_three_health_checks(monkeypatch):
+def test_proxy_statuses_reports_unified_health(monkeypatch):
     monkeypatch.setattr(cs, "proxy_healthy", lambda: True)
-    monkeypatch.setattr(cs, "openrouter_proxy_healthy", lambda: False)
-    monkeypatch.setattr(cs, "azure_proxy_healthy", lambda: True)
-
-    assert cs.proxy_statuses() == {
-        "opencode-go": True,
-        "openrouter": False,
-        "azure": True,
-    }
+    assert cs.proxy_statuses() == {"unified": True}
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────
@@ -1003,7 +1004,7 @@ class TestUpdateState:
             f"model_catalog_json = {cs.toml_string(str(cs.OPENROUTER_CODEX_MODELS))}"
             in text
         )
-        assert 'base_url = "http://127.0.0.1:14556/v1"' in text
+        assert 'base_url = "http://127.0.0.1:14555/openrouter/v1"' in text
         assert "env_key" not in text
         assert "[model_providers.openrouter.auth]" not in text
         assert "command =" not in text

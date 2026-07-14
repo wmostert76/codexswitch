@@ -218,11 +218,7 @@ class FakeBackend(dict[str, Any]):
                 ),
                 "codex_bin": lambda: "/usr/bin/codex-test",
                 "codex_launch_environment": lambda: {"TEST_CODEX_ENV": "1"},
-                "proxy_statuses": lambda: {
-                    "opencode-go": False,
-                    "openrouter": True,
-                    "azure": False,
-                },
+                "proxy_statuses": lambda: {"unified": True},
                 "ensure_provider_proxy": lambda provider: self.calls.append(
                     ("ensure-proxy", provider)
                 ),
@@ -863,7 +859,7 @@ def test_startup_loads_cached_catalogs_without_refreshing_providers(
     asyncio.run(run())
 
 
-def test_startup_shows_all_proxy_statuses(app_factory, fake_backend: FakeBackend):
+def test_startup_shows_unified_proxy_status(app_factory, fake_backend: FakeBackend):
     app = app_factory(fake_backend, refresh_on_start=True)
 
     async def run() -> None:
@@ -871,9 +867,9 @@ def test_startup_shows_all_proxy_statuses(app_factory, fake_backend: FakeBackend
             await app.workers.wait_for_complete()
             await settle(pilot)
             status = app.query_one("#proxy-status").render().plain
-            assert "GO OFF" in status
-            assert "ROUTER ON" in status
-            assert "AZURE OFF" in status
+            assert "PROVIDER PROXY" in status
+            assert "ON" in status
+            assert "OpenCode Go / OpenRouter / Azure" in status
 
     asyncio.run(run())
 

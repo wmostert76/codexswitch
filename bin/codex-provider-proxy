@@ -1,0 +1,129 @@
+#!/usr/bin/env python3
+"""Unified loopback proxy for all non-native CodexSwitch providers."""
+
+import importlib.machinery
+import importlib.util
+import json
+import os
+import sys
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlsplit, urlunsplit
+
+
+HOST = os.environ.get("CODEXSWITCH_PROVIDER_PROXY_HOST", "127.0.0.1")
+PORT = int(os.environ.get("CODEXSWITCH_PROVIDER_PROXY_PORT", "14555"))
+BIN_DIR = Path(__file__).resolve().parent
+
+
+def load_engine(module_name: str, filename: str, provider: str | None = None):
+    """Load a legacy handler as an isolated internal routing engine."""
+    environment_name = "CODEXSWITCH_PROXY_PROVIDER"
+    previous = os.environ.get(environment_name)
+    try:
+        if provider is None:
+            os.environ.pop(environment_name, None)
+        else:
+            os.environ[environment_name] = provider
+        loader = importlib.machinery.SourceFileLoader(
+            module_name, str(BIN_DIR / filename)
+        )
+        spec = importlib.util.spec_from_loader(loader.name, loader)
+        module = importlib.util.module_from_spec(spec)
+        loader.exec_module(module)
+        return module
+    finally:
+        if previous is None:
+            os.environ.pop(environment_name, None)
+        else:
+            os.environ[environment_name] = previous
+
+
+OPENCODE_ENGINE = load_engine(
+    "codexswitch_unified_opencode", "codex-opencode-go-proxy", "opencode-go"
+)
+OPENROUTER_ENGINE = load_engine(
+    "codexswitch_unified_openrouter", "codex-opencode-go-proxy", "openrouter"
+)
+AZURE_ENGINE = load_engine(
+    "codexswitch_unified_azure", "codex-azure-proxy"
+)
+
+ROUTES = {
+    "/opencode-go": OPENCODE_ENGINE,
+    "/openrouter": OPENROUTER_ENGINE,
+    "/azure": AZURE_ENGINE,
+}
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        print(f"{self.address_string()} - {fmt % args}", flush=True)
+
+    def send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def resolve_route(self):
+        parsed = urlsplit(self.path)
+        for prefix, engine in ROUTES.items():
+            if parsed.path == prefix or parsed.path.startswith(f"{prefix}/"):
+                routed_path = parsed.path[len(prefix):] or "/"
+                routed_url = urlunsplit(
+                    ("", "", routed_path, parsed.query, parsed.fragment)
+                )
+                return engine, routed_url
+        return None, self.path
+
+    def delegate(self) -> None:
+        engine, routed_path = self.resolve_route()
+        if engine is None:
+            self.send_json(404, {"error": f"unknown provider route: {self.path}"})
+            return
+        delegate = object.__new__(engine.Handler)
+        delegate.__dict__ = self.__dict__.copy()
+        delegate.path = routed_path
+        method = getattr(delegate, f"do_{self.command}", None)
+        if method is None:
+            self.send_json(405, {"error": "method not allowed"})
+            return
+        method()
+        self.close_connection = delegate.close_connection
+
+    def do_GET(self):
+        path = urlsplit(self.path).path
+        if path in {"/health", "/v1/health"}:
+            self.send_json(
+                200,
+                {
+                    "ok": True,
+                    "providers": ["opencode-go", "openrouter", "azure"],
+                },
+            )
+            return
+        if path in {"/azure/models", "/azure/v1/models"}:
+            self.send_json(200, {"models": ["gpt-5.6-sol"]})
+            return
+        self.delegate()
+
+    def do_POST(self):
+        self.delegate()
+
+
+def main() -> None:
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(
+        f"codexswitch unified provider proxy listening on http://{HOST}:{PORT}",
+        flush=True,
+    )
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()
