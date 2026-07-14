@@ -195,8 +195,7 @@ EOF
 
 sudo install -m 644 "$service_file" /etc/systemd/system/codex-opencode-go-proxy.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now codex-opencode-go-proxy.service
-sudo systemctl restart codex-opencode-go-proxy.service
+sudo systemctl disable --now codex-opencode-go-proxy.service 2>/dev/null || true
 
 cat >"$service_file" <<EOF
 [Unit]
@@ -219,8 +218,7 @@ EOF
 
 sudo install -m 644 "$service_file" /etc/systemd/system/codex-openrouter-proxy.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now codex-openrouter-proxy.service
-sudo systemctl restart codex-openrouter-proxy.service
+sudo systemctl disable --now codex-openrouter-proxy.service 2>/dev/null || true
 
 cat >"$service_file" <<EOF
 [Unit]
@@ -243,8 +241,8 @@ EOF
 
 sudo install -m 644 "$service_file" /etc/systemd/system/codex-azure-proxy.service
 sudo systemctl daemon-reload
-sudo systemctl enable --now codex-azure-proxy.service
-sudo systemctl restart codex-azure-proxy.service
+sudo systemctl disable --now codex-azure-proxy.service 2>/dev/null || true
 
 echo
 echo "Installed. Start with: codexswitch"
+echo "Provider proxies start on demand immediately before Codex."

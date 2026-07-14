@@ -38,10 +38,10 @@ It is built for three workflows:
 - OpenAI multi-account management without losing rotated refresh tokens
 - Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
-- Persistent provider/model defaults that also work with a later plain `codex`
+- Persistent provider/model defaults with on-demand proxy startup from Commander
 - OpenCode Go compatibility proxy with tool-call translation
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
-- Reproducible local install with dependency detection and a systemd proxy service
+- Reproducible local install with dependency detection and on-demand proxy units
 - GitHub releases generated from `CHANGELOG.md`
 
 ## Install
@@ -67,9 +67,10 @@ codexswitch tui
 
 The installer detects missing Python/venv/npm dependencies on common Linux
 distros, installs or updates the Codex CLI when needed, creates `.venv`,
-installs Textual, links commands into `/usr/local/bin`, installs the OpenCode
-Go proxy service and restarts it on every install so updated proxy code is
-active immediately. On an existing git checkout, re-running `./install.sh`
+installs Textual, links commands into `/usr/local/bin`, and installs proxy
+systemd units without enabling them at boot. Commander starts only the proxy
+required by the selected provider immediately before Codex. On an existing
+git checkout, re-running `./install.sh`
 first fetches tags and performs a safe `git pull --ff-only`, so it can be used
 as the normal update command:
 
@@ -204,8 +205,11 @@ vault and is never written to `config.toml` or proxy logs.
 
 Azure uses a loopback passthrough on port `14557`. It reads the selected
 endpoint and API key from the protected CodexSwitch vault and adds the Azure
-`api-key` header upstream. This keeps a later plain `codex` launch working
-without exporting credentials into the shell.
+`api-key` header upstream without exporting credentials into the shell.
+Commander shows compact health indicators for all three proxies and starts
+only the selected provider proxy after F9 closes the TUI. F5 refreshes the
+display. Windows creates no service or Scheduled Task; Linux units are also
+disabled at boot and are started on demand.
 
 ## Authentication and storage
 
@@ -278,9 +282,9 @@ Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
 and API key and normalizes the URL to `/openai/v1`. The Azure and OpenRouter
 loopback proxies read their keys from the protected vault, while OpenCode Go
-uses its installed token helper. A selected provider, model and reasoning mode
-therefore remain the defaults for later plain `codex` launches, with no API
-key stored in `~/.codex/config.toml`.
+uses its installed token helper. Provider, model and reasoning remain selected,
+while Commander ensures the required proxy is running immediately before
+Codex starts. No API key is stored in `~/.codex/config.toml`.
 
 ```bash
 codexswitch auth azure
@@ -300,7 +304,8 @@ API. The local proxy bridges that gap on `127.0.0.1:14555` and handles:
 - proxy-local web-search fallback
 - optional bearer auth for manual clients
 
-Manage the Linux systemd service independently from the main installer:
+Manage the Linux OpenCode Go systemd service independently when explicit
+always-on behavior is desired:
 
 ```bash
 codexswitch proxy install

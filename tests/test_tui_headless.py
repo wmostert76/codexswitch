@@ -218,6 +218,14 @@ class FakeBackend(dict[str, Any]):
                 ),
                 "codex_bin": lambda: "/usr/bin/codex-test",
                 "codex_launch_environment": lambda: {"TEST_CODEX_ENV": "1"},
+                "proxy_statuses": lambda: {
+                    "opencode-go": False,
+                    "openrouter": True,
+                    "azure": False,
+                },
+                "ensure_provider_proxy": lambda provider: self.calls.append(
+                    ("ensure-proxy", provider)
+                ),
                 "enable_vault_session_cache": lambda home: self.calls.append(
                     ("vault-cache-enable", Path(home))
                 ),
@@ -440,6 +448,7 @@ def test_three_pane_layout_has_exact_commander_geometry(
             models = app.query_one("#model-pane").region
             reasoning = app.query_one("#reason-box").region
             detail = app.query_one("#detail-box").region
+            proxy_status = app.query_one("#proxy-status").region
             workspace = app.query_one("#workspace").region
             status = app.query_one("#status").region
             buttonbar = app.query_one("#buttonbar").region
@@ -454,7 +463,9 @@ def test_three_pane_layout_has_exact_commander_geometry(
             assert detail.y == workspace.bottom
             assert detail.width == status.width == size[0] - 2
             assert detail.height == 7
-            assert status.y == detail.bottom
+            assert proxy_status.y == detail.bottom
+            assert status.y == proxy_status.bottom
+            assert proxy_status.width == status.width == size[0] - 2
             assert buttonbar.x == 0 and buttonbar.width == size[0]
             assert buttonbar.bottom == size[1]
 
@@ -852,6 +863,21 @@ def test_startup_loads_cached_catalogs_without_refreshing_providers(
     asyncio.run(run())
 
 
+def test_startup_shows_all_proxy_statuses(app_factory, fake_backend: FakeBackend):
+    app = app_factory(fake_backend, refresh_on_start=True)
+
+    async def run() -> None:
+        async with app.run_test(size=(80, 24)) as pilot:
+            await app.workers.wait_for_complete()
+            await settle(pilot)
+            status = app.query_one("#proxy-status").render().plain
+            assert "GO OFF" in status
+            assert "ROUTER ON" in status
+            assert "AZURE OFF" in status
+
+    asyncio.run(run())
+
+
 def test_f5_explicitly_refreshes_vault_session_cache(
     app_factory, fake_backend: FakeBackend
 ):
@@ -889,6 +915,7 @@ def test_remote_vault_offline_is_persistent_and_visible_in_status_bar(
                 pilot,
                 lambda: "UNAVAILABLE"
                 in app.query_one("#status").render().plain.upper(),
+                attempts=160,
             )
             status = app.query_one("#status").render().plain.upper()
             assert "VAULT OFFLINE" in status
@@ -1733,6 +1760,7 @@ def test_main_checks_codex_runtime_before_exec(
 
     class FakeApp:
         launch_codex = True
+        active = tui.Selection(provider="openai")
 
         def __init__(self, *args: Any, **kwargs: Any) -> None:
             pass
@@ -1742,6 +1770,9 @@ def test_main_checks_codex_runtime_before_exec(
 
     fake_backend["ensure_codex_runtime_writable"] = lambda: calls.append(
         "preflight"
+    )
+    fake_backend["ensure_provider_proxy"] = lambda provider: calls.append(
+        ("ensure-proxy", provider)
     )
     monkeypatch.setattr(tui, "BACKEND", fake_backend)
     monkeypatch.setattr(tui.os, "name", "posix")
@@ -1758,6 +1789,7 @@ def test_main_checks_codex_runtime_before_exec(
 
     assert calls == [
         "run",
+        ("ensure-proxy", "openai"),
         "preflight",
         (
             "exec",
@@ -1775,12 +1807,16 @@ def test_main_waits_for_codex_subprocess_on_windows(
 
     class FakeApp:
         launch_codex = True
+        active = tui.Selection(provider="openai")
 
         def run(self) -> None:
             calls.append("run")
 
     fake_backend["ensure_codex_runtime_writable"] = lambda: calls.append(
         "preflight"
+    )
+    fake_backend["ensure_provider_proxy"] = lambda provider: calls.append(
+        ("ensure-proxy", provider)
     )
     monkeypatch.setattr(tui, "BACKEND", fake_backend)
     monkeypatch.setattr(tui, "CodexSwitchApp", FakeApp)
@@ -1802,6 +1838,7 @@ def test_main_waits_for_codex_subprocess_on_windows(
     assert tui.main() == 23
     assert calls == [
         "run",
+        ("ensure-proxy", "openai"),
         "preflight",
         (
             "run-codex",

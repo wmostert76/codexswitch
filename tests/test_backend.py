@@ -427,6 +427,30 @@ def test_install_proxy_service_installs_and_restarts_unit(monkeypatch):
     assert (["sudo", "systemctl", "restart", cs.PROXY_SERVICE], True) in calls
 
 
+def test_ensure_provider_proxy_starts_only_selected_provider(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs, "ensure_proxy", lambda: calls.append("opencode-go"))
+    monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: calls.append("openrouter"))
+    monkeypatch.setattr(cs, "ensure_azure_proxy", lambda: calls.append("azure"))
+
+    cs.ensure_provider_proxy("openai")
+    cs.ensure_provider_proxy("azure")
+
+    assert calls == ["azure"]
+
+
+def test_proxy_statuses_reports_all_three_health_checks(monkeypatch):
+    monkeypatch.setattr(cs, "proxy_healthy", lambda: True)
+    monkeypatch.setattr(cs, "openrouter_proxy_healthy", lambda: False)
+    monkeypatch.setattr(cs, "azure_proxy_healthy", lambda: True)
+
+    assert cs.proxy_statuses() == {
+        "opencode-go": True,
+        "openrouter": False,
+        "azure": True,
+    }
+
+
 # ─── JWT / auth helpers ───────────────────────────────────────────
 
 def make_jwt(claims: dict) -> str:

@@ -487,6 +487,14 @@ class CodexSwitchApp(App):
         padding: 0 1;
     }
 
+    #proxy-status {
+        height: 1;
+        margin: 0 1;
+        background: #00005f;
+        color: #ffffff;
+        padding: 0 1;
+    }
+
     #buttonbar {
         height: 1;
         background: #00afaf;
@@ -713,6 +721,11 @@ class CodexSwitchApp(App):
         self.last_focus_id: str | None = None
         self.status_hint_held = False
         self.vault_label = "LOCAL"
+        self.proxy_states: dict[str, bool | None] = {
+            "opencode-go": None,
+            "openrouter": None,
+            "azure": None,
+        }
         self.backend_worker_lock = asyncio.Lock()
 
         self.catalogs: dict[str, dict[str, dict]] = {
@@ -792,6 +805,7 @@ class CodexSwitchApp(App):
         with Vertical(id="detail-box"):
             yield Label("┤ MODEL DETAILS ├", classes="detail-title")
             yield Static("", id="model-detail")
+        yield Static("", id="proxy-status")
         yield Static("Ready", id="status")
         with Horizontal(id="buttonbar"):
             for key, compact, full, action in FUNCTION_KEYS:
@@ -809,6 +823,7 @@ class CodexSwitchApp(App):
         self.load_models()
         self.query_one("#sources", OptionList).focus()
         self.update_responsive_ui(self.size.width, self.size.height)
+        self.render_proxy_statuses()
         self.update_status_hint()
         if self.should_show_splash():
             self.push_screen(SplashScreen(), self.on_splash_dismissed)
@@ -1556,6 +1571,40 @@ class CodexSwitchApp(App):
             "#870000" if error or self.vault_label == "OFFLINE" else "#000000"
         )
 
+    def render_proxy_statuses(self) -> None:
+        text = Text(no_wrap=True, overflow="ellipsis")
+        text.append("PROXIES ", style="bold #5fd7ff")
+        labels = (
+            ("opencode-go", "GO"),
+            ("openrouter", "ROUTER"),
+            ("azure", "AZURE"),
+        )
+        for index, (provider, label) in enumerate(labels):
+            if index:
+                text.append("  ")
+            state = self.proxy_states.get(provider)
+            value = "ON" if state is True else "OFF" if state is False else "…"
+            style = (
+                "bold #ffffff on #008700"
+                if state is True
+                else "bold #ffffff on #af0000"
+                if state is False
+                else "bold #000000 on #bcbcbc"
+            )
+            text.append(f" {label} {value} ", style=style)
+        self.query_one("#proxy-status", Static).update(text)
+
+    def proxy_statuses_sync(self) -> dict[str, bool]:
+        statuses = self.safe_call("proxy_statuses", {})
+        return {
+            provider: bool(statuses.get(provider))
+            for provider in ("opencode-go", "openrouter", "azure")
+        }
+
+    async def refresh_proxy_statuses(self) -> None:
+        self.proxy_states = await asyncio.to_thread(self.proxy_statuses_sync)
+        self.render_proxy_statuses()
+
     def update_status_hint_if_clear(self) -> None:
         """Keep an operation result visible across its programmatic focus change."""
         if not self.status_hint_held:
@@ -1979,6 +2028,9 @@ class CodexSwitchApp(App):
 
     async def startup_refresh_worker(self) -> None:
         providers = ("openai", "opencode-go", "openrouter")
+        proxy_task = asyncio.create_task(
+            asyncio.to_thread(self.proxy_statuses_sync)
+        )
         self.busy_providers.update(providers)
         self.vault_label = "CHECKING"
         self.set_status("Checking shared vault…")
@@ -2008,6 +2060,15 @@ class CodexSwitchApp(App):
                     self.busy_providers.discard(provider)
         finally:
             self.busy_providers.difference_update(providers)
+            try:
+                self.proxy_states = await proxy_task
+            except Exception:
+                self.proxy_states = {
+                    "opencode-go": False,
+                    "openrouter": False,
+                    "azure": False,
+                }
+            self.render_proxy_statuses()
         if failed:
             self.set_status(
                 "Shared vault or a cached catalog is unavailable",
@@ -2062,6 +2123,7 @@ class CodexSwitchApp(App):
             self.set_status(str(exc) or "Catalog refresh failed", error=True)
         finally:
             self.busy_providers.discard(provider)
+            await self.refresh_proxy_statuses()
 
     # ---------- Apply and launch workers ----------
 
@@ -2454,6 +2516,7 @@ def main() -> int:
     app = CodexSwitchApp()
     app.run()
     if app.launch_codex:
+        BACKEND["ensure_provider_proxy"](app.active.provider)
         BACKEND["ensure_codex_runtime_writable"]()
         argv = codex_launch_argv()
         environment = BACKEND["codex_launch_environment"]()

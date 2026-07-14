@@ -2,6 +2,22 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.4.4] - 2026-07-14
+
+### Changed
+
+- Commander now starts only the proxy required by the selected provider after
+  the TUI closes and immediately before Codex launches, on both Windows and
+  Linux. Linux installs proxy units for on-demand use without enabling them at
+  boot, and Windows does not create services or scheduled tasks.
+- Commander now shows live OpenCode Go, OpenRouter and Azure proxy health in a
+  compact, color-coded status row; startup and F5 refresh the indicators.
+
+### Fixed
+
+- Starting an already-active provider with F9 now still performs the required
+  proxy startup check before launching Codex.
+
 ## [1.4.3] - 2026-07-14
 
 ### Fixed

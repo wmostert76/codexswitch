@@ -1079,6 +1079,25 @@ def ensure_azure_proxy() -> None:
         die(f"Azure proxy startte niet; zie {log}")
 
 
+def proxy_statuses() -> dict[str, bool]:
+    """Return loopback health for every CodexSwitch proxy."""
+    return {
+        "opencode-go": proxy_healthy(),
+        "openrouter": openrouter_proxy_healthy(),
+        "azure": azure_proxy_healthy(),
+    }
+
+
+def ensure_provider_proxy(provider: str) -> None:
+    """Start only the proxy required by the selected provider."""
+    if provider == "opencode-go":
+        ensure_proxy()
+    elif provider == "openrouter":
+        ensure_openrouter_proxy()
+    elif provider == "azure":
+        ensure_azure_proxy()
+
+
 def require_proxy_service_support() -> None:
     if os.name == "nt" or not shutil.which("systemctl"):
         die("proxy service beheer vereist Linux met systemd")
@@ -1650,16 +1669,12 @@ def warm_codex_model_catalog() -> bool:
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
     if provider == "azure" and not azure_credentials_present():
         die("Azure credentials ontbreken; gebruik: codexswitch auth azure")
-    if provider == "azure":
-        ensure_azure_proxy()
     if provider == "opencode-go":
         if not opencode_go_key_present():
             die("OpenCode Go API-key ontbreekt; gebruik: codexswitch auth opencode-go")
-        ensure_proxy()
     if provider == "openrouter" and not openrouter_key_present():
         die("OpenRouter API-key ontbreekt; gebruik: codexswitch auth openrouter")
     if provider == "openrouter":
-        ensure_openrouter_proxy()
         model = resolve_openrouter_model(model)
     CODEX_HOME.mkdir(parents=True, exist_ok=True)
     ensure_home_owner(CODEX_CONFIG)
@@ -2083,6 +2098,8 @@ def main(argv: list[str]) -> int:
         return 0
     if cmd == "run":
         binary = codex_launch_bin()
+        provider = str(codex_config_state().get("model_provider") or "openai")
+        ensure_provider_proxy(provider)
         os.execvpe(binary, [binary, *argv[1:]], codex_launch_environment())
     usage()
     return 2
