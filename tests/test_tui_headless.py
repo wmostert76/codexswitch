@@ -797,12 +797,14 @@ def test_openrouter_cost_column_sorting_and_persistent_search(
                 "model:openrouter/auto",
                 "model:vendor/think",
             ]
-            assert "$2/$6" in option_plain(
-                option_by_id(models, "model:openrouter/auto")
-            )
-            assert "$0.5/$1.5" in option_plain(
-                option_by_id(models, "model:vendor/think")
-            )
+            auto_row = option_plain(option_by_id(models, "model:openrouter/auto"))
+            think_row = option_plain(option_by_id(models, "model:vendor/think"))
+            assert "$2.00    $6.00" in auto_row
+            assert "$0.50    $1.50" in think_row
+            assert len(auto_row) <= models.scrollable_content_region.width
+            assert "INPUT" in app.query_one("#model-sort-cost").render().plain
+            assert "OUTPUT" in app.query_one("#model-sort-cost").render().plain
+            assert "USD / 1M TOKENS" in app.query_one("#model-title").render().plain
 
             await pilot.click("#model-sort-cost")
             await settle(pilot)

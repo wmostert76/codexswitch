@@ -439,15 +439,15 @@ class CodexSwitchApp(App):
         min-height: 1;
         border: none;
         padding: 0 1;
-        background: #ffffff;
-        color: #000000;
+        background: #000000;
+        color: #ffffff;
     }
 
     #openrouter-model-columns {
         display: none;
         height: 1;
-        background: #bcbcbc;
-        color: #000087;
+        background: #00005f;
+        color: #5fd7ff;
         text-style: bold;
     }
 
@@ -458,7 +458,7 @@ class CodexSwitchApp(App):
 
     #model-sort-cost {
         width: 18;
-        text-align: right;
+        text-align: center;
         padding-right: 1;
     }
 
@@ -777,12 +777,12 @@ class CodexSwitchApp(App):
                 yield Label("┤ PROVIDERS ├", classes="pane-title", id="source-title")
                 yield OptionList(id="sources")
             with Vertical(classes="pane", id="model-pane"):
-                yield Label("┤ MODELS ├", classes="pane-title")
+                yield Label("┤ MODELS ├", classes="pane-title", id="model-title")
                 with Horizontal(id="openrouter-model-columns"):
                     yield Static("MODEL", id="model-sort-model")
-                    yield Static("COST IN/OUT $/1M", id="model-sort-cost")
+                    yield Static("INPUT     OUTPUT", id="model-sort-cost")
                 yield Input(
-                    placeholder="Search OpenRouter model ID or name…",
+                    placeholder="Search models…",
                     id="model-filter",
                 )
                 yield OptionList(id="models")
@@ -1086,16 +1086,12 @@ class CodexSwitchApp(App):
     @staticmethod
     def price_display(value: Decimal | None) -> str:
         if value is None:
-            return "—"
-        if value == 0:
-            return "$0"
-        decimals = 2 if value >= 1 else 3 if value >= Decimal("0.01") else 4
-        rendered = f"{value:.{decimals}f}".rstrip("0").rstrip(".")
-        return f"${rendered}"
+            return "$--.--"
+        return f"${value:.2f}"
 
-    def openrouter_cost_display(self, model: str) -> str:
+    def openrouter_cost_display(self, model: str) -> tuple[str, str]:
         prompt, completion = self.openrouter_prices(model)
-        return f"{self.price_display(prompt)}/{self.price_display(completion)}"
+        return self.price_display(prompt), self.price_display(completion)
 
     def sorted_model_ids(self, provider: str, models: list[str]) -> list[str]:
         if provider != "openrouter":
@@ -1125,9 +1121,12 @@ class CodexSwitchApp(App):
         is_openrouter = provider == "openrouter"
         columns = self.query_one("#openrouter-model-columns", Horizontal)
         columns.styles.display = "block" if is_openrouter else "none"
+        self.query_one("#model-title", Label).update(
+            "┤ MODELS · USD / 1M TOKENS ├" if is_openrouter else "┤ MODELS ├"
+        )
         field = self.query_one("#model-filter", Input)
         field.placeholder = (
-            "Search OpenRouter model ID or name…"
+            "Search models…"
             if is_openrouter
             else "Filter model ID or name…"
         )
@@ -1138,25 +1137,35 @@ class CodexSwitchApp(App):
 
         direction = "▼" if self.openrouter_sort_descending else "▲"
         model_label = "MODEL"
-        cost_label = "COST $/1M I/O"
+        cost_label = "INPUT     OUTPUT"
         if self.openrouter_sort_column == "model":
             model_label += f" {direction}"
         else:
-            cost_label += f" {direction}"
-        self.query_one("#model-sort-model", Static).update(model_label)
-        self.query_one("#model-sort-cost", Static).update(cost_label)
+            cost_label = f"INPUT {direction}   OUTPUT"
+        model_header = self.query_one("#model-sort-model", Static)
+        cost_header = self.query_one("#model-sort-cost", Static)
+        model_header.update(model_label)
+        cost_header.update(cost_label)
+        model_header.styles.color = (
+            "#ffff00" if self.openrouter_sort_column == "model" else "#5fd7ff"
+        )
+        cost_header.styles.color = (
+            "#ffff00" if self.openrouter_sort_column == "cost" else "#5fd7ff"
+        )
 
     def model_option_prompt(
         self, marker: str, provider: str, model: str, suffix: str = ""
     ) -> Text:
         if provider != "openrouter":
             return self.plain_option(marker, model, suffix=suffix)
-        cost = self.openrouter_cost_display(model)
-        available = max(8, self.query_one("#models", OptionList).size.width - 18)
+        prompt_price, completion_price = self.openrouter_cost_display(model)
+        # Reserve two cells for the marker and two for OptionList's scrollbar,
+        # so the final price never gets ellipsized at the 80-column minimum.
+        available = max(8, self.query_one("#models", OptionList).size.width - 21)
         label = model if len(model) <= available else f"{model[: available - 1]}…"
         text = Text(no_wrap=True, overflow="ellipsis")
         text.append(f"{marker} {label:<{available}}")
-        text.append(f"{cost:>17}")
+        text.append(f"{prompt_price:>8} {completion_price:>8}")
         if suffix:
             text.append(suffix)
         return text

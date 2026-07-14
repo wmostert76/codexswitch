@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.4.1] - 2026-07-14
+
+### Changed
+
+- Restyled OpenRouter pricing as clean, aligned `INPUT` and `OUTPUT` columns
+  with consistent `$0.00` formatting, clearer active-sort highlighting and a
+  less intrusive model search field.
+
 ## [1.4.0] - 2026-07-14
 
 ### Added
