@@ -167,13 +167,14 @@ else
 fi
 
 sudo install -d -m 755 /usr/local/bin
-for command in codexswitch codex-provider-proxy opencode-go-token openrouter-token; do
+for command in codexswitch codex-provider-proxy opencode-go-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
 sudo rm -f /usr/local/bin/openswitch \
   /usr/local/bin/codex-opencode-go-proxy \
   /usr/local/bin/codex-openrouter-proxy \
-  /usr/local/bin/codex-azure-proxy
+  /usr/local/bin/codex-azure-proxy \
+  /usr/local/bin/openrouter-token
 
 for legacy_service in codex-opencode-go-proxy codex-openrouter-proxy codex-azure-proxy; do
   sudo systemctl disable --now "$legacy_service.service" 2>/dev/null || true

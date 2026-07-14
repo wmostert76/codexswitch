@@ -6,7 +6,6 @@ import contextlib
 import io
 import json
 import os
-import runpy
 import subprocess
 from dataclasses import dataclass, replace
 from decimal import Decimal, InvalidOperation
@@ -23,10 +22,12 @@ from textual.screen import ModalScreen
 from textual.widgets import Button, Header, Input, Label, OptionList, Static
 from textual.widgets.option_list import Option
 
+import codexswitch_backend
+
 
 PROJECT = Path(__file__).resolve().parents[1]
 BACKEND_PATH = PROJECT / "bin/codexswitch"
-BACKEND = runpy.run_path(str(BACKEND_PATH))
+BACKEND = vars(codexswitch_backend)
 
 CODEX_TUI_LAUNCH_ARGS = (
     "--dangerously-bypass-approvals-and-sandbox",
@@ -824,7 +825,7 @@ class CodexSwitchApp(App):
         if self.should_show_splash():
             self.push_screen(SplashScreen(), self.on_splash_dismissed)
         if self.refresh_on_start:
-            self.call_after_refresh(self.start_startup_refresh)
+            self.start_startup_refresh()
 
     # ---------- State and safe backend access ----------
 

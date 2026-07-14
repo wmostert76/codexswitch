@@ -217,7 +217,7 @@ out of the repository.
 | Opgeslagen OpenAI accounts | Gedeelde versleutelde vault | CodexSwitch haalt accounts bij ieder gebruik opnieuw uit Object Storage |
 | Azure OpenAI credentials | Gedeelde versleutelde vault | Endpoint en API-key blijven uit `config.toml` en lokale caches |
 | OpenCode Go API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
-| OpenRouter API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
+| OpenRouter API key | Gedeelde versleutelde vault | De unified proxy doet een verse remote vault-read |
 
 Vault flow:
 
@@ -249,7 +249,7 @@ shared vault passphrase on every machine. It uses
 `https://fsn1.your-objectstorage.com`, bucket `wmostert` and object
 `codexswitch/vault.enc` by default. On headless Linux hosts without an OS
 keyring, the wizard automatically stores these three bootstrap secrets as
-machine-bound encrypted systemd user credentials. CLI, TUI, token helpers and
+machine-bound encrypted systemd user credentials. CLI, TUI, the OpenCode token helper and
 the proxy read that same protected storage after every restart.
 
 Environment injection remains available for ephemeral deployments:
@@ -276,8 +276,8 @@ codexswitch account add
 Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
 and API key and normalizes the URL to `/openai/v1`. The Azure and OpenRouter
-unified proxy routes read their keys from the protected vault, while OpenCode Go
-uses its installed token helper. Provider, model and reasoning remain selected,
+unified proxy routes read their keys directly from the protected vault, while
+OpenCode Go uses its installed token helper. Provider, model and reasoning remain selected,
 while Commander ensures the required proxy is running immediately before
 Codex starts. No API key is stored in `~/.codex/config.toml`.
 

@@ -1,7 +1,5 @@
 """Tests for codexswitch backend pure functions."""
 import base64
-import importlib.machinery
-import importlib.util
 import json
 import os
 import tempfile
@@ -12,16 +10,7 @@ from unittest.mock import patch
 
 BIN_DIR = Path(__file__).resolve().parent.parent / "bin"
 
-# Load codexswitch as a module. It has no .py extension, so
-# spec_from_file_location returns None unless we supply an explicit loader.
-_loader = importlib.machinery.SourceFileLoader(
-    "codexswitch", str(BIN_DIR / "codexswitch")
-)
-_spec = importlib.util.spec_from_file_location(
-    "codexswitch", BIN_DIR / "codexswitch", loader=_loader
-)
-cs = importlib.util.module_from_spec(_spec)
-_spec.loader.exec_module(cs)
+import codexswitch_backend as cs
 
 
 def test_version_constant_is_release_version():
@@ -156,13 +145,6 @@ def test_choose_filters_before_selecting(monkeypatch):
     assert cs.choose("Provider", ["openai", "opencode-go", "openrouter"]) == "openrouter"
 
 
-def test_banner_contains_credits(capsys):
-    cs.banner("Actief: test")
-    output = capsys.readouterr().out
-    assert "by WAM-Software since (c) 1988" in output
-    assert "AI-assisted implementation: OpenAI Codex" in output
-
-
 def test_remote_vault_configure_wizard_uploads_then_removes_local_material(
     tmp_path, monkeypatch, capsys
 ):
@@ -236,6 +218,10 @@ def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
     monkeypatch.setattr(cs, "CODEX_CONFIG", codex_home / "config.toml")
     monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
     monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_config)
+    cache_calls = []
+    monkeypatch.setattr(
+        cs, "enable_vault_session_cache", lambda home: cache_calls.append(home)
+    )
     monkeypatch.setattr(cs, "codex_bin", lambda: "/tmp/codex")
     monkeypatch.setattr(cs, "_common_opencode_bin", lambda: None)
     monkeypatch.setattr(cs, "opencode_go_key_present", lambda: True)
@@ -245,6 +231,7 @@ def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
 
     cs.status()
 
+    assert cache_calls == [switch_home]
     assert "huidig:       openrouter / z-ai/glm-5.2 / denken=high" in capsys.readouterr().out
 
 
@@ -829,7 +816,6 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
         monkeypatch.setattr(cs, "azure_credentials_present", lambda: True)
-        monkeypatch.setattr(cs, "ensure_azure_proxy", lambda: None)
         monkeypatch.setattr(
             cs,
             "azure_credentials",
@@ -951,7 +937,6 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
         monkeypatch.setattr(cs, "TOKEN_HELPER", str(token_helper))
-        monkeypatch.setattr(cs, "ensure_proxy", lambda: None)
         monkeypatch.setattr(cs, "opencode_go_key_present", lambda: True)
         monkeypatch.setattr(cs, "reasoning_choices", lambda model: [("medium", "medium")])
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
@@ -972,7 +957,6 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_home / "config.json")
         monkeypatch.setattr(cs, "OPENROUTER_AUTH", switch_home / "openrouter/auth.json")
-        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
 
         with pytest.raises(SystemExit):
             cs.update_codex_config("openrouter", "openrouter/auto")
@@ -1009,7 +993,6 @@ class TestUpdateState:
             switch_home / "openrouter/codex-models.json",
         )
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
-        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(
             cs,
             "openrouter_model_catalog",
@@ -1068,7 +1051,6 @@ class TestUpdateState:
             switch_home / "openrouter/codex-models.json",
         )
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
-        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 
@@ -1117,7 +1099,6 @@ class TestOpenRouterCatalog:
             switch_home / "openrouter/codex-models.json",
         )
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
-        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 

@@ -7,11 +7,11 @@ CLI for native OpenAI, OpenCode Go or OpenRouter models.
 
 The repository contains:
 
-- `bin/codexswitch`: CLI backend and launcher
+- `bin/codexswitch`: Thin CLI launcher
+- `bin/codexswitch_backend.py`: Importable backend and CLI implementation
 - `bin/codexswitch-tui`: Textual Commander-style interface
 - `bin/codex-opencode-go-proxy`: Responses API compatibility proxy
 - `bin/opencode-go-token`: Reads the existing OpenCode Go credential
-- `bin/openrouter-token`: Reads the saved OpenRouter API key
 - `install.sh`: Reproducible local installation
 
 ## Safety
@@ -49,7 +49,7 @@ configuration logic in the TUI.
 Run before committing:
 
 ```bash
-python3 -m py_compile bin/codexswitch bin/codex-opencode-go-proxy bin/opencode-go-token bin/openrouter-token bin/codexswitch_common.py
+python3 -m py_compile bin/codexswitch bin/codexswitch_backend.py bin/codex-provider-proxy bin/codex-opencode-go-proxy bin/codex-azure-proxy bin/opencode-go-token bin/codexswitch_common.py
 .venv/bin/python -m py_compile bin/codexswitch-tui
 bash -n install.sh uninstall.sh
 .venv/bin/python -m pytest tests/ -v

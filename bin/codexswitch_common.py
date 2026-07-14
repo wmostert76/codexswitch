@@ -2,10 +2,9 @@
 """Shared helpers for CodexSwitch components.
 
 This module contains logic that is used by multiple entry points:
-  - bin/codexswitch          (CLI backend)
+  - bin/codexswitch_backend.py (CLI backend)
   - bin/codex-opencode-go-proxy (Responses API proxy)
   - bin/opencode-go-token    (credential reader)
-  - bin/openrouter-token     (OpenRouter credential reader)
 
 Keeping it here avoids code duplication and ensures that a bugfix only
 needs to happen in one place.
@@ -32,7 +31,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "1.5.2"
+VERSION = "1.6.0"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _

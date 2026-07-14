@@ -31,12 +31,12 @@ jobs:
         run: |
           python -m py_compile \
             bin/codexswitch \
+            bin/codexswitch_backend.py \
             bin/codexswitch-tui \
             bin/codex-provider-proxy \
             bin/codex-opencode-go-proxy \
-            bin/codex-openrouter-proxy \
+            bin/codex-azure-proxy \
             bin/opencode-go-token \
-            bin/openrouter-token \
             bin/codexswitch_common.py
 
       - name: Validate shell scripts

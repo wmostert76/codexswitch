@@ -34,14 +34,7 @@ _spec = importlib.util.spec_from_file_location(
 tui = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(tui)
 
-_backend_loader = importlib.machinery.SourceFileLoader(
-    "codexswitch", str(BIN_DIR / "codexswitch")
-)
-_backend_spec = importlib.util.spec_from_file_location(
-    "codexswitch", BIN_DIR / "codexswitch", loader=_backend_loader
-)
-cs = importlib.util.module_from_spec(_backend_spec)
-_backend_spec.loader.exec_module(cs)
+import codexswitch_backend as cs
 
 
 class FakeBackend(dict[str, Any]):

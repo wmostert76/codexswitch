@@ -2,6 +2,22 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.6.0] - 2026-07-14
+
+### Changed
+
+- Split the thin `codexswitch` command from the importable backend module, so
+  the TUI uses normal module imports instead of executing the CLI with `runpy`.
+- Removed unused per-provider proxy wrappers, dead status helpers and the
+  obsolete `openrouter-token` command. Upgrade cleanup for old installations
+  remains in place.
+- Simplified `status` output by dropping legacy OpenCode file locations.
+
+### Performance
+
+- A status command now downloads and decrypts a remote credential vault only
+  once instead of once per provider.
+
 ## [1.5.2] - 2026-07-14
 
 ### Fixed

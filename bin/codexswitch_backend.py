@@ -1,0 +1,2038 @@
+#!/usr/bin/env python3
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import time
+import base64
+import getpass
+import tomllib
+import urllib.error
+import urllib.request
+from urllib.parse import urlsplit, urlunsplit
+from datetime import datetime, timezone
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codexswitch_common import (
+    ASCII_LOGO,
+    ASCII_LOGO_WIDTH,
+    BRAND_BANNER,
+    COMMANDER_CENTERED,
+    COMMANDER_SPACED,
+    CREDITS_AI,
+    CREDITS_OWNER,
+    VERSION,
+    enable_vault_session_cache,
+    read_secret_json as vault_read_secret_json,
+    refresh_vault_session_cache,
+    remote_vault_config_path,
+    remote_vault_enabled,
+    remote_vault_request,
+    remove_local_vault_material,
+    store_remote_credentials,
+    vault_save,
+    vault_status as _common_vault_status,
+    write_remote_vault_config,
+    write_secret_json as vault_write_secret_json,
+    vault_load,
+    user_home as _common_user_home,
+    OPENCODE_GO_FALLBACK_CATALOG,
+    opencode_catalog_from_binary as _common_catalog_from_binary,
+    opencode_bin as _common_opencode_bin,
+    opencode_catalog_from_upstream as _common_catalog_from_upstream,
+    opencode_catalog_from_cache as _common_catalog_from_cache,
+)
+
+
+OPENAI_FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+AZURE_MODELS = ["gpt-5.6-sol"]
+AZURE_MODEL = AZURE_MODELS[0]
+AZURE_REASONING_CHOICES = [
+    ("Low (default)", "low"),
+    ("Medium", "medium"),
+    ("High", "high"),
+    ("Extra high", "xhigh"),
+    ("Max", "max"),
+    ("Ultra", "ultra"),
+]
+AZURE_DEFAULT_REASONING_EFFORT = "low"
+AZURE_DEFAULT_ENDPOINT = ""
+AZURE_DEFAULT_API_VERSION = "v1"
+AZURE_API_KEY_ENV = "AZURE_OPENAI_API_KEY"
+DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
+OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
+OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
+PROVIDER_PROXY_URL = "http://127.0.0.1:14555"
+OPENCODE_PROXY_URL = f"{PROVIDER_PROXY_URL}/opencode-go/v1"
+OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_PROXY_URL = f"{PROVIDER_PROXY_URL}/openrouter/v1"
+AZURE_PROXY_URL = f"{PROVIDER_PROXY_URL}/azure/v1"
+OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MAX_CONFIG_BACKUPS = 5
+PROXY_SERVICE = "codex-provider-proxy.service"
+TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
+PROXY_BIN = shutil.which("codex-provider-proxy") or str(PROJECT_ROOT / "bin/codex-provider-proxy")
+if os.name == "nt":
+    TUI_PYTHON = str(PROJECT_ROOT / ".venv/Scripts/python.exe")
+else:
+    TUI_PYTHON = str(PROJECT_ROOT / ".venv/bin/python")
+TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
+APP_NAME = "CodexSwitch"
+APP_TITLE = f"{APP_NAME} Commander"
+GITHUB_REPOSITORY = "wmostert76/codexswitch"
+GITHUB_LATEST_RELEASE_API = (
+    f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
+)
+
+
+def user_home() -> Path:
+    return _common_user_home()
+
+
+HOME = user_home()
+CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex")).expanduser()
+CODEX_CONFIG = CODEX_HOME / "config.toml"
+SWITCH_HOME = HOME / ".config/codexswitch"
+SWITCH_CONFIG = SWITCH_HOME / "config.json"
+OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
+AZURE_AUTH = SWITCH_HOME / "azure/auth.json"
+OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
+OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
+OPENROUTER_CODEX_MODELS = SWITCH_HOME / "openrouter/codex-models.json"
+OPENCODE_GO_AUTH = SWITCH_HOME / "opencode-go/auth.json"
+OPENCODE_GO_MODELS_CACHE = SWITCH_HOME / "opencode-go/models.json"
+OPENCODE_CONFIG = HOME / ".config/opencode/opencode.json"
+OPENCODE_AUTH = HOME / ".local/share/opencode/auth.json"
+OPENCODE_MODELS_CACHE = HOME / ".cache/opencode/models.json"
+OPENCODE_BIN_FALLBACK = HOME / ".local/share/npm-global/bin/opencode"
+_OPENCODE_CATALOG_CACHE: dict[str, dict] | None = None
+_OPENAI_CATALOG_CACHE: dict[str, dict] | None = None
+_OPENROUTER_CATALOG_CACHE: dict[str, dict] | None = None
+
+
+def die(message: str, code: int = 1) -> None:
+    print(f"error: {message}", file=sys.stderr)
+    raise SystemExit(code)
+
+
+def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
+    return subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", check=check)
+
+
+def command_output(cmd: list[str]) -> str:
+    return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace").strip()
+
+
+def run_post_update_install(skip_self_update: bool = False) -> None:
+    """Refresh platform-specific runtime dependencies after updating the checkout."""
+    if os.name == "nt":
+        requirements = PROJECT_ROOT / "requirements.txt"
+        if not requirements.exists():
+            die(f"requirements bestand ontbreekt: {requirements}")
+        run([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
+        return
+
+    install_script = PROJECT_ROOT / "install.sh"
+    if not install_script.exists():
+        die(f"install script ontbreekt: {install_script}")
+    command = ["bash", str(install_script)]
+    if skip_self_update:
+        command.append("--no-self-update")
+    run(command)
+
+
+def read_json(path: Path, default):
+    try:
+        return json.loads(path.read_text())
+    except FileNotFoundError:
+        return default
+    except json.JSONDecodeError as exc:
+        die(f"{path} is geen geldige JSON: {exc}")
+
+
+def codex_config_state() -> dict[str, str]:
+    try:
+        data = tomllib.loads(CODEX_CONFIG.read_text())
+    except FileNotFoundError:
+        return {}
+    except tomllib.TOMLDecodeError as exc:
+        die(f"{CODEX_CONFIG} is geen geldige TOML: {exc}")
+    state = {}
+    for key in ("model", "model_provider", "model_reasoning_effort"):
+        value = data.get(key)
+        if isinstance(value, str):
+            state[key] = value
+    return state
+
+
+def set_home_owner(path: Path) -> None:
+    if not hasattr(os, "chown"):
+        return
+    try:
+        home_stat = HOME.stat()
+        os.chown(path, home_stat.st_uid, home_stat.st_gid)
+    except (FileNotFoundError, PermissionError, AttributeError):
+        pass
+
+
+def ensure_home_owner(path: Path) -> None:
+    if not hasattr(os, "chown"):
+        return
+    if not path.exists():
+        return
+    home_stat = HOME.stat()
+    path_stat = path.stat()
+    if (path_stat.st_uid, path_stat.st_gid) == (home_stat.st_uid, home_stat.st_gid):
+        return
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        os.chown(path, home_stat.st_uid, home_stat.st_gid)
+        return
+    proc = subprocess.run(
+        ["sudo", "-n", "chown", f"{home_stat.st_uid}:{home_stat.st_gid}", str(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        die(f"kan eigendom van {path} niet herstellen; voer sudo chown uit")
+
+
+def ensure_home_owner_recursive(path: Path) -> None:
+    if not hasattr(os, "chown"):
+        return
+    if not path.exists():
+        return
+    home_stat = HOME.stat()
+    uid_gid = f"{home_stat.st_uid}:{home_stat.st_gid}"
+    mismatched = False
+    for current, dirs, files in os.walk(path):
+        for name in [".", *dirs, *files]:
+            candidate = Path(current) if name == "." else Path(current) / name
+            try:
+                stat = candidate.lstat()
+            except FileNotFoundError:
+                continue
+            if (stat.st_uid, stat.st_gid) != (home_stat.st_uid, home_stat.st_gid):
+                mismatched = True
+                break
+        if mismatched:
+            break
+    if not mismatched:
+        return
+    if hasattr(os, "geteuid") and os.geteuid() == 0:
+        for current, dirs, files in os.walk(path):
+            for name in [".", *dirs, *files]:
+                candidate = Path(current) if name == "." else Path(current) / name
+                try:
+                    os.chown(candidate, home_stat.st_uid, home_stat.st_gid, follow_symlinks=False)
+                except FileNotFoundError:
+                    pass
+        return
+    proc = subprocess.run(
+        ["sudo", "-n", "chown", "-R", uid_gid, str(path)],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        check=False,
+    )
+    if proc.returncode != 0:
+        die(f"kan eigendom van {path} niet herstellen; voer sudo chown -R {uid_gid} {path} uit")
+
+
+def ensure_codex_runtime_writable() -> None:
+    CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    set_home_owner(CODEX_HOME)
+    runtime_dirs = [
+        CODEX_HOME / "sessions",
+        CODEX_HOME / "shell_snapshots",
+        CODEX_HOME / "tmp",
+        CODEX_HOME / "log",
+    ]
+    for path in runtime_dirs:
+        path.mkdir(parents=True, exist_ok=True)
+        ensure_home_owner_recursive(path)
+        if not os.access(path, os.W_OK | os.X_OK):
+            die(f"Codex kan niet schrijven naar {path}; herstel de permissies")
+
+
+def write_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    set_home_owner(path.parent)
+    set_home_owner(path)
+
+
+def write_secret_json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.parent.chmod(0o700)
+    set_home_owner(path.parent)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    try:
+        temporary.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+        temporary.chmod(0o600)
+        set_home_owner(temporary)
+        os.replace(temporary, path)
+        path.chmod(0o600)
+        set_home_owner(path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def parse_version(value: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+    if not match:
+        die(f"ongeldige versie: {value}")
+    return tuple(int(part) for part in match.groups())
+
+
+def latest_github_release() -> tuple[str, str]:
+    try:
+        req = urllib.request.Request(
+            GITHUB_LATEST_RELEASE_API,
+            headers={
+                "accept": "application/vnd.github+json",
+                "user-agent": f"codexswitch/{VERSION}",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError) as exc:
+        die(f"kan GitHub release niet controleren: {exc}")
+    tag = payload.get("tag_name")
+    url = payload.get("html_url", "")
+    if not isinstance(tag, str) or not tag:
+        die("GitHub release response bevat geen tag_name")
+    return tag, url if isinstance(url, str) else ""
+
+
+def local_repo_is_dirty() -> bool:
+    try:
+        status = command_output(
+            ["git", "-C", str(PROJECT_ROOT), "status", "--porcelain"]
+        )
+    except subprocess.CalledProcessError:
+        die(f"{PROJECT_ROOT} is geen geldige git checkout")
+    return bool(status)
+
+
+def current_git_branch() -> str:
+    try:
+        return command_output(
+            ["git", "-C", str(PROJECT_ROOT), "rev-parse", "--abbrev-ref", "HEAD"]
+        )
+    except subprocess.CalledProcessError:
+        die(f"{PROJECT_ROOT} is geen geldige git checkout")
+
+
+def local_git_revision(ref: str = "HEAD") -> str:
+    try:
+        return command_output(["git", "-C", str(PROJECT_ROOT), "rev-parse", ref])
+    except subprocess.CalledProcessError:
+        die(f"kan lokale git revisie niet lezen: {ref}")
+
+
+def remote_git_revision(remote: str = "origin", branch: str = "main") -> str:
+    try:
+        output = command_output(
+            ["git", "-C", str(PROJECT_ROOT), "ls-remote", "--heads", remote, branch]
+        )
+    except subprocess.CalledProcessError:
+        die(f"kan remote git revisie niet lezen: {remote}/{branch}")
+    first_line = output.splitlines()[0] if output else ""
+    parts = first_line.split()
+    if len(parts) < 2:
+        die(f"remote branch niet gevonden: {remote}/{branch}")
+    return parts[0]
+
+
+def main_branch_update_available() -> tuple[bool, str, str]:
+    if current_git_branch() != "main":
+        return False, "", ""
+    local_rev = local_git_revision()
+    remote_rev = remote_git_revision("origin", "main")
+    return local_rev != remote_rev, local_rev, remote_rev
+
+
+def update_from_github(check_only: bool = False) -> bool:
+    latest_tag, latest_url = latest_github_release()
+    current_version = parse_version(VERSION)
+    latest_version = parse_version(latest_tag)
+    latest_display = latest_tag.lstrip("v")
+    if current_version >= latest_version:
+        branch_update, local_rev, remote_rev = main_branch_update_available()
+        if branch_update:
+            print(
+                "Nieuwe CodexSwitch main-update beschikbaar: "
+                f"{local_rev[:7]} -> {remote_rev[:7]}"
+            )
+            if latest_url:
+                print(f"latest release: {latest_url}")
+            if check_only:
+                return True
+            if local_repo_is_dirty():
+                die(
+                    "lokale repository heeft niet-gecommitte wijzigingen; "
+                    "commit/stash eerst en draai daarna opnieuw: codexswitch update"
+                )
+            run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+            run_post_update_install(skip_self_update=True)
+            print("CodexSwitch main bijgewerkt")
+            return True
+        if current_version == latest_version:
+            print(f"CodexSwitch is up-to-date: {VERSION}")
+        else:
+            print(
+                f"Lokale CodexSwitch versie is nieuwer dan GitHub latest: "
+                f"{VERSION} > {latest_display}"
+            )
+        if latest_url:
+            print(f"latest: {latest_url}")
+        return False
+
+    print(f"Nieuwe CodexSwitch release beschikbaar: {VERSION} -> {latest_display}")
+    if latest_url:
+        print(f"release: {latest_url}")
+    if check_only:
+        return True
+    if local_repo_is_dirty():
+        die(
+            "lokale repository heeft niet-gecommitte wijzigingen; "
+            "commit/stash eerst en draai daarna opnieuw: codexswitch update"
+        )
+    run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+    branch = current_git_branch()
+    if branch == "main":
+        run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+    else:
+        run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
+    run_post_update_install()
+    print(f"CodexSwitch bijgewerkt naar {latest_display}")
+    return True
+
+
+def auto_update_from_github() -> bool:
+    if os.environ.get("CODEXSWITCH_NO_AUTO_UPDATE"):
+        return False
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return False
+    try:
+        latest_tag, _latest_url = latest_github_release()
+        current_version = parse_version(VERSION)
+        latest_version = parse_version(latest_tag)
+        latest_display = latest_tag.lstrip("v")
+        branch_update = False
+        local_rev = ""
+        remote_rev = ""
+        if current_version >= latest_version:
+            branch_update, local_rev, remote_rev = main_branch_update_available()
+            if not branch_update:
+                return False
+        if local_repo_is_dirty():
+            target = (
+                f"{local_rev[:7]} -> {remote_rev[:7]}"
+                if branch_update
+                else f"{VERSION} -> {latest_display}"
+            )
+            print(
+                "warning: CodexSwitch update beschikbaar maar lokale repository "
+                f"heeft niet-gecommitte wijzigingen ({target}); upgrade overgeslagen",
+                file=sys.stderr,
+            )
+            return False
+        if branch_update:
+            print(
+                "CodexSwitch main-update gevonden; upgraden: "
+                f"{local_rev[:7]} -> {remote_rev[:7]}"
+            )
+            run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+            run_post_update_install(skip_self_update=True)
+            print("CodexSwitch main bijgewerkt")
+            return True
+        print(f"CodexSwitch release-update gevonden; upgraden: {VERSION} -> {latest_display}")
+        run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+        branch = current_git_branch()
+        if branch == "main":
+            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+        else:
+            run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
+        run_post_update_install()
+        print(f"CodexSwitch bijgewerkt naar {latest_display}")
+        return True
+    except SystemExit as exc:
+        print(f"warning: CodexSwitch auto-update check mislukt: {exc}", file=sys.stderr)
+    except Exception as exc:
+        print(f"warning: CodexSwitch auto-update check mislukt: {exc}", file=sys.stderr)
+    return False
+
+
+def jwt_claims(token: str) -> dict:
+    if not isinstance(token, str) or token.count(".") != 2:
+        return {}
+    try:
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        claims = json.loads(base64.urlsafe_b64decode(payload))
+        return claims if isinstance(claims, dict) else {}
+    except (ValueError, json.JSONDecodeError):
+        return {}
+
+
+def openai_auth_email(data: dict) -> str | None:
+    tokens = data.get("tokens", {})
+    if not isinstance(tokens, dict):
+        return None
+    for token_name in ("id_token", "access_token"):
+        claims = jwt_claims(tokens.get(token_name, ""))
+        email = claims.get("email")
+        if not email:
+            profile = claims.get("https://api.openai.com/profile", {})
+            email = profile.get("email") if isinstance(profile, dict) else None
+        if isinstance(email, str) and email.strip():
+            return email.strip().lower()
+    return None
+
+
+def _parse_time_value(value):
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        stamp = float(value)
+        if stamp > 1e12:
+            stamp /= 1000.0
+        return datetime.fromtimestamp(stamp, tz=timezone.utc)
+    if isinstance(value, str):
+        text = value.strip()
+        if not text:
+            return None
+        if text.isdigit():
+            return _parse_time_value(int(text))
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    return None
+
+
+def _format_time_value(value) -> str | None:
+    dt = _parse_time_value(value)
+    if dt is None:
+        return None
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    local = dt.astimezone()
+    return local.strftime("%Y-%m-%d %H:%M %Z")
+
+
+def _extract_usage_windows(payload):
+    windows = []
+    seen = set()
+
+    def visit(obj):
+        if isinstance(obj, dict):
+            keys = {str(key).lower() for key in obj.keys()}
+            interesting = any(
+                marker in key
+                for key in keys
+                for marker in (
+                    "five_hour",
+                    "weekly",
+                    "window",
+                    "remaining",
+                    "reset",
+                    "limit_window_seconds",
+                    "window_length_seconds",
+                )
+            )
+            if interesting:
+                signature = json.dumps(obj, sort_keys=True, default=str)
+                if signature not in seen:
+                    seen.add(signature)
+                    windows.append(obj)
+            for value in obj.values():
+                visit(value)
+        elif isinstance(obj, list):
+            for item in obj:
+                visit(item)
+
+    visit(payload)
+    return windows
+
+
+def _window_kind(window: dict) -> str | None:
+    text = json.dumps(window, sort_keys=True, default=str).lower()
+    if "five_hour" in text or "5h" in text or "5 hour" in text:
+        return "5h"
+    if "weekly" in text or "week" in text:
+        return "weekly"
+    seconds = window.get("limit_window_seconds") or window.get("window_length_seconds")
+    if isinstance(seconds, (int, float)):
+        if int(seconds) <= 20000:
+            return "5h"
+        if int(seconds) >= 500000:
+            return "weekly"
+    return None
+
+
+def _window_summary(window: dict) -> tuple[str | None, str | None]:
+    remaining = None
+    for key in (
+        "remaining_percentage",
+        "remaining_percent",
+        "remaining",
+        "percent_remaining",
+        "usage_remaining_percentage",
+    ):
+        value = window.get(key)
+        if isinstance(value, (int, float)):
+            remaining = f"{value:.0f}%"
+            break
+        if isinstance(value, str) and value.strip():
+            remaining = value.strip()
+            break
+    if remaining is None:
+        fraction = window.get("remaining_fraction")
+        if isinstance(fraction, (int, float)):
+            remaining = f"{fraction * 100:.0f}%"
+    reset = None
+    for key in (
+        "reset_at",
+        "reset_time",
+        "resets_at",
+        "next_reset",
+        "reset_epoch",
+        "reset_timestamp",
+        "window_reset_at",
+    ):
+        if key in window:
+            reset = _format_time_value(window.get(key))
+            if reset:
+                break
+    if reset is None:
+        reset = _format_time_value(window.get("reset"))
+    return remaining, reset
+
+
+def codex_usage_summary(data: dict) -> list[str]:
+    tokens = data.get("tokens", {})
+    if not isinstance(tokens, dict):
+        return []
+    access_token = tokens.get("access_token")
+    account_id = tokens.get("account_id")
+    if not isinstance(access_token, str) or not access_token.strip():
+        return []
+    if not isinstance(account_id, str) or not account_id.strip():
+        return []
+
+    req = urllib.request.Request(
+        "https://chatgpt.com/backend-api/wham/usage",
+        headers={
+            "Authorization": f"Bearer {access_token.strip()}",
+            "Accept": "application/json",
+            "ChatGPT-Account-Id": account_id.strip(),
+            "Origin": "https://chatgpt.com",
+            "Referer": "https://chatgpt.com/",
+            "User-Agent": "Mozilla/5.0",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except Exception:
+        return []
+
+    windows = _extract_usage_windows(payload)
+    if not windows:
+        return []
+
+    labeled = {"5h": None, "weekly": None}
+    for window in windows:
+        kind = _window_kind(window)
+        if kind and labeled.get(kind) is None:
+            labeled[kind] = window
+
+    if labeled["5h"] is None or labeled["weekly"] is None:
+        for window in windows:
+            if window in labeled.values():
+                continue
+            if labeled["5h"] is None:
+                labeled["5h"] = window
+                continue
+            if labeled["weekly"] is None:
+                labeled["weekly"] = window
+                break
+
+    lines = []
+    for label, window in (("5h", labeled["5h"]), ("weekly", labeled["weekly"])):
+        if not isinstance(window, dict):
+            lines.append(f"{label} reset: onbekend")
+            continue
+        remaining, reset = _window_summary(window)
+        parts = []
+        if remaining:
+            parts.append(remaining)
+        if reset:
+            parts.append(f"reset {reset}")
+        lines.append(f"{label} reset: {' / '.join(parts) if parts else 'onbekend'}")
+    return lines
+
+
+def account_filename(email: str) -> str:
+    normalized = email.strip().lower()
+    if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", normalized):
+        die(f"ongeldig e-mailadres voor OpenAI-account: {email}")
+    return normalized + ".json"
+
+
+def openai_accounts() -> list[str]:
+    accounts = []
+    for key, data in vault_load(SWITCH_HOME).items():
+        if not key.startswith("openai-accounts/") or not key.endswith(".json"):
+            continue
+        email = openai_auth_email(data)
+        if email:
+            accounts.append(email)
+    if OPENAI_ACCOUNTS_DIR.exists():
+        for path in OPENAI_ACCOUNTS_DIR.glob("*.json"):
+            data = vault_read_secret_json(path, {}, SWITCH_HOME)
+            email = openai_auth_email(data)
+            if email:
+                accounts.append(email)
+    return sorted(set(accounts))
+
+
+def save_openai_account(expected_email: str | None = None) -> str:
+    auth_path = CODEX_HOME / "auth.json"
+    ensure_home_owner(auth_path)
+    data = read_json(auth_path, {})
+    email = openai_auth_email(data)
+    if not email:
+        die(f"kan geen OpenAI e-mailadres herkennen in {CODEX_HOME / 'auth.json'}")
+    if expected_email and email != expected_email.strip().lower():
+        die(f"huidige login is {email}, niet {expected_email.strip().lower()}")
+    destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
+    vault_write_secret_json(destination, data, SWITCH_HOME)
+    print(f"OpenAI-account opgeslagen: {email}")
+    return email
+
+
+def sync_active_openai_account() -> str | None:
+    auth_path = CODEX_HOME / "auth.json"
+    ensure_home_owner(auth_path)
+    data = read_json(auth_path, {})
+    if not data:
+        return None
+    email = openai_auth_email(data)
+    if not email:
+        die(
+            "actieve OpenAI-login kan niet veilig worden opgeslagen; "
+            "auth.json bevat credentials maar geen herkenbaar e-mailadres"
+        )
+    destination = OPENAI_ACCOUNTS_DIR / account_filename(email)
+    vault_write_secret_json(destination, data, SWITCH_HOME)
+    return email
+
+
+def use_openai_account(email: str) -> None:
+    normalized = email.strip().lower()
+    source = OPENAI_ACCOUNTS_DIR / account_filename(normalized)
+    data = vault_read_secret_json(source, {}, SWITCH_HOME)
+    if not data:
+        die(f"geen opgeslagen OpenAI-account voor {normalized}")
+    sync_active_openai_account()
+    actual_email = openai_auth_email(data)
+    if actual_email != normalized:
+        die(f"accountbestand klopt niet: verwacht {normalized}, gevonden {actual_email or 'onbekend'}")
+    write_secret_json(CODEX_HOME / "auth.json", data)
+    state = read_json(SWITCH_CONFIG, {})
+    state["openai_account"] = normalized
+    write_json(SWITCH_CONFIG, state)
+    print(f"OpenAI-account actief: {normalized}")
+    for line in codex_usage_summary(data):
+        print(line)
+
+
+def list_openai_accounts() -> None:
+    current_data = read_json(CODEX_HOME / "auth.json", {})
+    current = openai_auth_email(current_data)
+    accounts = openai_accounts()
+    if not accounts:
+        print("Geen opgeslagen OpenAI-accounts")
+        return
+    for email in accounts:
+        marker = "*" if email == current else " "
+        print(f"{marker} {email}")
+
+
+def save_openrouter_key(key: str) -> None:
+    normalized = key.strip()
+    if not normalized:
+        die("OpenRouter API-key is leeg")
+    vault_write_secret_json(OPENROUTER_AUTH, {"api_key": normalized}, SWITCH_HOME)
+    print("OpenRouter API-key opgeslagen")
+
+
+def openrouter_key_present() -> bool:
+    return bool(openrouter_credentials().get("api_key"))
+
+
+def openrouter_credentials() -> dict:
+    data = vault_read_secret_json(OPENROUTER_AUTH, {}, SWITCH_HOME)
+    return data if isinstance(data, dict) else {}
+
+
+def migrate_secret_file(path: Path) -> bool:
+    if not path.exists():
+        return False
+    data = read_json(path, {})
+    vault_write_secret_json(path, data, SWITCH_HOME)
+    path.unlink(missing_ok=True)
+    return True
+
+
+def migrate_vault() -> None:
+    migrated = 0
+    for path in [AZURE_AUTH, OPENROUTER_AUTH, OPENCODE_GO_AUTH]:
+        if migrate_secret_file(path):
+            migrated += 1
+    if OPENAI_ACCOUNTS_DIR.exists():
+        for path in OPENAI_ACCOUNTS_DIR.glob("*.json"):
+            if migrate_secret_file(path):
+                migrated += 1
+    print(f"Credential vault: {SWITCH_HOME / 'vault.enc'}")
+    print(f"Gemigreerde legacy secret-bestanden: {migrated}")
+
+
+def vault_status() -> dict[str, object]:
+    return _common_vault_status(SWITCH_HOME)
+
+
+def configure_remote_vault() -> None:
+    if remote_vault_enabled(SWITCH_HOME):
+        die("remote vault is al geconfigureerd")
+    migrate_vault()
+    local_data = vault_load(SWITCH_HOME)
+    endpoint = (
+        input("S3 endpoint [https://fsn1.your-objectstorage.com]: ").strip()
+        or "https://fsn1.your-objectstorage.com"
+    )
+    bucket = input("S3 bucket [wmostert]: ").strip() or "wmostert"
+    access_key = getpass.getpass("S3 Access Key ID: ").strip()
+    secret_key = getpass.getpass("S3 Secret Access Key: ").strip()
+    passphrase = getpass.getpass("Shared vault passphrase: ")
+    confirmation = getpass.getpass("Repeat shared vault passphrase: ")
+    if not access_key or not secret_key or not passphrase:
+        die("S3 credentials en shared vault passphrase zijn verplicht")
+    if passphrase != confirmation:
+        die("Shared vault passphrases komen niet overeen")
+    if len(passphrase) < 16:
+        die("Shared vault passphrase moet minimaal 16 tekens bevatten")
+    store_remote_credentials(access_key, secret_key, passphrase)
+    config = {
+        "enabled": True,
+        "endpoint": endpoint,
+        "bucket": bucket,
+        "object": "codexswitch/vault.enc",
+        "region": "fsn1",
+    }
+    config_path = remote_vault_config_path(SWITCH_HOME)
+    write_remote_vault_config(config, SWITCH_HOME)
+    try:
+        existing = remote_vault_request("GET", home=SWITCH_HOME)
+        if existing is None:
+            vault_save(local_data, SWITCH_HOME)
+        else:
+            remote_data = vault_load(SWITCH_HOME)
+            if local_data and remote_data != local_data:
+                raise RuntimeError(
+                    "remote vault bestaat al en verschilt van de lokale vault; "
+                    "samenvoegen is vereist"
+                )
+        status = vault_status()
+        if not status.get("online"):
+            raise RuntimeError(str(status.get("error") or "remote vault offline"))
+    except Exception as exc:
+        config_path.unlink(missing_ok=True)
+        die(str(exc))
+    remove_local_vault_material(SWITCH_HOME)
+    print("Remote vault ONLINE; lokale credentialcache verwijderd")
+
+
+def save_opencode_go_key(key: str) -> None:
+    normalized = key.strip()
+    if not normalized:
+        die("OpenCode Go API-key is leeg")
+    vault_write_secret_json(OPENCODE_GO_AUTH, {"api_key": normalized}, SWITCH_HOME)
+    print("OpenCode Go API-key opgeslagen")
+
+
+def normalize_azure_endpoint(endpoint: str) -> str:
+    """Return the Azure OpenAI Responses v1 base URL."""
+    parsed = urlsplit(endpoint.strip().rstrip("/"))
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        die("Azure endpoint moet een geldige http(s)-URL zijn")
+    if parsed.query or parsed.fragment:
+        die("Azure endpoint mag geen query of fragment bevatten")
+    path = parsed.path.rstrip("/")
+    if path.endswith("/openai/v1/responses"):
+        path = path[: -len("/responses")]
+    if path.endswith("/openai/v1"):
+        pass
+    elif path.endswith("/openai"):
+        path += "/v1"
+    elif not path:
+        path = "/openai/v1"
+    else:
+        die("Azure endpoint moet eindigen op de resource-host, /openai of /openai/v1")
+    return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
+
+
+def save_azure_credentials(endpoint: str, key: str) -> None:
+    normalized_endpoint = normalize_azure_endpoint(endpoint)
+    normalized_key = key.strip()
+    if not normalized_key:
+        die("Azure API-key is leeg")
+    vault_write_secret_json(
+        AZURE_AUTH,
+        {
+            "endpoint": normalized_endpoint,
+            "api_key": normalized_key,
+        },
+        SWITCH_HOME,
+    )
+    print("Azure OpenAI credentials opgeslagen")
+
+
+def azure_credentials() -> dict:
+    data = vault_read_secret_json(AZURE_AUTH, {}, SWITCH_HOME)
+    return data if isinstance(data, dict) else {}
+
+
+def azure_credentials_present() -> bool:
+    data = azure_credentials()
+    return bool(data.get("endpoint") and data.get("api_key"))
+
+
+def opencode_go_key_present() -> bool:
+    data = vault_read_secret_json(OPENCODE_GO_AUTH, {}, SWITCH_HOME)
+    if isinstance(data, dict) and data.get("api_key"):
+        return True
+    if remote_vault_enabled(SWITCH_HOME):
+        return False
+    legacy = read_json(OPENCODE_AUTH, {})
+    credential = legacy.get("opencode-go", {}) if isinstance(legacy, dict) else {}
+    return bool(isinstance(credential, dict) and credential.get("key"))
+
+
+def codex_bin() -> str:
+    found = shutil.which("codex")
+    if not found:
+        die("codex niet gevonden in PATH")
+    return found
+
+
+def codex_launch_bin() -> str:
+    """Resolve the native Codex executable behind an npm Windows shim."""
+    binary = codex_bin()
+    if os.name != "nt":
+        return binary
+    shim = Path(binary)
+    if shim.suffix.lower() not in {".cmd", ".bat"}:
+        return binary
+    package_root = shim.parent / "node_modules" / "@openai" / "codex"
+    candidates = sorted(
+        package_root.glob("node_modules/@openai/codex-win32-*/vendor/*/bin/codex.exe")
+    )
+    return str(candidates[0]) if candidates else binary
+
+
+def codex_launch_environment() -> dict[str, str]:
+    """Build a Codex environment without persisting provider secrets in TOML."""
+    env = dict(os.environ)
+    if codex_config_state().get("model_provider") == "azure":
+        key = azure_credentials().get("api_key")
+        if key:
+            env[AZURE_API_KEY_ENV] = str(key)
+    if codex_config_state().get("model_provider") == "openrouter":
+        key = openrouter_credentials().get("api_key")
+        if key:
+            env[OPENROUTER_API_KEY_ENV] = str(key)
+    return env
+
+
+def opencode_bin() -> str:
+    found = _common_opencode_bin()
+    if found:
+        return found
+    die("opencode niet gevonden in PATH of ~/.local/share/npm-global/bin/opencode")
+
+
+def proxy_healthy() -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{PROVIDER_PROXY_URL}/health", timeout=1) as res:
+            return res.status == 200
+    except Exception:
+        return False
+
+
+def proxy_statuses() -> dict[str, bool]:
+    """Return health for the single unified provider proxy."""
+    return {"unified": proxy_healthy()}
+
+
+def migrate_provider_proxy_url(provider: str) -> None:
+    """Rewrite a legacy per-provider loopback URL on first post-upgrade start."""
+    expected_urls = {
+        "opencode-go": OPENCODE_PROXY_URL,
+        "openrouter": OPENROUTER_PROXY_URL,
+        "azure": AZURE_PROXY_URL,
+    }
+    expected = expected_urls.get(provider)
+    if expected is None or not CODEX_CONFIG.exists():
+        return
+    try:
+        data = tomllib.loads(CODEX_CONFIG.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return
+    configured = (
+        data.get("model_providers", {}).get(provider, {}).get("base_url")
+    )
+    if configured == expected:
+        return
+    state = codex_config_state()
+    model = state.get("model")
+    if state.get("model_provider") != provider or not isinstance(model, str):
+        return
+    update_codex_config(
+        provider,
+        model,
+        state.get("model_reasoning_effort"),
+    )
+
+
+def ensure_provider_proxy(provider: str) -> None:
+    """Start the unified proxy when the selected provider requires it."""
+    if provider not in {"opencode-go", "openrouter", "azure"}:
+        return
+    migrate_provider_proxy_url(provider)
+    if proxy_healthy():
+        return
+    if shutil.which("systemctl"):
+        subprocess.run(["sudo", "systemctl", "start", PROXY_SERVICE], check=False)
+        time.sleep(0.5)
+        if proxy_healthy():
+            return
+    if not Path(PROXY_BIN).exists():
+        die(f"provider proxy ontbreekt: {PROXY_BIN}")
+    log = SWITCH_HOME / "provider-proxy.log"
+    SWITCH_HOME.mkdir(parents=True, exist_ok=True)
+    proxy_argv = [sys.executable, PROXY_BIN] if os.name == "nt" else [PROXY_BIN]
+    subprocess.Popen(
+        proxy_argv,
+        stdout=log.open("ab"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    time.sleep(0.5)
+    if not proxy_healthy():
+        die(f"Provider proxy startte niet; zie {log}")
+
+
+def require_proxy_service_support() -> None:
+    if os.name == "nt" or not shutil.which("systemctl"):
+        die("proxy service beheer vereist Linux met systemd")
+    if not shutil.which("sudo") and os.geteuid() != 0:
+        die("sudo is nodig voor proxy service beheer")
+
+
+def privileged_cmd(cmd: list[str]) -> list[str]:
+    if os.geteuid() == 0:
+        return cmd
+    return ["sudo", *cmd]
+
+
+def proxy_service_unit() -> str:
+    proxy_bin = Path(PROXY_BIN)
+    if not proxy_bin.exists():
+        die(f"proxy ontbreekt: {PROXY_BIN}")
+    user = os.environ.get("SUDO_USER") if os.geteuid() == 0 else None
+    user = user or command_output(["id", "-un"])
+    group = command_output(["id", "-gn", user])
+    home = command_output(["getent", "passwd", user]).split(":")[5]
+    return f"""[Unit]
+Description=CodexSwitch unified provider proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User={user}
+Group={group}
+Environment=HOME={home}
+ExecStart={proxy_bin.resolve()}
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+"""
+
+
+def install_proxy_service() -> None:
+    require_proxy_service_support()
+    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
+        handle.write(proxy_service_unit())
+        service_file = handle.name
+    try:
+        run(privileged_cmd(["install", "-m", "644", service_file, f"/etc/systemd/system/{PROXY_SERVICE}"]))
+    finally:
+        try:
+            os.unlink(service_file)
+        except OSError:
+            pass
+    run(privileged_cmd(["systemctl", "daemon-reload"]))
+    run(privileged_cmd(["systemctl", "enable", "--now", PROXY_SERVICE]))
+    run(privileged_cmd(["systemctl", "restart", PROXY_SERVICE]))
+    print(f"proxy service geinstalleerd: {PROXY_SERVICE}")
+
+
+def uninstall_proxy_service() -> None:
+    require_proxy_service_support()
+    subprocess.run(privileged_cmd(["systemctl", "disable", "--now", PROXY_SERVICE]), check=False)
+    try:
+        Path(f"/etc/systemd/system/{PROXY_SERVICE}").unlink()
+    except PermissionError:
+        run(privileged_cmd(["rm", "-f", f"/etc/systemd/system/{PROXY_SERVICE}"]))
+    except FileNotFoundError:
+        pass
+    run(privileged_cmd(["systemctl", "daemon-reload"]))
+    print(f"proxy service verwijderd: {PROXY_SERVICE}")
+
+
+def restart_proxy_service() -> None:
+    require_proxy_service_support()
+    run(privileged_cmd(["systemctl", "restart", PROXY_SERVICE]))
+    print(f"proxy service herstart: {PROXY_SERVICE}")
+
+
+def proxy_service_status() -> None:
+    healthy = "ok" if proxy_healthy() else "niet bereikbaar"
+    print(f"proxy health: {healthy}")
+    if shutil.which("systemctl"):
+        subprocess.run(["systemctl", "status", PROXY_SERVICE, "--no-pager", "-n", "20"], check=False)
+
+
+def openai_models() -> list[str]:
+    catalog = openai_model_catalog()
+    return list(catalog) or OPENAI_FALLBACK_MODELS
+
+
+def azure_models() -> list[str]:
+    return list(AZURE_MODELS)
+
+
+def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
+    global _OPENAI_CATALOG_CACHE
+    if _OPENAI_CATALOG_CACHE is not None and not refresh:
+        return _OPENAI_CATALOG_CACHE
+    try:
+        binary = shutil.which("codex")
+        if not binary:
+            _OPENAI_CATALOG_CACHE = {}
+            return {}
+        with tempfile.TemporaryDirectory(prefix="codexswitch-models-") as temporary_home:
+            env = os.environ.copy()
+            env["CODEX_HOME"] = temporary_home
+            proc = subprocess.run(
+                [binary, "debug", "models"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=12,
+                check=False,
+                env=env,
+            )
+        data = json.loads(proc.stdout)
+        _OPENAI_CATALOG_CACHE = {
+            model["slug"]: model
+            for model in data.get("models", [])
+            if model.get("slug")
+        }
+        return _OPENAI_CATALOG_CACHE
+    except Exception:
+        return {}
+
+
+def refresh_openai_models(strict: bool = True) -> bool:
+    print("OpenAI Codex-modelcatalogus verversen...")
+    catalog = openai_model_catalog(refresh=True)
+    if not catalog:
+        if strict:
+            die("OpenAI Codex model-refresh mislukt; geen modellen ontvangen")
+        print(
+            "warning: OpenAI Codex model-refresh mislukt; bestaande fallback blijft actief",
+            file=sys.stderr,
+        )
+        return False
+    print(f"OpenAI Codex-modellen bijgewerkt: {len(catalog)} actief")
+    return True
+
+
+def openai_reasoning_choices(model: str) -> list[tuple[str, str]]:
+    metadata = openai_model_catalog().get(model, {})
+    return [
+        (item["effort"], item["effort"])
+        for item in metadata.get("supported_reasoning_levels", [])
+        if item.get("effort")
+    ]
+
+
+def azure_reasoning_choices(model: str) -> list[tuple[str, str]]:
+    if model not in AZURE_MODELS:
+        return []
+    return list(AZURE_REASONING_CHOICES)
+
+
+def openrouter_model_catalog(refresh: bool = False) -> dict[str, dict]:
+    global _OPENROUTER_CATALOG_CACHE
+    if _OPENROUTER_CATALOG_CACHE is not None and not refresh:
+        return _OPENROUTER_CATALOG_CACHE
+    if not refresh:
+        cached = read_json(OPENROUTER_MODELS_CACHE, {})
+        if isinstance(cached, dict) and isinstance(cached.get("models"), dict):
+            _OPENROUTER_CATALOG_CACHE = cached["models"]
+            return _OPENROUTER_CATALOG_CACHE
+    try:
+        req = urllib.request.Request(
+            f"{OPENROUTER_BASE_URL}/models",
+            headers={
+                "accept": "application/json",
+                "user-agent": "codexswitch/1.1",
+            },
+        )
+        with urllib.request.urlopen(req, timeout=15) as res:
+            payload = json.loads(res.read().decode("utf-8"))
+    except (OSError, urllib.error.URLError, json.JSONDecodeError):
+        _OPENROUTER_CATALOG_CACHE = {}
+        return {}
+    catalog = {}
+    for item in payload.get("data", []):
+        if not isinstance(item, dict) or not item.get("id"):
+            continue
+        catalog[item["id"]] = item
+    _OPENROUTER_CATALOG_CACHE = catalog
+    write_json(OPENROUTER_MODELS_CACHE, {"models": catalog, "updated_at": int(time.time())})
+    return _OPENROUTER_CATALOG_CACHE
+
+
+def openrouter_models() -> list[str]:
+    catalog = openrouter_model_catalog()
+    if not catalog:
+        return OPENROUTER_FALLBACK_MODELS
+    return sorted(catalog)
+
+
+def resolve_openrouter_model(model: str) -> str:
+    """Resolve short OpenRouter aliases like ``glm-5.2`` to vendor/model IDs."""
+    models = openrouter_models()
+    if model in models:
+        return model
+    if "/" in model:
+        return model
+    matches = [candidate for candidate in models if candidate.rsplit("/", 1)[-1] == model]
+    if len(matches) == 1:
+        return matches[0]
+    if len(matches) > 1:
+        die(
+            f"OpenRouter model '{model}' is ambigu; gebruik volledige id: "
+            f"{', '.join(matches)}"
+        )
+    return model
+
+
+def refresh_openrouter_models(strict: bool = True) -> bool:
+    print("OpenRouter-modelcatalogus verversen...")
+    catalog = openrouter_model_catalog(refresh=True)
+    if not catalog:
+        if strict:
+            die("OpenRouter model-refresh mislukt; geen modellen ontvangen")
+        print("warning: OpenRouter model-refresh mislukt; bestaande fallback blijft actief", file=sys.stderr)
+        return False
+    print(f"OpenRouter-modellen bijgewerkt: {len(catalog)} actief")
+    return True
+
+
+def openrouter_reasoning_choices(model: str) -> list[tuple[str, str]]:
+    meta = openrouter_model_catalog().get(model, {})
+    if not isinstance(meta, dict):
+        return []
+    reasoning = meta.get("reasoning", {})
+    if not isinstance(reasoning, dict):
+        return []
+    efforts = reasoning.get("supported_efforts", [])
+    if not isinstance(efforts, list) or not efforts:
+        return []
+    # OpenRouter uses "max" as a synonym for "xhigh"; prefer the canonical name
+    choices = []
+    seen = set()
+    for effort in efforts:
+        if not isinstance(effort, str):
+            continue
+        if effort == "max" and "xhigh" in efforts:
+            continue  # skip "max" when "xhigh" is also present
+        normalized = "xhigh" if effort == "max" else effort
+        if normalized not in seen:
+            seen.add(normalized)
+            choices.append((effort, normalized))
+    return choices
+
+
+def openrouter_codex_model_entry(model: str, meta: dict) -> dict:
+    entry = {
+        "slug": model,
+        "display_name": meta.get("name") if isinstance(meta.get("name"), str) else model,
+        "description": (
+            meta.get("description") if isinstance(meta.get("description"), str) else ""
+        ),
+        "default_reasoning_level": None,
+        "supported_reasoning_levels": [],
+        "shell_type": "shell_command",
+        "visibility": "list",
+        "supports_reasoning_summaries": False,
+        "support_verbosity": False,
+        "default_verbosity": None,
+        "supports_image_detail_original": False,
+        "supports_parallel_tool_calls": True,
+        "supported_in_api": True,
+        "priority": 0,
+        "additional_speed_tiers": [],
+        "service_tiers": [],
+        "default_service_tier": None,
+        "availability_nux": None,
+        "upgrade": None,
+        "base_instructions": "",
+        "model_messages": None,
+        "default_reasoning_summary": "auto",
+        "apply_patch_tool_type": None,
+        "web_search_tool_type": "text",
+        "truncation_policy": {"mode": "bytes", "limit": 10000},
+        "comp_hash": None,
+        "effective_context_window_percent": 95,
+        "experimental_supported_tools": [],
+        "supports_search_tool": False,
+        "use_responses_lite": False,
+        "auto_review_model_override": None,
+        "input_modalities": ["text"],
+        "max_context_window": 128000,
+        "context_window": 128000,
+        "auto_compact_token_limit": 102400,
+    }
+    architecture = meta.get("architecture", {})
+    if isinstance(architecture, dict):
+        input_modalities = architecture.get("input_modalities")
+        if isinstance(input_modalities, list):
+            entry["input_modalities"] = [
+                item for item in input_modalities if item in {"text", "image"}
+            ]
+            if not entry["input_modalities"]:
+                entry["input_modalities"] = ["text"]
+    context_length = meta.get("context_length")
+    if isinstance(context_length, int) and context_length > 0:
+        entry["max_context_window"] = context_length
+        entry["context_window"] = context_length
+        entry["auto_compact_token_limit"] = max(1, int(context_length * 0.8))
+    choices = openrouter_reasoning_choices(model)
+    if choices:
+        entry["supported_reasoning_levels"] = [
+            {"effort": effort, "description": f"{effort} reasoning"}
+            for _, effort in choices
+        ]
+        entry["default_reasoning_level"] = default_reasoning_effort(model)
+    return entry
+
+
+def write_openrouter_codex_model_catalog(selected_model: str) -> Path:
+    catalog = openrouter_model_catalog()
+    if selected_model not in catalog:
+        return OPENROUTER_CODEX_MODELS
+    models = [
+        openrouter_codex_model_entry(model, meta)
+        for model, meta in sorted(catalog.items())
+        if isinstance(meta, dict)
+    ]
+    write_json(OPENROUTER_CODEX_MODELS, {"models": models})
+    return OPENROUTER_CODEX_MODELS
+
+
+def opencode_models() -> list[str]:
+    catalog = opencode_model_catalog()
+    return sorted(catalog) if catalog else sorted(OPENCODE_GO_FALLBACK_CATALOG)
+
+
+def parse_opencode_catalog(output: str) -> dict[str, dict]:
+    catalog = {}
+    decoder = json.JSONDecoder()
+    pattern = re.compile(r"^opencode-go/([^\n]+)\n", re.MULTILINE)
+    for match in pattern.finditer(output):
+        try:
+            metadata, _ = decoder.raw_decode(output, match.end())
+        except json.JSONDecodeError:
+            continue
+        if isinstance(metadata, dict) and metadata.get("status", "active") != "deprecated":
+            catalog[match.group(1)] = metadata
+    return catalog
+
+
+def refresh_opencode_models(strict: bool = True) -> bool:
+    global _OPENCODE_CATALOG_CACHE
+    print("OpenCode Go-modelcatalogus verversen...")
+    # 1) Prefer the opencode binary --verbose output: it provides the richest
+    #    metadata (reasoning variants, context limits, capabilities).
+    binary = _common_opencode_bin()
+    catalog: dict[str, dict] = {}
+    if binary:
+        try:
+            proc = subprocess.run(
+                [binary, "models", "opencode-go", "--refresh", "--verbose"],
+                text=True,
+                encoding="utf-8",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=60,
+                check=False,
+            )
+        except Exception as exc:
+            if strict:
+                die(f"model-refresh mislukt: {exc}")
+            print(f"warning: model-refresh mislukt; bestaande cache blijft actief: {exc}", file=sys.stderr)
+            return False
+        if proc.returncode == 0:
+            catalog = parse_opencode_catalog(proc.stdout)
+    # 2) Fall back to the upstream /models endpoint merged with the built-in
+    #    fallback catalog.  This works on a fresh host without the opencode
+    #    binary and still returns real context limits and reasoning variants
+    #    for known models.
+    if not catalog:
+        catalog = _common_catalog_from_upstream(OPENCODE_BASE_URL)
+    if not catalog:
+        _OPENCODE_CATALOG_CACHE = dict(OPENCODE_GO_FALLBACK_CATALOG)
+        if strict:
+            die("OpenCode Go model-refresh mislukt; upstream en OpenCode CLI niet beschikbaar")
+        print(
+            "warning: OpenCode Go model-refresh mislukt; ingebouwde fallback blijft actief",
+            file=sys.stderr,
+        )
+        return False
+
+    _OPENCODE_CATALOG_CACHE = catalog
+    write_json(
+        OPENCODE_GO_MODELS_CACHE,
+        {"models": catalog, "updated_at": int(time.time())},
+    )
+    print(f"OpenCode Go-modellen bijgewerkt: {len(catalog)} actief")
+    return True
+
+
+def opencode_model_catalog() -> dict[str, dict]:
+    global _OPENCODE_CATALOG_CACHE
+    if _OPENCODE_CATALOG_CACHE is not None:
+        return _OPENCODE_CATALOG_CACHE
+    cached = read_json(OPENCODE_GO_MODELS_CACHE, {})
+    if isinstance(cached, dict) and isinstance(cached.get("models"), dict):
+        _OPENCODE_CATALOG_CACHE = cached["models"]
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = _common_catalog_from_upstream(OPENCODE_BASE_URL)
+    if _OPENCODE_CATALOG_CACHE:
+        write_json(
+            OPENCODE_GO_MODELS_CACHE,
+            {"models": _OPENCODE_CATALOG_CACHE, "updated_at": int(time.time())},
+        )
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = _common_catalog_from_binary()
+    if _OPENCODE_CATALOG_CACHE:
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = _common_catalog_from_cache(OPENCODE_MODELS_CACHE)
+    if _OPENCODE_CATALOG_CACHE:
+        return _OPENCODE_CATALOG_CACHE
+    _OPENCODE_CATALOG_CACHE = dict(OPENCODE_GO_FALLBACK_CATALOG)
+    return _OPENCODE_CATALOG_CACHE
+
+
+def reasoning_choices(model: str) -> list[tuple[str, str]]:
+    variants = opencode_model_catalog().get(model, {}).get("variants", {})
+    if not isinstance(variants, dict):
+        return []
+    if set(variants) == {"none", "thinking"}:
+        return [("thinking", "high"), ("none", "none")]
+
+    choices = []
+    for variant in variants:
+        effort = "xhigh" if variant == "max" else variant
+        if effort in {"none", "minimal", "low", "medium", "high", "xhigh"}:
+            choices.append((variant, effort))
+    return choices
+
+
+def default_reasoning_effort(model: str) -> str:
+    # Try OpenCode Go variants first
+    choices = reasoning_choices(model)
+    efforts = [effort for _, effort in choices]
+    if efforts:
+        for preferred in ("medium", "high", "xhigh", "low", "none"):
+            if preferred in efforts:
+                return preferred
+    # Try OpenRouter reasoning.default_effort
+    meta = openrouter_model_catalog().get(model, {})
+    if isinstance(meta, dict):
+        reasoning = meta.get("reasoning", {})
+        if isinstance(reasoning, dict):
+            default = reasoning.get("default_effort")
+            if isinstance(default, str):
+                # Normalize "max" to "xhigh"
+                return "xhigh" if default == "max" else default
+    return "medium"
+
+
+def validate_provider_model(provider: str, model: str) -> None:
+    if provider == "azure":
+        if model not in AZURE_MODELS:
+            die(f"Azure model '{model}' is niet beschikbaar; kies {AZURE_MODEL}")
+        return
+    if provider == "openai":
+        if model not in openai_models():
+            print(f"warning: OpenAI model '{model}' staat niet in de huidige Codex catalogus", file=sys.stderr)
+        return
+    if provider == "opencode-go":
+        models = opencode_models()
+        if not models:
+            die("geen OpenCode Go modellen gevonden")
+        if model not in models:
+            die(f"OpenCode Go model '{model}' staat niet in de huidige catalogus")
+        return
+    if provider == "openrouter":
+        model = resolve_openrouter_model(model)
+        if model not in openrouter_models():
+            print(f"warning: OpenRouter model '{model}' staat niet in de huidige catalogus", file=sys.stderr)
+        return
+    die(f"onbekende provider: {provider}")
+
+
+def remove_block(lines: list[str], section: str) -> list[str]:
+    start_re = re.compile(rf"^\s*\[{re.escape(section)}\]\s*$")
+    any_section_re = re.compile(r"^\s*\[.+\]\s*$")
+    output: list[str] = []
+    i = 0
+    while i < len(lines):
+        if start_re.match(lines[i]):
+            i += 1
+            while i < len(lines) and not any_section_re.match(lines[i]):
+                i += 1
+            continue
+        output.append(lines[i])
+        i += 1
+    return output
+
+
+def set_top_level(lines: list[str], key: str, value: str) -> list[str]:
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    any_section_re = re.compile(r"^\s*\[.+\]\s*$")
+    output: list[str] = []
+    inserted = False
+    in_top = True
+    for line in lines:
+        if any_section_re.match(line):
+            if in_top and not inserted:
+                output.append(f"{key} = {toml_string(value)}\n")
+                inserted = True
+            in_top = False
+        if in_top and key_re.match(line):
+            if not inserted:
+                output.append(f"{key} = {toml_string(value)}\n")
+                inserted = True
+            continue
+        output.append(line)
+    if not inserted:
+        output.insert(0, f"{key} = {toml_string(value)}\n")
+    return output
+
+
+def remove_top_level(lines: list[str], key: str) -> list[str]:
+    """Remove a top-level key=value line from a TOML file."""
+    key_re = re.compile(rf"^\s*{re.escape(key)}\s*=")
+    any_section_re = re.compile(r"^\s*\[.+\]\s*$")
+    output: list[str] = []
+    in_top = True
+    for line in lines:
+        if any_section_re.match(line):
+            in_top = False
+        if in_top and key_re.match(line):
+            continue
+        output.append(line)
+    return output
+
+
+def toml_string(value: str) -> str:
+    return json.dumps(value)
+
+
+def cleanup_config_backups() -> None:
+    """Keep only the most recent MAX_CONFIG_BACKUPS backup files."""
+    pattern = "config.toml.bak-*"
+    backups = sorted(CODEX_HOME.glob(pattern), key=lambda p: p.name, reverse=True)
+    for old in backups[MAX_CONFIG_BACKUPS:]:
+        old.unlink(missing_ok=True)
+
+
+def warm_codex_model_catalog() -> bool:
+    try:
+        binary = shutil.which("codex")
+        if not binary:
+            return False
+        proc = subprocess.run(
+            [binary, "debug", "models"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+            check=False,
+        )
+    except Exception:
+        return False
+    return proc.returncode == 0
+
+
+def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
+    if provider == "azure" and not azure_credentials_present():
+        die("Azure credentials ontbreken; gebruik: codexswitch auth azure")
+    if provider == "opencode-go":
+        if not opencode_go_key_present():
+            die("OpenCode Go API-key ontbreekt; gebruik: codexswitch auth opencode-go")
+    if provider == "openrouter" and not openrouter_key_present():
+        die("OpenRouter API-key ontbreekt; gebruik: codexswitch auth openrouter")
+    if provider == "openrouter":
+        model = resolve_openrouter_model(model)
+    CODEX_HOME.mkdir(parents=True, exist_ok=True)
+    ensure_home_owner(CODEX_CONFIG)
+    lines = CODEX_CONFIG.read_text().splitlines(True) if CODEX_CONFIG.exists() else []
+    backup = CODEX_CONFIG.with_suffix(f".toml.bak-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}")
+    if CODEX_CONFIG.exists():
+        shutil.copy2(CODEX_CONFIG, backup)
+    cleanup_config_backups()
+
+    lines = remove_block(lines, "model_providers.opencode-go.auth")
+    lines = remove_block(lines, "model_providers.opencode-go")
+    lines = remove_block(lines, "model_providers.azure.auth")
+    lines = remove_block(lines, "model_providers.azure")
+    lines = remove_block(lines, "model_providers.openrouter.auth")
+    lines = remove_block(lines, "model_providers.openrouter")
+    lines = set_top_level(lines, "model", model)
+    lines = set_top_level(lines, "model_provider", provider)
+    if provider == "opencode-go":
+        choices = reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        reasoning_effort = reasoning_effort or default_reasoning_effort(model)
+        if allowed and reasoning_effort not in allowed:
+            die(
+                f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                f"kies uit {', '.join(label for label, _ in choices)}"
+            )
+        lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+    elif provider == "azure":
+        choices = azure_reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        reasoning_effort = reasoning_effort or AZURE_DEFAULT_REASONING_EFFORT
+        if reasoning_effort not in allowed:
+            die(
+                f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                f"kies uit {', '.join(label for label, _ in choices)}"
+            )
+        lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+    elif provider == "openai" and reasoning_effort:
+        choices = openai_reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        if allowed and reasoning_effort not in allowed:
+            die(
+                f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                f"kies uit {', '.join(label for label, _ in choices)}"
+            )
+        lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+    elif provider == "openrouter":
+        choices = openrouter_reasoning_choices(model)
+        allowed = {effort for _, effort in choices}
+        if reasoning_effort and allowed:
+            if reasoning_effort not in allowed:
+                die(
+                    f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
+                    f"kies uit {', '.join(label for label, _ in choices)}"
+                )
+            lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
+        else:
+            lines = remove_top_level(lines, "model_reasoning_effort")
+            if not allowed:
+                reasoning_effort = None
+    elif provider == "openai":
+        lines = remove_top_level(lines, "model_reasoning_effort")
+
+    if provider == "openrouter":
+        catalog_path = write_openrouter_codex_model_catalog(model)
+        if catalog_path.exists():
+            lines = set_top_level(lines, "model_catalog_json", str(catalog_path))
+    else:
+        lines = remove_top_level(lines, "model_catalog_json")
+
+    if provider == "opencode-go":
+        if not Path(TOKEN_HELPER).exists():
+            die(f"token helper ontbreekt: {TOKEN_HELPER}")
+        provider_block = f'''
+
+[model_providers.opencode-go]
+name = "OpenCode Go"
+base_url = "{OPENCODE_PROXY_URL}"
+wire_api = "responses"
+
+[model_providers.opencode-go.auth]
+command = {toml_string(sys.executable)}
+args = [{toml_string(TOKEN_HELPER)}]
+timeout_ms = 5000
+refresh_interval_ms = 0
+'''
+        lines.append(provider_block)
+
+    if provider == "azure":
+        provider_block = f'''
+
+[model_providers.azure]
+name = "Azure"
+base_url = "{AZURE_PROXY_URL}"
+wire_api = "responses"
+'''
+        lines.append(provider_block)
+
+    if provider == "openrouter":
+        provider_block = f'''
+
+[model_providers.openrouter]
+name = "OpenRouter"
+base_url = "{OPENROUTER_PROXY_URL}"
+wire_api = "responses"
+'''
+        lines.append(provider_block)
+
+    CODEX_CONFIG.write_text("".join(lines))
+    state = read_json(SWITCH_CONFIG, {})
+    state.update({"provider": provider, "model": model})
+    if reasoning_effort:
+        state["reasoning_effort"] = reasoning_effort
+    else:
+        state.pop("reasoning_effort", None)
+    if provider == "openai":
+        current_auth = read_json(CODEX_HOME / "auth.json", {})
+        current_account = openai_auth_email(current_auth)
+        if current_account:
+            state["openai_account"] = current_account
+    elif provider in {"azure", "opencode-go", "openrouter"}:
+        state.pop("openai_account", None)
+    write_json(SWITCH_CONFIG, state)
+    if provider in {"opencode-go", "openrouter"} and not warm_codex_model_catalog():
+        print(
+            "warning: Codex modelcatalogus kon niet vooraf worden geladen",
+            file=sys.stderr,
+        )
+    if backup.exists():
+        print(f"backup: {backup}")
+    suffix = f" / denken={reasoning_effort}" if reasoning_effort else ""
+    print(f"actief: {provider} / {model}{suffix}")
+
+
+def status() -> None:
+    # A status report reads several credentials from the same vault. Remote
+    # vaults must be fetched once per command, not once per provider.
+    enable_vault_session_cache(SWITCH_HOME)
+    state = read_json(SWITCH_CONFIG, {})
+    current_data = read_json(CODEX_HOME / "auth.json", {})
+    current_openai_account = openai_auth_email(current_data)
+    print(f"codex:        {codex_bin()}")
+    print(f"codex config: {CODEX_CONFIG}")
+    opencode_binary = _common_opencode_bin() or "niet nodig/niet gevonden"
+    print(f"opencode:     {opencode_binary}")
+    print(f"opencode-go auth: {'ok' if opencode_go_key_present() else 'ontbreekt'}")
+    print(f"azure auth:      {'ok' if azure_credentials_present() else 'ontbreekt'}")
+    print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
+    print(f"switch state: {SWITCH_CONFIG}")
+    suffix = f" / denken={state['reasoning_effort']}" if state.get("reasoning_effort") else ""
+    print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}{suffix}")
+    print(f"openai acct:  {current_openai_account or 'onbekend'}")
+    for line in codex_usage_summary(current_data):
+        print(line)
+    print(f"accounts:     {len(openai_accounts())} opgeslagen")
+
+
+def list_models() -> None:
+    print("OpenAI:")
+    for model in openai_models():
+        print(f"  {model}")
+    print("\nAzure:")
+    for model in azure_models():
+        print(f"  {model}")
+    print("\nOpenCode Go:")
+    for model in opencode_models():
+        print(f"  {model}")
+    print("\nOpenRouter:")
+    for model in openrouter_models():
+        print(f"  {model}")
+
+
+def terminal_width(default: int = 88) -> int:
+    try:
+        return shutil.get_terminal_size((default, 24)).columns
+    except OSError:
+        return default
+
+
+def line(char: str = "─") -> str:
+    return char * min(max(terminal_width(), 60), 100)
+
+
+def option_matches(option: str, query: str) -> bool:
+    haystack = option.lower()
+    needles = [part for part in query.lower().split() if part]
+    return all(part in haystack for part in needles)
+
+
+def choose(title: str, options: list[str], descriptions: dict[str, str] | None = None) -> str:
+    if not options:
+        die(f"geen opties voor {title}")
+    descriptions = descriptions or {}
+    query = ""
+    page_size = max(8, min(20, terminal_width() - 52))
+    while True:
+        filtered = [option for option in options if option_matches(option, query)]
+        visible = filtered[:page_size]
+        print()
+        print(f"┌─ {title}")
+        if query:
+            print(f"│  filter: {query}  ({len(filtered)}/{len(options)})")
+        elif len(options) > page_size:
+            print(f"│  typ tekst om te filteren, nummer om te kiezen ({len(options)} opties)")
+        else:
+            print("│  typ nummer om te kiezen, of tekst om te filteren")
+        for idx, option in enumerate(visible, 1):
+            description = descriptions.get(option)
+            suffix = f" — {description}" if description else ""
+            print(f"│  {idx:>2}. {option}{suffix}")
+        if len(filtered) > page_size:
+            print(f"│      … {len(filtered) - page_size} meer; verfijn je zoektekst")
+        if not filtered:
+            print("│      geen matches; druk Enter om filter te wissen")
+        print("└─")
+        raw = input("Keuze/zoek: ").strip()
+        if raw == "" and query:
+            query = ""
+            continue
+        if raw.isdigit() and visible:
+            index = int(raw)
+            if 1 <= index <= len(visible):
+                return visible[index - 1]
+        if raw:
+            query = raw
+            continue
+        print("Ongeldige keuze")
+
+
+def auth(provider: str | None = None) -> None:
+    provider = provider or choose("Auth provider", ["openai", "azure", "opencode-go", "openrouter"])
+    if provider == "openai":
+        ensure_home_owner(CODEX_HOME / "auth.json")
+        current_auth = read_json(CODEX_HOME / "auth.json", {})
+        if current_auth:
+            sync_active_openai_account()
+        run([codex_bin(), "login", "--device-auth"], check=True)
+        ensure_home_owner(CODEX_HOME / "auth.json")
+        save_openai_account()
+        return
+    if provider == "opencode-go":
+        key = getpass.getpass("OpenCode Go API-key: ")
+        save_opencode_go_key(key)
+        refresh_opencode_models(strict=False)
+        return
+    if provider == "azure":
+        endpoint = input("Azure resource endpoint: ").strip()
+        key = getpass.getpass("Azure API-key: ")
+        save_azure_credentials(endpoint, key)
+        return
+    if provider == "openrouter":
+        key = getpass.getpass("OpenRouter API-key: ")
+        save_openrouter_key(key)
+        refresh_openrouter_models(strict=False)
+        return
+    die(f"onbekende auth provider: {provider}")
+
+
+
+
+def usage() -> None:
+    print(f"""{BRAND_BANNER}
+
+{APP_TITLE} {VERSION}
+{CREDITS_OWNER}
+{CREDITS_AI}
+
+Usage:
+  codexswitch tui                    start Commander TUI
+  codexswitch use PROVIDER MODEL [REASONING]
+  codexswitch auth [openai|azure|opencode-go|openrouter]
+  codexswitch proxy install          install unified provider proxy systemd service
+  codexswitch proxy uninstall        remove unified provider proxy systemd service
+  codexswitch proxy status           show unified provider proxy service status
+  codexswitch proxy restart          restart unified provider proxy service
+  codexswitch account add            add OpenAI account with device sign-in
+  codexswitch account save [EMAIL]   save current OpenAI login
+  codexswitch account use EMAIL      activate saved OpenAI account
+  codexswitch refresh                refresh OpenCode Go and OpenRouter models
+  codexswitch vault migrate          encrypt legacy CodexSwitch secret files
+  codexswitch vault status           show local/remote vault availability
+  codexswitch vault remote configure configure encrypted Hetzner S3 vault
+  codexswitch update [--check]       update from latest GitHub release
+  codexswitch list                   list known models
+  codexswitch status                 show active config and auth status
+  codexswitch run [PROMPT...]        run codex with active config
+  codexswitch version                print version
+
+Providers:
+  openai                             native Codex/OpenAI account flow
+  azure                              Azure OpenAI endpoint/API-key with gpt-5.6-sol
+  opencode-go                        OpenCode Go key through CodexSwitch store and local Responses proxy
+  openrouter                         OpenRouter API key from the encrypted vault
+
+Examples:
+  codexswitch tui
+  codexswitch proxy install
+  codexswitch proxy status
+  codexswitch account add
+  codexswitch auth openrouter
+  codexswitch update --check
+  codexswitch use azure gpt-5.6-sol low
+  codexswitch use openai gpt-5.5
+  codexswitch use opencode-go glm-5.2 high
+  codexswitch use openrouter anthropic/claude-sonnet-4.5
+""")
+
+
+def main(argv: list[str]) -> int:
+    if not argv:
+        auto_update_from_github()
+        usage()
+        return 0
+    cmd = argv[0]
+    if cmd in {"-h", "--help", "help"}:
+        usage()
+        return 0
+    if cmd in {"version", "-v", "--version"}:
+        print(f"{Path(sys.argv[0]).name} {VERSION}")
+        return 0
+    if cmd == "proxy":
+        if len(argv) != 2:
+            die("gebruik: codexswitch proxy install | uninstall | status | restart")
+        action = argv[1]
+        if action == "install":
+            install_proxy_service()
+            return 0
+        if action == "uninstall":
+            uninstall_proxy_service()
+            return 0
+        if action == "status":
+            proxy_service_status()
+            return 0
+        if action == "restart":
+            restart_proxy_service()
+            return 0
+        die("gebruik: codexswitch proxy install | uninstall | status | restart")
+    if cmd == "tui":
+        auto_update_from_github()
+        if not Path(TUI_PYTHON).exists():
+            die(f"TUI Python ontbreekt: {TUI_PYTHON}; draai ./install.sh")
+        if os.name == "nt":
+            raise SystemExit(subprocess.run([TUI_PYTHON, TUI_BIN]).returncode)
+        os.execv(TUI_PYTHON, [TUI_PYTHON, TUI_BIN])
+    if cmd == "list":
+        list_models()
+        return 0
+    if cmd == "refresh":
+        refresh_opencode_models()
+        refresh_openrouter_models(strict=False)
+        return 0
+    if cmd == "vault":
+        if len(argv) == 2 and argv[1] == "migrate":
+            migrate_vault()
+            return 0
+        if len(argv) == 2 and argv[1] == "status":
+            current = vault_status()
+            print(f"Vault: {current['mode']} / {current['label']}")
+            return 0 if current.get("online") else 1
+        if len(argv) == 3 and argv[1:] == ["remote", "configure"]:
+            configure_remote_vault()
+            return 0
+        die("gebruik: codexswitch vault migrate | status | remote configure")
+    if cmd == "update":
+        if len(argv) > 2 or (len(argv) == 2 and argv[1] != "--check"):
+            die("gebruik: codexswitch update [--check]")
+        update_from_github(check_only=len(argv) == 2)
+        return 0
+    if cmd == "status":
+        auto_update_from_github()
+        status()
+        return 0
+    if cmd == "auth":
+        auth(argv[1] if len(argv) > 1 else None)
+        return 0
+    if cmd == "accounts":
+        list_openai_accounts()
+        return 0
+    if cmd == "account":
+        if len(argv) < 2:
+            die("gebruik: codexswitch account add | save [EMAIL] | use EMAIL")
+        action = argv[1]
+        if action == "add" and len(argv) == 2:
+            auth("openai")
+            return 0
+        if action == "save" and len(argv) in {2, 3}:
+            save_openai_account(argv[2] if len(argv) == 3 else None)
+            return 0
+        if action == "use" and len(argv) == 3:
+            use_openai_account(argv[2])
+            return 0
+        die("gebruik: codexswitch account add | save [EMAIL] | use EMAIL")
+    if cmd == "use":
+        if len(argv) not in {3, 4}:
+            die("gebruik: codexswitch use PROVIDER MODEL [DENKSTAND]")
+        validate_provider_model(argv[1], argv[2])
+        effort = argv[3] if len(argv) == 4 else None
+        if argv[1] == "opencode-go" and effort == "max":
+            effort = "xhigh"
+        if argv[1] == "opencode-go" and effort == "thinking":
+            effort = "high"
+        update_codex_config(argv[1], argv[2], effort)
+        return 0
+    if cmd == "run":
+        binary = codex_launch_bin()
+        provider = str(codex_config_state().get("model_provider") or "openai")
+        ensure_provider_proxy(provider)
+        os.execvpe(binary, [binary, *argv[1:]], codex_launch_environment())
+    usage()
+    return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main(sys.argv[1:]))
