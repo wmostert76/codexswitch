@@ -88,6 +88,11 @@ for a newer GitHub release or newer `origin/main` revision and immediately run
 the same upgrade path as `codexswitch update` when the checkout is clean. Set
 `CODEXSWITCH_NO_AUTO_UPDATE=1` to suppress this startup check.
 
+Main-branch upgrades pull only `origin/main` and do not require release tags to
+exist on that remote. Detached release checkouts fetch the requested tag
+directly from the canonical GitHub repository into an internal ref, leaving
+local tags untouched.
+
 On Windows, the updater refreshes `requirements.txt` with the native Python
 interpreter that is running CodexSwitch. It does not invoke the Linux-only
 `install.sh` through WSL or Git Bash.

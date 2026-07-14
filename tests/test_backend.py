@@ -393,7 +393,30 @@ def test_auto_update_main_branch_runs_install_without_self_update(monkeypatch):
     assert (["post-update-install", True], True) in calls
 
 
-def test_release_update_fetches_only_latest_tag(monkeypatch):
+def test_release_update_on_main_does_not_fetch_release_tag(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", ""))
+    monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
+    monkeypatch.setattr(cs, "current_git_branch", lambda: "main")
+    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append(cmd))
+    monkeypatch.setattr(cs, "run_post_update_install", lambda: calls.append(["install"]))
+
+    assert cs.update_from_github() is True
+
+    assert [
+        "git",
+        "-C",
+        str(cs.PROJECT_ROOT),
+        "pull",
+        "--no-tags",
+        "--ff-only",
+        "origin",
+        "main",
+    ] in calls
+    assert not any("refs/tags/" in part for call in calls for part in call)
+
+
+def test_detached_release_update_fetches_canonical_internal_ref(monkeypatch):
     calls = []
     monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", ""))
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
@@ -409,10 +432,17 @@ def test_release_update_fetches_only_latest_tag(monkeypatch):
         str(cs.PROJECT_ROOT),
         "fetch",
         "--no-tags",
-        "origin",
-        "refs/tags/v9.9.9:refs/tags/v9.9.9",
+        cs.GITHUB_GIT_URL,
+        "+refs/tags/v9.9.9:refs/codexswitch/releases/v9.9.9",
     ] in calls
-    assert ["git", "-C", str(cs.PROJECT_ROOT), "checkout", "v9.9.9"] in calls
+    assert [
+        "git",
+        "-C",
+        str(cs.PROJECT_ROOT),
+        "checkout",
+        "--detach",
+        "refs/codexswitch/releases/v9.9.9",
+    ] in calls
     assert not any("--tags" in call for call in calls)
 
 

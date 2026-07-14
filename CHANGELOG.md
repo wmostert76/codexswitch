@@ -2,6 +2,16 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.7.3] - 2026-07-14
+
+### Fixed
+
+- Release updates on `main` no longer fetch a tag before pulling, fixing
+  upgrades through a local or mirrored `origin` that has the release commit
+  but not the tag created later by GitHub Actions. Detached checkouts fetch the
+  release directly from canonical GitHub into an internal ref, avoiding both
+  missing mirror tags and conflicts with local tags.
+
 ## [1.7.2] - 2026-07-14
 
 ### Changed

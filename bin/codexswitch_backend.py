@@ -131,6 +131,7 @@ TUI_BIN = str(PROJECT_ROOT / "bin/codexswitch-tui")
 APP_NAME = "CodexSwitch"
 APP_TITLE = f"{APP_NAME} Commander"
 GITHUB_REPOSITORY = "wmostert76/codexswitch"
+GITHUB_GIT_URL = f"https://github.com/{GITHUB_REPOSITORY}.git"
 GITHUB_LATEST_RELEASE_API = (
     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 )
@@ -403,8 +404,9 @@ def main_branch_update_available() -> tuple[bool, str, str]:
     return local_rev != remote_rev, local_rev, remote_rev
 
 
-def fetch_release_tag(tag: str) -> None:
-    """Fetch only the requested release tag, ignoring unrelated tag conflicts."""
+def fetch_release_ref(tag: str) -> str:
+    """Fetch a canonical GitHub release into a conflict-free internal ref."""
+    release_ref = f"refs/codexswitch/releases/{tag}"
     run(
         [
             "git",
@@ -412,10 +414,11 @@ def fetch_release_tag(tag: str) -> None:
             str(PROJECT_ROOT),
             "fetch",
             "--no-tags",
-            "origin",
-            f"refs/tags/{tag}:refs/tags/{tag}",
+            GITHUB_GIT_URL,
+            f"+refs/tags/{tag}:{release_ref}",
         ]
     )
+    return release_ref
 
 
 def pull_main_without_tags() -> None:
@@ -432,6 +435,15 @@ def pull_main_without_tags() -> None:
             "main",
         ]
     )
+
+
+def update_release_checkout(tag: str) -> None:
+    """Update main without tags or move a detached checkout to a GitHub release."""
+    if current_git_branch() == "main":
+        pull_main_without_tags()
+        return
+    release_ref = fetch_release_ref(tag)
+    run(["git", "-C", str(PROJECT_ROOT), "checkout", "--detach", release_ref])
 
 
 def update_from_github(check_only: bool = False) -> bool:
@@ -480,12 +492,7 @@ def update_from_github(check_only: bool = False) -> bool:
             "lokale repository heeft niet-gecommitte wijzigingen; "
             "commit/stash eerst en draai daarna opnieuw: codexswitch update"
         )
-    fetch_release_tag(latest_tag)
-    branch = current_git_branch()
-    if branch == "main":
-        pull_main_without_tags()
-    else:
-        run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
+    update_release_checkout(latest_tag)
     run_post_update_install()
     print(f"CodexSwitch bijgewerkt naar {latest_display}")
     return True
@@ -530,12 +537,7 @@ def auto_update_from_github() -> bool:
             print("CodexSwitch main bijgewerkt")
             return True
         print(f"CodexSwitch release-update gevonden; upgraden: {VERSION} -> {latest_display}")
-        fetch_release_tag(latest_tag)
-        branch = current_git_branch()
-        if branch == "main":
-            pull_main_without_tags()
-        else:
-            run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
+        update_release_checkout(latest_tag)
         run_post_update_install()
         print(f"CodexSwitch bijgewerkt naar {latest_display}")
         return True
