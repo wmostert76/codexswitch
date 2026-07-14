@@ -121,7 +121,6 @@ AZURE_PROXY_URL = f"{PROVIDER_PROXY_URL}/azure/v1"
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_CONFIG_BACKUPS = 5
-PROXY_SERVICE = "codex-provider-proxy.service"
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
 PROXY_BIN = shutil.which("codex-provider-proxy") or str(PROJECT_ROOT / "bin/codex-provider-proxy")
 if os.name == "nt":
@@ -1097,11 +1096,6 @@ def ensure_unified_provider_proxy() -> None:
     """Start the unified provider proxy when it is not already healthy."""
     if proxy_healthy():
         return
-    if shutil.which("systemctl"):
-        subprocess.run(["sudo", "systemctl", "start", PROXY_SERVICE], check=False)
-        time.sleep(0.5)
-        if proxy_healthy():
-            return
     if not Path(PROXY_BIN).exists():
         die(f"provider proxy ontbreekt: {PROXY_BIN}")
     log = SWITCH_HOME / "provider-proxy.log"
@@ -1124,90 +1118,6 @@ def ensure_provider_proxy(provider: str) -> None:
         return
     migrate_provider_proxy_url(provider)
     ensure_unified_provider_proxy()
-
-
-def require_proxy_service_support() -> None:
-    if os.name == "nt" or not shutil.which("systemctl"):
-        die("proxy service beheer vereist Linux met systemd")
-    if not shutil.which("sudo") and os.geteuid() != 0:
-        die("sudo is nodig voor proxy service beheer")
-
-
-def privileged_cmd(cmd: list[str]) -> list[str]:
-    if os.geteuid() == 0:
-        return cmd
-    return ["sudo", *cmd]
-
-
-def proxy_service_unit() -> str:
-    proxy_bin = Path(PROXY_BIN)
-    if not proxy_bin.exists():
-        die(f"proxy ontbreekt: {PROXY_BIN}")
-    user = os.environ.get("SUDO_USER") if os.geteuid() == 0 else None
-    user = user or command_output(["id", "-un"])
-    group = command_output(["id", "-gn", user])
-    home = command_output(["getent", "passwd", user]).split(":")[5]
-    return f"""[Unit]
-Description=CodexSwitch unified provider proxy
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User={user}
-Group={group}
-Environment=HOME={home}
-ExecStart={proxy_bin.resolve()}
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-"""
-
-
-def install_proxy_service() -> None:
-    require_proxy_service_support()
-    with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False) as handle:
-        handle.write(proxy_service_unit())
-        service_file = handle.name
-    try:
-        run(privileged_cmd(["install", "-m", "644", service_file, f"/etc/systemd/system/{PROXY_SERVICE}"]))
-    finally:
-        try:
-            os.unlink(service_file)
-        except OSError:
-            pass
-    run(privileged_cmd(["systemctl", "daemon-reload"]))
-    run(privileged_cmd(["systemctl", "enable", "--now", PROXY_SERVICE]))
-    run(privileged_cmd(["systemctl", "restart", PROXY_SERVICE]))
-    print(f"proxy service geinstalleerd: {PROXY_SERVICE}")
-
-
-def uninstall_proxy_service() -> None:
-    require_proxy_service_support()
-    subprocess.run(privileged_cmd(["systemctl", "disable", "--now", PROXY_SERVICE]), check=False)
-    try:
-        Path(f"/etc/systemd/system/{PROXY_SERVICE}").unlink()
-    except PermissionError:
-        run(privileged_cmd(["rm", "-f", f"/etc/systemd/system/{PROXY_SERVICE}"]))
-    except FileNotFoundError:
-        pass
-    run(privileged_cmd(["systemctl", "daemon-reload"]))
-    print(f"proxy service verwijderd: {PROXY_SERVICE}")
-
-
-def restart_proxy_service() -> None:
-    require_proxy_service_support()
-    run(privileged_cmd(["systemctl", "restart", PROXY_SERVICE]))
-    print(f"proxy service herstart: {PROXY_SERVICE}")
-
-
-def proxy_service_status() -> None:
-    healthy = "ok" if proxy_healthy() else "niet bereikbaar"
-    print(f"proxy health: {healthy}")
-    if shutil.which("systemctl"):
-        subprocess.run(["systemctl", "status", PROXY_SERVICE, "--no-pager", "-n", "20"], check=False)
 
 
 def openai_models() -> list[str]:
@@ -1996,10 +1906,6 @@ Usage:
   codexswitch tui                    start Commander TUI
   codexswitch use PROVIDER MODEL [REASONING]
   codexswitch auth [openai|azure|opencode-go|openrouter]
-  codexswitch proxy install          install unified provider proxy systemd service
-  codexswitch proxy uninstall        remove unified provider proxy systemd service
-  codexswitch proxy status           show unified provider proxy service status
-  codexswitch proxy restart          restart unified provider proxy service
   codexswitch account add            add OpenAI account with device sign-in
   codexswitch account save [EMAIL]   save current OpenAI login
   codexswitch account use EMAIL      activate saved OpenAI account
@@ -2021,8 +1927,6 @@ Providers:
 
 Examples:
   codexswitch tui
-  codexswitch proxy install
-  codexswitch proxy status
   codexswitch account add
   codexswitch auth openrouter
   codexswitch update --check
@@ -2045,23 +1949,6 @@ def main(argv: list[str]) -> int:
     if cmd in {"version", "-v", "--version"}:
         print(f"{Path(sys.argv[0]).name} {VERSION}")
         return 0
-    if cmd == "proxy":
-        if len(argv) != 2:
-            die("gebruik: codexswitch proxy install | uninstall | status | restart")
-        action = argv[1]
-        if action == "install":
-            install_proxy_service()
-            return 0
-        if action == "uninstall":
-            uninstall_proxy_service()
-            return 0
-        if action == "status":
-            proxy_service_status()
-            return 0
-        if action == "restart":
-            restart_proxy_service()
-            return 0
-        die("gebruik: codexswitch proxy install | uninstall | status | restart")
     if cmd == "tui":
         auto_update_from_github()
         if not Path(TUI_PYTHON).exists():

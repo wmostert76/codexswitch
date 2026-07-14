@@ -180,32 +180,10 @@ for legacy_service in codex-opencode-go-proxy codex-openrouter-proxy codex-azure
   sudo systemctl disable --now "$legacy_service.service" 2>/dev/null || true
   sudo rm -f "/etc/systemd/system/$legacy_service.service"
 done
-
-service_file=$(mktemp)
-trap 'rm -f "$service_file"' EXIT
-cat >"$service_file" <<EOF
-[Unit]
-Description=CodexSwitch unified provider proxy
-After=network-online.target
-Wants=network-online.target
-
-[Service]
-Type=simple
-User=$TARGET_USER
-Group=$(id -gn "$TARGET_USER")
-Environment=HOME=$TARGET_HOME
-ExecStart=/usr/local/bin/codex-provider-proxy
-Restart=on-failure
-RestartSec=2
-
-[Install]
-WantedBy=multi-user.target
-EOF
-
-sudo install -m 644 "$service_file" /etc/systemd/system/codex-provider-proxy.service
-sudo systemctl daemon-reload
 sudo systemctl disable --now codex-provider-proxy.service 2>/dev/null || true
+sudo rm -f /etc/systemd/system/codex-provider-proxy.service
+sudo systemctl daemon-reload
 
 echo
 echo "Installed. Start with: codexswitch"
-echo "Provider proxies start on demand immediately before Codex."
+echo "The provider proxy starts as a background process when Commander opens."

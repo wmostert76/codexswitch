@@ -108,8 +108,8 @@ def test_cli_help_contains_credits_and_tui_command():
     assert "AI-assisted implementation: OpenAI Codex" in proc.stdout
     assert cs.BRAND_BANNER in proc.stdout
     assert "codexswitch tui" in proc.stdout
-    assert "codexswitch proxy install" in proc.stdout
-    assert "codexswitch proxy uninstall" in proc.stdout
+    assert "codexswitch proxy install" not in proc.stdout
+    assert "codexswitch proxy uninstall" not in proc.stdout
     assert "codexswitch update [--check]" in proc.stdout
     assert "codexswitch version" in proc.stdout
     assert "codexswitch --version" not in proc.stdout
@@ -453,42 +453,7 @@ def test_post_update_install_uses_shell_installer_off_windows(monkeypatch):
     ]
 
 
-def test_proxy_service_unit_uses_proxy_binary_and_current_user(tmp_path, monkeypatch):
-    proxy_bin = tmp_path / "codex-provider-proxy"
-    proxy_bin.write_text("")
-    monkeypatch.setattr(cs, "PROXY_BIN", str(proxy_bin))
-    monkeypatch.setattr(cs.os, "geteuid", lambda: 1000, raising=False)
-    monkeypatch.setattr(cs, "command_output", lambda cmd: {
-        ("id", "-un"): "tester",
-        ("id", "-gn", "tester"): "testers",
-        ("getent", "passwd", "tester"): "tester:x:1000:1000::/home/tester:/bin/bash",
-    }[tuple(cmd)])
-
-    unit = cs.proxy_service_unit()
-
-    assert "User=tester" in unit
-    assert "Group=testers" in unit
-    assert "Environment=HOME=/home/tester" in unit
-    assert f"ExecStart={proxy_bin.resolve()}" in unit
-
-
-def test_install_proxy_service_installs_and_restarts_unit(monkeypatch):
-    calls = []
-    monkeypatch.setattr(cs, "require_proxy_service_support", lambda: None)
-    monkeypatch.setattr(cs, "proxy_service_unit", lambda: "[Unit]\n")
-    monkeypatch.setattr(cs, "privileged_cmd", lambda cmd: ["sudo", *cmd])
-    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append((cmd, check)))
-
-    cs.install_proxy_service()
-
-    assert calls[0][0][:4] == ["sudo", "install", "-m", "644"]
-    assert calls[0][0][-1] == "/etc/systemd/system/codex-provider-proxy.service"
-    assert (["sudo", "systemctl", "daemon-reload"], True) in calls
-    assert (["sudo", "systemctl", "enable", "--now", cs.PROXY_SERVICE], True) in calls
-    assert (["sudo", "systemctl", "restart", cs.PROXY_SERVICE], True) in calls
-
-
-def test_ensure_provider_proxy_starts_unified_proxy_only_when_required(
+def test_ensure_provider_proxy_starts_detached_process_only_when_required(
     tmp_path, monkeypatch
 ):
     proxy_bin = tmp_path / "codex-provider-proxy"
@@ -499,7 +464,16 @@ def test_ensure_provider_proxy_starts_unified_proxy_only_when_required(
     monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path / "switch")
     monkeypatch.setattr(cs, "CODEX_CONFIG", tmp_path / "missing-config.toml")
     monkeypatch.setattr(cs, "proxy_healthy", lambda: next(health))
-    monkeypatch.setattr(cs.shutil, "which", lambda command: None)
+    monkeypatch.setattr(
+        cs.shutil,
+        "which",
+        lambda command: "/usr/bin/systemctl" if command == "systemctl" else None,
+    )
+    monkeypatch.setattr(
+        cs.subprocess,
+        "run",
+        lambda *args, **kwargs: calls.append(["unexpected-systemctl"]),
+    )
     monkeypatch.setattr(cs.subprocess, "Popen", lambda argv, **kwargs: calls.append(argv))
     monkeypatch.setattr(cs.time, "sleep", lambda _seconds: None)
 

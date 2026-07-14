@@ -67,9 +67,11 @@ codexswitch tui
 
 The installer detects missing Python/venv/npm dependencies on common Linux
 distros, installs or updates the Codex CLI when needed, creates `.venv`,
-installs Textual, links commands into `/usr/local/bin`, and installs proxy
-systemd units without enabling them at boot. Commander starts the unified
-provider proxy when the TUI opens and checks it again immediately before Codex.
+installs Textual, links commands into `/usr/local/bin`, and removes obsolete
+proxy systemd units. On both Linux and Windows, Commander starts the unified
+proxy as a detached background process when the TUI opens and checks it again
+immediately before Codex. It remains active after the terminal closes but does
+not start automatically after a reboot.
 On an existing
 git checkout, re-running `./install.sh` fetches without modifying tags and
 performs a safe `git pull --ff-only`, so it can be used
@@ -301,22 +303,11 @@ Azure on `127.0.0.1:14555`. Its OpenCode Go engine handles:
 - proxy-local web-search fallback
 - optional bearer auth for manual clients
 
-Manage the unified Linux systemd service independently when explicit
-always-on behavior is desired:
-
-```bash
-codexswitch proxy install
-codexswitch proxy status
-codexswitch proxy restart
-codexswitch proxy uninstall
-```
-
 To require a dedicated proxy token for manual clients:
 
 ```bash
-sudo systemctl edit codex-provider-proxy.service
-# Add: Environment=CODEX_OPENCODE_PROXY_TOKEN=your-secret
-sudo systemctl restart codex-provider-proxy.service
+export CODEX_OPENCODE_PROXY_TOKEN=your-secret
+codexswitch tui
 ```
 
 CodexSwitch itself authenticates with
@@ -338,20 +329,13 @@ trigger the GitHub Release workflow.
 
 ## Uninstall
 
-Remove only the unified provider proxy service:
-
-```bash
-codexswitch proxy uninstall
-```
-
-Remove installed CodexSwitch commands and the proxy service:
+Remove installed CodexSwitch commands and any obsolete proxy service units:
 
 ```bash
 ./uninstall.sh
 ```
 
-The uninstaller removes installed commands and the proxy service. It leaves
-Codex and CodexSwitch user configuration untouched.
+The uninstaller leaves Codex and CodexSwitch user configuration untouched.
 
 ## Credits
 

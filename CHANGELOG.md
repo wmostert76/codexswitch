@@ -2,6 +2,15 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.7.2] - 2026-07-14
+
+### Changed
+
+- Linux now matches Windows by starting the unified provider proxy as a
+  detached background process instead of a systemd service. Upgrades remove
+  obsolete service units and the systemd-specific proxy management commands
+  have been removed.
+
 ## [1.7.1] - 2026-07-14
 
 ### Fixed
