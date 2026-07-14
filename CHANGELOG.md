@@ -2,6 +2,13 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.5.2] - 2026-07-14
+
+### Fixed
+
+- The unified Azure `/models` route now returns complete Codex model metadata,
+  preventing a harmless catalog decoding error during Codex startup.
+
 ## [1.5.1] - 2026-07-14
 
 ### Fixed

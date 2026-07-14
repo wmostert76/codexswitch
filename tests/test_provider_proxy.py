@@ -102,7 +102,9 @@ def test_unified_azure_models_route_avoids_catalog_404():
     finally:
         server.shutdown()
 
-    assert payload == {"models": ["gpt-5.6-sol"]}
+    assert payload["models"][0]["slug"] == "gpt-5.6-sol"
+    assert payload["models"][0]["supported_in_api"] is True
+    assert payload["models"][0]["context_window"] == 272000
 
 
 def test_unified_azure_route_injects_vault_key(tmp_path, monkeypatch):
