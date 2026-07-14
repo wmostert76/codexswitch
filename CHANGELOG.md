@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.5.1] - 2026-07-14
+
+### Fixed
+
+- The first post-upgrade F9 start now automatically rewrites an active legacy
+  `14555`/`14556`/`14557` provider URL to its unified provider route before
+  starting the proxy, including when the TUI selection itself is unchanged.
+
 ## [1.5.0] - 2026-07-14
 
 ### Changed

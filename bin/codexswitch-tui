@@ -1597,7 +1597,11 @@ class CodexSwitchApp(App):
             self.update_status_hint()
 
     def update_status_hint(self) -> None:
-        focused_id = self.focused.id if self.focused is not None else ""
+        try:
+            focused = self.focused
+        except Exception:
+            return
+        focused_id = focused.id if focused is not None else ""
         self.last_focus_id = focused_id
         if focused_id == "sources":
             source = self.query_one("#sources", OptionList).highlighted_option

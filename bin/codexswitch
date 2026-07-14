@@ -1007,10 +1007,41 @@ def proxy_statuses() -> dict[str, bool]:
     return {"unified": proxy_healthy()}
 
 
+def migrate_provider_proxy_url(provider: str) -> None:
+    """Rewrite a legacy per-provider loopback URL on first post-upgrade start."""
+    expected_urls = {
+        "opencode-go": OPENCODE_PROXY_URL,
+        "openrouter": OPENROUTER_PROXY_URL,
+        "azure": AZURE_PROXY_URL,
+    }
+    expected = expected_urls.get(provider)
+    if expected is None or not CODEX_CONFIG.exists():
+        return
+    try:
+        data = tomllib.loads(CODEX_CONFIG.read_text())
+    except (OSError, tomllib.TOMLDecodeError):
+        return
+    configured = (
+        data.get("model_providers", {}).get(provider, {}).get("base_url")
+    )
+    if configured == expected:
+        return
+    state = codex_config_state()
+    model = state.get("model")
+    if state.get("model_provider") != provider or not isinstance(model, str):
+        return
+    update_codex_config(
+        provider,
+        model,
+        state.get("model_reasoning_effort"),
+    )
+
+
 def ensure_provider_proxy(provider: str) -> None:
     """Start the unified proxy when the selected provider requires it."""
     if provider not in {"opencode-go", "openrouter", "azure"}:
         return
+    migrate_provider_proxy_url(provider)
     if proxy_healthy():
         return
     if shutil.which("systemctl"):

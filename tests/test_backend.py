@@ -436,6 +436,7 @@ def test_ensure_provider_proxy_starts_unified_proxy_only_when_required(
     calls = []
     monkeypatch.setattr(cs, "PROXY_BIN", str(proxy_bin))
     monkeypatch.setattr(cs, "SWITCH_HOME", tmp_path / "switch")
+    monkeypatch.setattr(cs, "CODEX_CONFIG", tmp_path / "missing-config.toml")
     monkeypatch.setattr(cs, "proxy_healthy", lambda: next(health))
     monkeypatch.setattr(cs.shutil, "which", lambda command: None)
     monkeypatch.setattr(cs.subprocess, "Popen", lambda argv, **kwargs: calls.append(argv))
@@ -450,6 +451,27 @@ def test_ensure_provider_proxy_starts_unified_proxy_only_when_required(
         else [str(proxy_bin)]
     )
     assert calls == [expected]
+
+
+def test_ensure_provider_proxy_migrates_legacy_active_base_url(
+    tmp_path, monkeypatch
+):
+    config = tmp_path / "config.toml"
+    config.write_text(
+        'model = "gpt-5.6-sol"\n'
+        'model_provider = "azure"\n'
+        'model_reasoning_effort = "medium"\n'
+        '[model_providers.azure]\n'
+        'base_url = "http://127.0.0.1:14557/v1"\n'
+    )
+    calls = []
+    monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+    monkeypatch.setattr(cs, "update_codex_config", lambda *args: calls.append(args))
+    monkeypatch.setattr(cs, "proxy_healthy", lambda: True)
+
+    cs.ensure_provider_proxy("azure")
+
+    assert calls == [("azure", "gpt-5.6-sol", "medium")]
 
 
 def test_proxy_statuses_reports_unified_health(monkeypatch):
