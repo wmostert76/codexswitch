@@ -295,7 +295,7 @@ def app_factory(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
         pytest.fail("the headless TUI test tried to start a subprocess")
 
     monkeypatch.setattr(tui.subprocess, "run", unexpected_subprocess)
-    monkeypatch.setattr(tui.os, "execvp", unexpected_subprocess)
+    monkeypatch.setattr(tui.os, "execvpe", unexpected_subprocess)
 
     def factory(
         backend: FakeBackend | None = None,
@@ -1674,18 +1674,23 @@ def test_main_checks_codex_runtime_before_exec(
     monkeypatch.setattr(tui, "CodexSwitchApp", FakeApp)
     monkeypatch.setattr(tui, "codex_launch_argv", lambda: ["/bin/echo", "codex"])
 
-    def fake_execvp(binary: str, argv: list[str]) -> None:
-        calls.append(("exec", binary, argv))
+    def fake_execvpe(binary: str, argv: list[str], environment: dict[str, str]) -> None:
+        calls.append(("exec", binary, argv, environment))
         raise SystemExit(0)
 
-    monkeypatch.setattr(tui.os, "execvp", fake_execvp)
+    monkeypatch.setattr(tui.os, "execvpe", fake_execvpe)
     with pytest.raises(SystemExit):
         tui.main()
 
     assert calls == [
         "run",
         "preflight",
-        ("exec", "/bin/echo", ["/bin/echo", "codex"]),
+        (
+            "exec",
+            "/bin/echo",
+            ["/bin/echo", "codex"],
+            {"TEST_CODEX_ENV": "1"},
+        ),
     ]
 
 
@@ -1716,7 +1721,7 @@ def test_main_waits_for_codex_subprocess_on_windows(
     )
     monkeypatch.setattr(
         tui.os,
-        "execvp",
+        "execvpe",
         lambda *args: pytest.fail("Windows launch must not replace the TUI process"),
     )
 

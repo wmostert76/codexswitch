@@ -2298,12 +2298,13 @@ def main() -> int:
     if app.launch_codex:
         BACKEND["ensure_codex_runtime_writable"]()
         argv = codex_launch_argv()
+        environment = BACKEND["codex_launch_environment"]()
         if os.name == "nt":
             return subprocess.run(
                 argv,
-                env=BACKEND["codex_launch_environment"](),
+                env=environment,
             ).returncode
-        os.execvp(argv[0], argv)
+        os.execvpe(argv[0], argv, environment)
     return 0
 
 

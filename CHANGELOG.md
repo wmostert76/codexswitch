@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.3.0] - 2026-07-14
+
+### Fixed
+
+- Commander now passes the vault-backed provider environment when launching
+  Codex on Linux and macOS, so Azure and OpenRouter credentials are available
+  after Apply/Start just as they are through `codexswitch run` and on Windows.
+
 ## [1.2.4] - 2026-07-13
 
 ### Changed
