@@ -167,7 +167,7 @@ else
 fi
 
 sudo install -d -m 755 /usr/local/bin
-for command in codexswitch codex-opencode-go-proxy codex-openrouter-proxy opencode-go-token openrouter-token; do
+for command in codexswitch codex-opencode-go-proxy codex-openrouter-proxy codex-azure-proxy opencode-go-token openrouter-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
 sudo rm -f /usr/local/bin/openswitch
@@ -221,6 +221,30 @@ sudo install -m 644 "$service_file" /etc/systemd/system/codex-openrouter-proxy.s
 sudo systemctl daemon-reload
 sudo systemctl enable --now codex-openrouter-proxy.service
 sudo systemctl restart codex-openrouter-proxy.service
+
+cat >"$service_file" <<EOF
+[Unit]
+Description=CodexSwitch Azure Responses passthrough proxy
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=$TARGET_USER
+Group=$(id -gn "$TARGET_USER")
+Environment=HOME=$TARGET_HOME
+ExecStart=/usr/local/bin/codex-azure-proxy
+Restart=on-failure
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+sudo install -m 644 "$service_file" /etc/systemd/system/codex-azure-proxy.service
+sudo systemctl daemon-reload
+sudo systemctl enable --now codex-azure-proxy.service
+sudo systemctl restart codex-azure-proxy.service
 
 echo
 echo "Installed. Start with: codexswitch"

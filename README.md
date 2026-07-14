@@ -28,7 +28,7 @@ It is built for three workflows:
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
-| Azure OpenAI | Responses v1 endpoint/API-key vault storage and fixed `gpt-5.6-sol` model selection |
+| Azure OpenAI | Responses v1 vault-backed loopback passthrough and fixed `gpt-5.6-sol` model selection |
 | OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
 | OpenRouter | API-key storage, model catalog and a tool-compatible Responses proxy |
 
@@ -38,6 +38,7 @@ It is built for three workflows:
 - OpenAI multi-account management without losing rotated refresh tokens
 - Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
+- Persistent provider/model defaults that also work with a later plain `codex`
 - OpenCode Go compatibility proxy with tool-call translation
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
 - Reproducible local install with dependency detection and a systemd proxy service
@@ -82,6 +83,10 @@ codexswitch version
 for a newer GitHub release or newer `origin/main` revision and immediately run
 the same upgrade path as `codexswitch update` when the checkout is clean. Set
 `CODEXSWITCH_NO_AUTO_UPDATE=1` to suppress this startup check.
+
+On Windows, the updater refreshes `requirements.txt` with the native Python
+interpreter that is running CodexSwitch. It does not invoke the Linux-only
+`install.sh` through WSL or Git Bash.
 
 ## Native launcher binaries
 
@@ -197,6 +202,11 @@ function calls and maps the results back, so plugins, MCP tools, shell tools
 and `apply_patch` remain available. The OpenRouter key stays in the encrypted
 vault and is never written to `config.toml` or proxy logs.
 
+Azure uses a loopback passthrough on port `14557`. It reads the selected
+endpoint and API key from the protected CodexSwitch vault and adds the Azure
+`api-key` header upstream. This keeps a later plain `codex` launch working
+without exporting credentials into the shell.
+
 ## Authentication and storage
 
 CodexSwitch reuses provider-native auth stores where possible and keeps secrets
@@ -266,9 +276,11 @@ codexswitch account add
 
 Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
-and API key and normalizes the URL to `/openai/v1`. Codex receives Azure and
-OpenRouter keys through launch-time environment variables and OpenCode Go via
-its installed token helper, never as plain text in `~/.codex/config.toml`.
+and API key and normalizes the URL to `/openai/v1`. The Azure and OpenRouter
+loopback proxies read their keys from the protected vault, while OpenCode Go
+uses its installed token helper. A selected provider, model and reasoning mode
+therefore remain the defaults for later plain `codex` launches, with no API
+key stored in `~/.codex/config.toml`.
 
 ```bash
 codexswitch auth azure

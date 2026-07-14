@@ -2,6 +2,20 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.4.3] - 2026-07-14
+
+### Fixed
+
+- Provider, model and reasoning selections now remain usable when Codex is
+  started later through plain `codex`. Azure uses a vault-backed loopback
+  passthrough and OpenRouter reuses its vault-backed loopback proxy, so neither
+  provider depends on launch-only environment variables or stores API keys in
+  `config.toml`.
+- Windows updates now refresh Python dependencies with the active native
+  interpreter instead of passing a `C:\\...` checkout path to the Linux-only
+  `install.sh`, which failed when projects were stored in paths such as
+  OneDrive folders.
+
 ## [1.4.2] - 2026-07-14
 
 ### Fixed

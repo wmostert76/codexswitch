@@ -69,15 +69,17 @@ OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_PROXY_URL = "http://127.0.0.1:14555/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
 OPENROUTER_PROXY_URL = "http://127.0.0.1:14556/v1"
+AZURE_PROXY_URL = "http://127.0.0.1:14557/v1"
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_CONFIG_BACKUPS = 5
 PROXY_SERVICE = "codex-opencode-go-proxy.service"
 OPENROUTER_PROXY_SERVICE = "codex-openrouter-proxy.service"
+AZURE_PROXY_SERVICE = "codex-azure-proxy.service"
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
-OPENROUTER_TOKEN_HELPER = shutil.which("openrouter-token") or str(PROJECT_ROOT / "bin/openrouter-token")
 PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
 OPENROUTER_PROXY_BIN = shutil.which("codex-openrouter-proxy") or str(PROJECT_ROOT / "bin/codex-openrouter-proxy")
+AZURE_PROXY_BIN = shutil.which("codex-azure-proxy") or str(PROJECT_ROOT / "bin/codex-azure-proxy")
 if os.name == "nt":
     TUI_PYTHON = str(PROJECT_ROOT / ".venv/Scripts/python.exe")
 else:
@@ -127,6 +129,24 @@ def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
 
 def command_output(cmd: list[str]) -> str:
     return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace").strip()
+
+
+def run_post_update_install(skip_self_update: bool = False) -> None:
+    """Refresh platform-specific runtime dependencies after updating the checkout."""
+    if os.name == "nt":
+        requirements = PROJECT_ROOT / "requirements.txt"
+        if not requirements.exists():
+            die(f"requirements bestand ontbreekt: {requirements}")
+        run([sys.executable, "-m", "pip", "install", "-r", str(requirements)])
+        return
+
+    install_script = PROJECT_ROOT / "install.sh"
+    if not install_script.exists():
+        die(f"install script ontbreekt: {install_script}")
+    command = ["bash", str(install_script)]
+    if skip_self_update:
+        command.append("--no-self-update")
+    run(command)
 
 
 def read_json(path: Path, default):
@@ -361,12 +381,9 @@ def update_from_github(check_only: bool = False) -> bool:
                     "lokale repository heeft niet-gecommitte wijzigingen; "
                     "commit/stash eerst en draai daarna opnieuw: codexswitch update"
                 )
-            install_script = PROJECT_ROOT / "install.sh"
-            if not install_script.exists():
-                die(f"install script ontbreekt: {install_script}")
             run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
             run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
-            run(["bash", str(install_script), "--no-self-update"])
+            run_post_update_install(skip_self_update=True)
             print("CodexSwitch main bijgewerkt")
             return True
         if current_version == latest_version:
@@ -390,17 +407,13 @@ def update_from_github(check_only: bool = False) -> bool:
             "lokale repository heeft niet-gecommitte wijzigingen; "
             "commit/stash eerst en draai daarna opnieuw: codexswitch update"
         )
-    install_script = PROJECT_ROOT / "install.sh"
-    if not install_script.exists():
-        die(f"install script ontbreekt: {install_script}")
-
     run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
     branch = current_git_branch()
     if branch == "main":
         run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
     else:
         run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
-    run(["bash", str(install_script)])
+    run_post_update_install()
     print(f"CodexSwitch bijgewerkt naar {latest_display}")
     return True
 
@@ -434,10 +447,6 @@ def auto_update_from_github() -> bool:
                 file=sys.stderr,
             )
             return False
-        install_script = PROJECT_ROOT / "install.sh"
-        if not install_script.exists():
-            print(f"warning: install script ontbreekt: {install_script}", file=sys.stderr)
-            return False
         if branch_update:
             print(
                 "CodexSwitch main-update gevonden; upgraden: "
@@ -445,7 +454,7 @@ def auto_update_from_github() -> bool:
             )
             run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
             run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
-            run(["bash", str(install_script), "--no-self-update"])
+            run_post_update_install(skip_self_update=True)
             print("CodexSwitch main bijgewerkt")
             return True
         print(f"CodexSwitch release-update gevonden; upgraden: {VERSION} -> {latest_display}")
@@ -455,7 +464,7 @@ def auto_update_from_github() -> bool:
             run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
         else:
             run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
-        run(["bash", str(install_script)])
+        run_post_update_install()
         print(f"CodexSwitch bijgewerkt naar {latest_display}")
         return True
     except SystemExit as exc:
@@ -986,6 +995,16 @@ def openrouter_proxy_healthy() -> bool:
         return False
 
 
+def azure_proxy_healthy() -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{AZURE_PROXY_URL}/health", timeout=1) as res:
+            return res.status == 200
+    except Exception:
+        return False
+
+
 def ensure_proxy() -> None:
     if proxy_healthy():
         return
@@ -1034,6 +1053,30 @@ def ensure_openrouter_proxy() -> None:
     time.sleep(0.5)
     if not openrouter_proxy_healthy():
         die(f"OpenRouter proxy startte niet; zie {log}")
+
+
+def ensure_azure_proxy() -> None:
+    if azure_proxy_healthy():
+        return
+    if shutil.which("systemctl"):
+        subprocess.run(["sudo", "systemctl", "start", AZURE_PROXY_SERVICE], check=False)
+        time.sleep(0.5)
+        if azure_proxy_healthy():
+            return
+    if not Path(AZURE_PROXY_BIN).exists():
+        die(f"Azure proxy ontbreekt: {AZURE_PROXY_BIN}")
+    log = SWITCH_HOME / "azure-proxy.log"
+    SWITCH_HOME.mkdir(parents=True, exist_ok=True)
+    proxy_argv = [sys.executable, AZURE_PROXY_BIN] if os.name == "nt" else [AZURE_PROXY_BIN]
+    subprocess.Popen(
+        proxy_argv,
+        stdout=log.open("ab"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    time.sleep(0.5)
+    if not azure_proxy_healthy():
+        die(f"Azure proxy startte niet; zie {log}")
 
 
 def require_proxy_service_support() -> None:
@@ -1607,6 +1650,8 @@ def warm_codex_model_catalog() -> bool:
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
     if provider == "azure" and not azure_credentials_present():
         die("Azure credentials ontbreken; gebruik: codexswitch auth azure")
+    if provider == "azure":
+        ensure_azure_proxy()
     if provider == "opencode-go":
         if not opencode_go_key_present():
             die("OpenCode Go API-key ontbreekt; gebruik: codexswitch auth opencode-go")
@@ -1704,15 +1749,12 @@ refresh_interval_ms = 0
         lines.append(provider_block)
 
     if provider == "azure":
-        credential = azure_credentials()
-        endpoint = str(credential.get("endpoint", "")).rstrip("/")
         provider_block = f'''
 
 [model_providers.azure]
 name = "Azure"
-base_url = {toml_string(endpoint)}
+base_url = "{AZURE_PROXY_URL}"
 wire_api = "responses"
-env_http_headers = {{ "api-key" = "{AZURE_API_KEY_ENV}" }}
 '''
         lines.append(provider_block)
 
@@ -1723,7 +1765,6 @@ env_http_headers = {{ "api-key" = "{AZURE_API_KEY_ENV}" }}
 name = "OpenRouter"
 base_url = "{OPENROUTER_PROXY_URL}"
 wire_api = "responses"
-env_key = "{OPENROUTER_API_KEY_ENV}"
 '''
         lines.append(provider_block)
 

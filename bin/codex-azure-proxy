@@ -1,0 +1,116 @@
+#!/usr/bin/env python3
+"""Local Azure Responses passthrough that keeps the API key out of Codex config."""
+
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from pathlib import Path
+from urllib.parse import urlparse
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codexswitch_common import read_secret_json, user_home
+
+
+HOST = os.environ.get("CODEXSWITCH_AZURE_PROXY_HOST", "127.0.0.1")
+PORT = int(os.environ.get("CODEXSWITCH_AZURE_PROXY_PORT", "14557"))
+MAX_REQUEST_BYTES = int(
+    os.environ.get("CODEXSWITCH_AZURE_PROXY_MAX_REQUEST_BYTES", str(16 * 1024 * 1024))
+)
+
+
+def azure_credentials() -> dict:
+    path = user_home() / ".config/codexswitch/azure/auth.json"
+    data = read_secret_json(path, {})
+    if not isinstance(data, dict):
+        raise RuntimeError("Azure auth store is invalid")
+    endpoint = data.get("endpoint")
+    key = data.get("api_key")
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise RuntimeError("Azure endpoint is missing")
+    if not isinstance(key, str) or not key.strip():
+        raise RuntimeError("Azure API key is missing")
+    return {"endpoint": endpoint.rstrip("/"), "api_key": key.strip()}
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def log_message(self, fmt, *args):
+        print(f"{self.address_string()} - {fmt % args}", flush=True)
+
+    def send_json(self, status: int, payload: dict) -> None:
+        body = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        if urlparse(self.path).path in {"/health", "/v1/health"}:
+            self.send_json(200, {"ok": True})
+            return
+        self.send_json(404, {"error": "not found"})
+
+    def do_POST(self):
+        if urlparse(self.path).path not in {"/responses", "/v1/responses"}:
+            self.send_json(404, {"error": "not found"})
+            return
+        try:
+            credential = azure_credentials()
+        except Exception as exc:
+            self.send_json(503, {"error": str(exc)})
+            return
+        try:
+            length = int(self.headers.get("content-length", "0"))
+        except ValueError:
+            self.send_json(400, {"error": "invalid content-length"})
+            return
+        if length < 0 or length > MAX_REQUEST_BYTES:
+            self.send_json(413, {"error": "request body too large"})
+            return
+        body = self.rfile.read(length)
+        request = urllib.request.Request(
+            f'{credential["endpoint"]}/responses',
+            data=body,
+            headers={
+                "content-type": self.headers.get("content-type", "application/json"),
+                "accept": self.headers.get("accept", "text/event-stream"),
+                "api-key": credential["api_key"],
+            },
+            method="POST",
+        )
+        try:
+            self.forward(urllib.request.urlopen(request, timeout=600))
+        except urllib.error.HTTPError as exc:
+            self.forward(exc)
+        except Exception as exc:
+            self.send_json(502, {"error": f"Azure upstream request failed: {exc}"})
+
+    def forward(self, upstream) -> None:
+        self.send_response(upstream.status)
+        content_type = upstream.headers.get("content-type", "application/json")
+        self.send_header("content-type", content_type)
+        self.send_header("cache-control", upstream.headers.get("cache-control", "no-cache"))
+        self.send_header("connection", "close")
+        self.end_headers()
+        while True:
+            chunk = upstream.read(64 * 1024)
+            if not chunk:
+                break
+            self.wfile.write(chunk)
+            self.wfile.flush()
+        self.close_connection = True
+
+
+def main() -> None:
+    server = ThreadingHTTPServer((HOST, PORT), Handler)
+    print(f"codexswitch Azure proxy listening on http://{HOST}:{PORT}/v1", flush=True)
+    server.serve_forever()
+
+
+if __name__ == "__main__":
+    main()

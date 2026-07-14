@@ -61,6 +61,7 @@ jobs:
             bin/codexswitch-tui \
             bin/codex-opencode-go-proxy \
             bin/codex-openrouter-proxy \
+            bin/codex-azure-proxy \
             bin/opencode-go-token \
             bin/openrouter-token \
             bin/codexswitch_common.py

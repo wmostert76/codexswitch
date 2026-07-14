@@ -336,8 +336,14 @@ def test_auto_update_main_branch_runs_install_without_self_update(monkeypatch):
         lambda: (True, "1111111local", "2222222remote"),
     )
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
-    monkeypatch.setattr(Path, "exists", lambda self: True)
     monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append((cmd, check)))
+    monkeypatch.setattr(
+        cs,
+        "run_post_update_install",
+        lambda skip_self_update=False: calls.append(
+            (["post-update-install", skip_self_update], True)
+        ),
+    )
 
     assert cs.auto_update_from_github() is True
 
@@ -346,7 +352,44 @@ def test_auto_update_main_branch_runs_install_without_self_update(monkeypatch):
         ["git", "-C", str(cs.PROJECT_ROOT), "pull", "--ff-only", "origin", "main"],
         True,
     ) in calls
-    assert (["bash", str(cs.PROJECT_ROOT / "install.sh"), "--no-self-update"], True) in calls
+    assert (["post-update-install", True], True) in calls
+
+
+def test_post_update_install_uses_native_python_on_windows(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs.os, "name", "nt")
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append(cmd))
+
+    cs.run_post_update_install(skip_self_update=True)
+
+    assert calls == [
+        [
+            cs.sys.executable,
+            "-m",
+            "pip",
+            "install",
+            "-r",
+            str(cs.PROJECT_ROOT / "requirements.txt"),
+        ]
+    ]
+
+
+def test_post_update_install_uses_shell_installer_off_windows(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs.os, "name", "posix")
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append(cmd))
+
+    cs.run_post_update_install(skip_self_update=True)
+
+    assert calls == [
+        [
+            "bash",
+            str(cs.PROJECT_ROOT / "install.sh"),
+            "--no-self-update",
+        ]
+    ]
 
 
 def test_proxy_service_unit_uses_proxy_binary_and_current_user(tmp_path, monkeypatch):
@@ -734,6 +777,7 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
         monkeypatch.setattr(cs, "azure_credentials_present", lambda: True)
+        monkeypatch.setattr(cs, "ensure_azure_proxy", lambda: None)
         monkeypatch.setattr(
             cs,
             "azure_credentials",
@@ -749,8 +793,9 @@ class TestUpdateState:
         state = json.loads(state_path.read_text())
         assert 'model = "gpt-5.6-sol"' in text
         assert 'model_reasoning_effort = "low"' in text
-        assert 'base_url = "https://example.invalid/openai/v1"' in text
-        assert 'env_http_headers = { "api-key" = "AZURE_OPENAI_API_KEY" }' in text
+        assert f'base_url = "{cs.AZURE_PROXY_URL}"' in text
+        assert "env_http_headers" not in text
+        assert "[model_providers.azure.auth]" not in text
         assert "fixture-value" not in text
         assert "api-version" not in text
         assert state["reasoning_effort"] == "low"
@@ -880,7 +925,7 @@ class TestUpdateState:
         with pytest.raises(SystemExit):
             cs.update_codex_config("openrouter", "openrouter/auto")
 
-    def test_openrouter_config_uses_env_key_and_clears_openai_state(self, tmp_path, monkeypatch):
+    def test_openrouter_config_uses_loopback_proxy_and_clears_openai_state(self, tmp_path, monkeypatch):
         codex_home = tmp_path / ".codex"
         switch_home = tmp_path / ".config" / "codexswitch"
         codex_home.mkdir(parents=True)
@@ -935,7 +980,7 @@ class TestUpdateState:
             in text
         )
         assert 'base_url = "http://127.0.0.1:14556/v1"' in text
-        assert 'env_key = "OPENROUTER_API_KEY"' in text
+        assert "env_key" not in text
         assert "[model_providers.openrouter.auth]" not in text
         assert "command =" not in text
         assert "model_reasoning_effort" not in text
@@ -955,9 +1000,6 @@ class TestUpdateState:
         switch_home.mkdir(parents=True)
         config = codex_home / "config.toml"
         state_path = switch_home / "config.json"
-        token_helper = tmp_path / "openrouter-token"
-        token_helper.write_text("")
-
         catalog = {
             "vendor/model-a": {"id": "vendor/model-a"},
             "vendor/model-b:free": {"id": "vendor/model-b:free"},
@@ -973,7 +1015,6 @@ class TestUpdateState:
             "OPENROUTER_CODEX_MODELS",
             switch_home / "openrouter/codex-models.json",
         )
-        monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
         monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
@@ -1007,9 +1048,6 @@ class TestOpenRouterCatalog:
         switch_home = tmp_path / ".config" / "codexswitch"
         codex_home.mkdir(parents=True)
         switch_home.mkdir(parents=True)
-        token_helper = tmp_path / "openrouter-token"
-        token_helper.write_text("")
-
         catalog = {
             "z-ai/glm-5.2": {
                 "id": "z-ai/glm-5.2",
@@ -1026,7 +1064,6 @@ class TestOpenRouterCatalog:
             "OPENROUTER_CODEX_MODELS",
             switch_home / "openrouter/codex-models.json",
         )
-        monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
         monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
