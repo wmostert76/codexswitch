@@ -70,8 +70,8 @@ distros, installs or updates the Codex CLI when needed, creates `.venv`,
 installs Textual, links commands into `/usr/local/bin`, and installs proxy
 systemd units without enabling them at boot. Commander starts only the proxy
 required by the selected provider immediately before Codex. On an existing
-git checkout, re-running `./install.sh`
-first fetches tags and performs a safe `git pull --ff-only`, so it can be used
+git checkout, re-running `./install.sh` fetches without modifying tags and
+performs a safe `git pull --ff-only`, so it can be used
 as the normal update command:
 
 ```bash

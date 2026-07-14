@@ -404,6 +404,37 @@ def main_branch_update_available() -> tuple[bool, str, str]:
     return local_rev != remote_rev, local_rev, remote_rev
 
 
+def fetch_release_tag(tag: str) -> None:
+    """Fetch only the requested release tag, ignoring unrelated tag conflicts."""
+    run(
+        [
+            "git",
+            "-C",
+            str(PROJECT_ROOT),
+            "fetch",
+            "--no-tags",
+            "origin",
+            f"refs/tags/{tag}:refs/tags/{tag}",
+        ]
+    )
+
+
+def pull_main_without_tags() -> None:
+    """Fast-forward main without letting historical tags block the update."""
+    run(
+        [
+            "git",
+            "-C",
+            str(PROJECT_ROOT),
+            "pull",
+            "--no-tags",
+            "--ff-only",
+            "origin",
+            "main",
+        ]
+    )
+
+
 def update_from_github(check_only: bool = False) -> bool:
     latest_tag, latest_url = latest_github_release()
     current_version = parse_version(VERSION)
@@ -425,8 +456,7 @@ def update_from_github(check_only: bool = False) -> bool:
                     "lokale repository heeft niet-gecommitte wijzigingen; "
                     "commit/stash eerst en draai daarna opnieuw: codexswitch update"
                 )
-            run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
-            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+            pull_main_without_tags()
             run_post_update_install(skip_self_update=True)
             print("CodexSwitch main bijgewerkt")
             return True
@@ -451,10 +481,10 @@ def update_from_github(check_only: bool = False) -> bool:
             "lokale repository heeft niet-gecommitte wijzigingen; "
             "commit/stash eerst en draai daarna opnieuw: codexswitch update"
         )
-    run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+    fetch_release_tag(latest_tag)
     branch = current_git_branch()
     if branch == "main":
-        run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+        pull_main_without_tags()
     else:
         run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
     run_post_update_install()
@@ -496,16 +526,15 @@ def auto_update_from_github() -> bool:
                 "CodexSwitch main-update gevonden; upgraden: "
                 f"{local_rev[:7]} -> {remote_rev[:7]}"
             )
-            run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
-            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+            pull_main_without_tags()
             run_post_update_install(skip_self_update=True)
             print("CodexSwitch main bijgewerkt")
             return True
         print(f"CodexSwitch release-update gevonden; upgraden: {VERSION} -> {latest_display}")
-        run(["git", "-C", str(PROJECT_ROOT), "fetch", "--tags", "origin"])
+        fetch_release_tag(latest_tag)
         branch = current_git_branch()
         if branch == "main":
-            run(["git", "-C", str(PROJECT_ROOT), "pull", "--ff-only", "origin", "main"])
+            pull_main_without_tags()
         else:
             run(["git", "-C", str(PROJECT_ROOT), "checkout", latest_tag])
         run_post_update_install()

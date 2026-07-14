@@ -53,11 +53,11 @@ maybe_self_update() {
   fi
   before=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
   echo "Checking CodexSwitch updates for $branch..."
-  git -C "$PROJECT_ROOT" fetch --tags origin
+  git -C "$PROJECT_ROOT" fetch --no-tags origin
   if [[ "$branch" == "main" ]]; then
-    git -C "$PROJECT_ROOT" pull --ff-only origin main
+    git -C "$PROJECT_ROOT" pull --no-tags --ff-only origin main
   else
-    git -C "$PROJECT_ROOT" pull --ff-only
+    git -C "$PROJECT_ROOT" pull --no-tags --ff-only
   fi
   after=$(git -C "$PROJECT_ROOT" rev-parse HEAD)
   if [[ "$before" != "$after" ]]; then

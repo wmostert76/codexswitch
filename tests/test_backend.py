@@ -377,12 +377,43 @@ def test_auto_update_main_branch_runs_install_without_self_update(monkeypatch):
 
     assert cs.auto_update_from_github() is True
 
-    assert (["git", "-C", str(cs.PROJECT_ROOT), "fetch", "--tags", "origin"], True) in calls
     assert (
-        ["git", "-C", str(cs.PROJECT_ROOT), "pull", "--ff-only", "origin", "main"],
+        [
+            "git",
+            "-C",
+            str(cs.PROJECT_ROOT),
+            "pull",
+            "--no-tags",
+            "--ff-only",
+            "origin",
+            "main",
+        ],
         True,
     ) in calls
     assert (["post-update-install", True], True) in calls
+
+
+def test_release_update_fetches_only_latest_tag(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v9.9.9", ""))
+    monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
+    monkeypatch.setattr(cs, "current_git_branch", lambda: "release-checkout")
+    monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append(cmd))
+    monkeypatch.setattr(cs, "run_post_update_install", lambda: calls.append(["install"]))
+
+    assert cs.update_from_github() is True
+
+    assert [
+        "git",
+        "-C",
+        str(cs.PROJECT_ROOT),
+        "fetch",
+        "--no-tags",
+        "origin",
+        "refs/tags/v9.9.9:refs/tags/v9.9.9",
+    ] in calls
+    assert ["git", "-C", str(cs.PROJECT_ROOT), "checkout", "v9.9.9"] in calls
+    assert not any("--tags" in call for call in calls)
 
 
 def test_post_update_install_uses_native_python_on_windows(monkeypatch):
