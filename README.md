@@ -137,6 +137,12 @@ Model search is case-insensitive. Use `↑`/`↓` inside the filtered results,
 filter. Single-letter aliases apply only on the main screen, so they do not
 interfere with typing in search or credential dialogs.
 
+OpenRouter keeps its search field visible because its catalog is much larger.
+Its model list includes input/output prices in USD per million tokens. Click
+the `MODEL` or `COST $/1M I/O` column heading to sort ascending; click the same
+heading again to reverse the order. Cost sorting uses the combined input and
+output price, while still displaying both values separately.
+
 Cached catalogs load in the background without a network refresh at startup.
 Use `F5` to refresh only the selected provider. The last usable catalog
 remains visible if a refresh fails, and Apply/Launch

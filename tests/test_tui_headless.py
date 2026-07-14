@@ -130,6 +130,10 @@ class FakeBackend(dict[str, Any]):
                 "context_length": 200_000,
                 "architecture": {"input_modalities": ["text"]},
                 "reasoning": {},
+                "pricing": {
+                    "prompt": "0.000002",
+                    "completion": "0.000006",
+                },
             },
             "vendor/think": {
                 "name": "Vendor Think",
@@ -137,6 +141,10 @@ class FakeBackend(dict[str, Any]):
                 "max_completion_tokens": 12_000,
                 "architecture": {"input_modalities": ["text"]},
                 "reasoning": {"mandatory": True},
+                "pricing": {
+                    "prompt": "0.0000005",
+                    "completion": "0.0000015",
+                },
             },
         }
 
@@ -757,6 +765,70 @@ def test_model_search_matches_full_id_and_display_name(app_factory):
                 "model:gpt-beta",
             }
             assert app.model == "gpt-beta"
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize("size", [(80, 24), (120, 40)])
+def test_openrouter_cost_column_sorting_and_persistent_search(
+    app_factory, size: tuple[int, int]
+):
+    app = app_factory(refresh_on_start=True)
+
+    async def run() -> None:
+        async with app.run_test(size=size) as pilot:
+            await app.workers.wait_for_complete()
+            await settle(pilot)
+            sources = app.query_one("#sources", OptionList)
+            highlight(sources, "provider:openrouter")
+            await settle(pilot)
+
+            model_filter = app.query_one("#model-filter", Input)
+            columns = app.query_one("#openrouter-model-columns")
+            models = app.query_one("#models", OptionList)
+            assert model_filter.styles.display != "none"
+            assert columns.styles.display != "none"
+            assert columns.region.width == model_filter.region.width
+            assert app.query_one("#model-sort-model").region.right == app.query_one(
+                "#model-sort-cost"
+            ).region.x
+            assert app.query_one("#model-sort-cost").region.right <= columns.region.right
+            assert [option.id for option in models.options] == [
+                "model:openrouter/auto",
+                "model:vendor/think",
+            ]
+            assert "$2/$6" in option_plain(
+                option_by_id(models, "model:openrouter/auto")
+            )
+            assert "$0.5/$1.5" in option_plain(
+                option_by_id(models, "model:vendor/think")
+            )
+
+            await pilot.click("#model-sort-cost")
+            await settle(pilot)
+            assert [option.id for option in models.options] == [
+                "model:vendor/think",
+                "model:openrouter/auto",
+            ]
+            assert "▲" in app.query_one("#model-sort-cost").render().plain
+
+            await pilot.click("#model-sort-cost")
+            await settle(pilot)
+            assert [option.id for option in models.options] == [
+                "model:openrouter/auto",
+                "model:vendor/think",
+            ]
+            assert "▼" in app.query_one("#model-sort-cost").render().plain
+
+            await pilot.click("#model-sort-model")
+            await settle(pilot)
+            assert "▲" in app.query_one("#model-sort-model").render().plain
+            await pilot.click("#model-filter")
+            await pilot.press(*"vendor think")
+            await settle(pilot)
+            assert [option.id for option in models.options] == [
+                "model:vendor/think"
+            ]
 
     asyncio.run(run())
 

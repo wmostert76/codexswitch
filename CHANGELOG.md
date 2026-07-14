@@ -2,6 +2,16 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.4.0] - 2026-07-14
+
+### Added
+
+- OpenRouter models now show input/output costs in USD per million tokens and
+  can be sorted in either direction by model ID or combined cost through
+  clickable column headings.
+- OpenRouter now keeps a dedicated model search field visible for fast
+  case-insensitive filtering by full model ID or display name.
+
 ## [1.3.0] - 2026-07-14
 
 ### Fixed
