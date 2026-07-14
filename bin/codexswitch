@@ -68,13 +68,16 @@ OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 OPENCODE_PROXY_URL = "http://127.0.0.1:14555/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_PROXY_URL = "http://127.0.0.1:14556/v1"
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_CONFIG_BACKUPS = 5
 PROXY_SERVICE = "codex-opencode-go-proxy.service"
+OPENROUTER_PROXY_SERVICE = "codex-openrouter-proxy.service"
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
 OPENROUTER_TOKEN_HELPER = shutil.which("openrouter-token") or str(PROJECT_ROOT / "bin/openrouter-token")
 PROXY_BIN = shutil.which("codex-opencode-go-proxy") or str(PROJECT_ROOT / "bin/codex-opencode-go-proxy")
+OPENROUTER_PROXY_BIN = shutil.which("codex-openrouter-proxy") or str(PROJECT_ROOT / "bin/codex-openrouter-proxy")
 if os.name == "nt":
     TUI_PYTHON = str(PROJECT_ROOT / ".venv/Scripts/python.exe")
 else:
@@ -973,6 +976,16 @@ def proxy_healthy() -> bool:
         return False
 
 
+def openrouter_proxy_healthy() -> bool:
+    import urllib.request
+
+    try:
+        with urllib.request.urlopen(f"{OPENROUTER_PROXY_URL}/health", timeout=1) as res:
+            return res.status == 200
+    except Exception:
+        return False
+
+
 def ensure_proxy() -> None:
     if proxy_healthy():
         return
@@ -990,6 +1003,37 @@ def ensure_proxy() -> None:
     time.sleep(0.5)
     if not proxy_healthy():
         die(f"OpenCode Go proxy startte niet; zie {log}")
+
+
+def ensure_openrouter_proxy() -> None:
+    if openrouter_proxy_healthy():
+        return
+    if shutil.which("systemctl"):
+        subprocess.run(
+            ["sudo", "systemctl", "start", OPENROUTER_PROXY_SERVICE],
+            check=False,
+        )
+        time.sleep(0.5)
+        if openrouter_proxy_healthy():
+            return
+    if not Path(OPENROUTER_PROXY_BIN).exists():
+        die(f"OpenRouter proxy ontbreekt: {OPENROUTER_PROXY_BIN}")
+    log = SWITCH_HOME / "openrouter-proxy.log"
+    SWITCH_HOME.mkdir(parents=True, exist_ok=True)
+    proxy_argv = (
+        [sys.executable, OPENROUTER_PROXY_BIN]
+        if os.name == "nt"
+        else [OPENROUTER_PROXY_BIN]
+    )
+    subprocess.Popen(
+        proxy_argv,
+        stdout=log.open("ab"),
+        stderr=subprocess.STDOUT,
+        start_new_session=True,
+    )
+    time.sleep(0.5)
+    if not openrouter_proxy_healthy():
+        die(f"OpenRouter proxy startte niet; zie {log}")
 
 
 def require_proxy_service_support() -> None:
@@ -1570,6 +1614,7 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
     if provider == "openrouter" and not openrouter_key_present():
         die("OpenRouter API-key ontbreekt; gebruik: codexswitch auth openrouter")
     if provider == "openrouter":
+        ensure_openrouter_proxy()
         model = resolve_openrouter_model(model)
     CODEX_HOME.mkdir(parents=True, exist_ok=True)
     ensure_home_owner(CODEX_CONFIG)
@@ -1676,7 +1721,7 @@ env_http_headers = {{ "api-key" = "{AZURE_API_KEY_ENV}" }}
 
 [model_providers.openrouter]
 name = "OpenRouter"
-base_url = "{OPENROUTER_BASE_URL}"
+base_url = "{OPENROUTER_PROXY_URL}"
 wire_api = "responses"
 env_key = "{OPENROUTER_API_KEY_ENV}"
 '''

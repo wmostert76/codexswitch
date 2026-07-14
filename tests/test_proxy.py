@@ -349,6 +349,68 @@ class TestModelReasoning:
 
 
 class TestUpstreamChat:
+    def test_openrouter_flattens_all_codex_tools_and_preserves_reasoning(
+        self, monkeypatch
+    ):
+        captured = {}
+
+        class FakeResponse:
+            pass
+
+        def fake_urlopen(req, timeout):
+            captured["url"] = req.full_url
+            captured["payload"] = json.loads(req.data.decode())
+            captured["authorization"] = req.headers["Authorization"]
+            return FakeResponse()
+
+        monkeypatch.setattr(proxy, "PROVIDER", "openrouter")
+        monkeypatch.setattr(proxy, "UPSTREAM", "https://openrouter.example/v1")
+        monkeypatch.setattr(proxy, "openrouter_key", lambda: "router-token")
+        monkeypatch.setattr(proxy.urllib.request, "urlopen", fake_urlopen)
+
+        response = proxy.upstream_chat(
+            {
+                "model": "qwen/qwen3.7-plus",
+                "input": "use a tool",
+                "reasoning": {"effort": "high"},
+                "tools": [
+                    {
+                        "type": "namespace",
+                        "name": "plugin",
+                        "tools": [
+                            {
+                                "type": "function",
+                                "name": "search",
+                                "parameters": {"type": "object"},
+                            }
+                        ],
+                    },
+                    {"type": "custom", "name": "apply_patch"},
+                    {
+                        "type": "function",
+                        "name": "shell",
+                        "parameters": {"type": "object"},
+                    },
+                ],
+            }
+        )
+
+        assert response is not None
+        assert captured["url"] == "https://openrouter.example/v1/chat/completions"
+        assert captured["authorization"] == "Bearer router-token"
+        payload = captured["payload"]
+        assert payload["reasoning"] == {"effort": "high"}
+        assert [tool["type"] for tool in payload["tools"]] == [
+            "function",
+            "function",
+            "function",
+        ]
+        assert [tool["function"]["name"] for tool in payload["tools"]] == [
+            "plugin__search",
+            "apply_patch",
+            "shell",
+        ]
+
     def test_xhigh_400_falls_back_to_medium_reasoning(self, monkeypatch):
         payloads = []
 

@@ -60,6 +60,7 @@ jobs:
             bin/codexswitch \
             bin/codexswitch-tui \
             bin/codex-opencode-go-proxy \
+            bin/codex-openrouter-proxy \
             bin/opencode-go-token \
             bin/openrouter-token \
             bin/codexswitch_common.py

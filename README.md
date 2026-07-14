@@ -30,7 +30,7 @@ It is built for three workflows:
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
 | Azure OpenAI | Responses v1 endpoint/API-key vault storage and fixed `gpt-5.6-sol` model selection |
 | OpenCode Go | Own API-key store, local Responses-compatible proxy and model catalog |
-| OpenRouter | API-key storage, model catalog refresh and Codex provider config |
+| OpenRouter | API-key storage, model catalog and a tool-compatible Responses proxy |
 
 ## Highlights
 
@@ -190,6 +190,12 @@ codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
 codexswitch use openrouter anthropic/claude-sonnet-4.5
 ```
+
+OpenRouter runs through a loopback compatibility proxy on port `14556`. It
+translates Codex native namespace and custom tools into standard OpenRouter
+function calls and maps the results back, so plugins, MCP tools, shell tools
+and `apply_patch` remain available. The OpenRouter key stays in the encrypted
+vault and is never written to `config.toml` or proxy logs.
 
 ## Authentication and storage
 

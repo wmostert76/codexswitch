@@ -26,15 +26,36 @@ from codexswitch_common import (
 
 
 HOME = user_home()
+PROVIDER = os.environ.get("CODEXSWITCH_PROXY_PROVIDER", "opencode-go")
 AUTH_PATH = HOME / ".config/codexswitch/opencode-go/auth.json"
+OPENROUTER_AUTH_PATH = HOME / ".config/codexswitch/openrouter/auth.json"
 LEGACY_AUTH_PATH = HOME / ".local/share/opencode/auth.json"
 CONFIG_PATH = HOME / ".config/opencode/opencode.json"
 SWITCH_MODELS_CACHE_PATH = HOME / ".config/codexswitch/opencode-go/models.json"
 MODELS_CACHE_PATH = HOME / ".cache/opencode/models.json"
 CODEX_CONFIG_PATH = HOME / ".codex/config.toml"
-UPSTREAM = os.environ.get("CODEX_OPENCODE_UPSTREAM", "https://opencode.ai/zen/go/v1")
-HOST = os.environ.get("CODEX_OPENCODE_PROXY_HOST", "127.0.0.1")
-PORT = int(os.environ.get("CODEX_OPENCODE_PROXY_PORT", "14555"))
+DEFAULT_UPSTREAM = (
+    "https://openrouter.ai/api/v1"
+    if PROVIDER == "openrouter"
+    else "https://opencode.ai/zen/go/v1"
+)
+UPSTREAM = os.environ.get(
+    "CODEXSWITCH_PROXY_UPSTREAM",
+    os.environ.get("CODEX_OPENCODE_UPSTREAM", DEFAULT_UPSTREAM),
+)
+HOST = os.environ.get(
+    "CODEXSWITCH_PROXY_HOST",
+    os.environ.get("CODEX_OPENCODE_PROXY_HOST", "127.0.0.1"),
+)
+PORT = int(
+    os.environ.get(
+        "CODEXSWITCH_PROXY_PORT",
+        os.environ.get(
+            "CODEX_OPENCODE_PROXY_PORT",
+            "14556" if PROVIDER == "openrouter" else "14555",
+        ),
+    )
+)
 # Optional bearer token for proxy authentication. When set, clients must
 # send "Authorization: Bearer <token>". Unset = no auth (loopback only).
 PROXY_TOKEN = os.environ.get("CODEX_OPENCODE_PROXY_TOKEN", "")
@@ -82,6 +103,21 @@ def opencode_key() -> str:
     if not key:
         raise RuntimeError(f"missing opencode-go key in {AUTH_PATH}")
     return key
+
+
+def openrouter_key() -> str:
+    try:
+        data = read_secret_json(OPENROUTER_AUTH_PATH, {})
+    except FileNotFoundError:
+        data = {}
+    key = data.get("api_key") if isinstance(data, dict) else None
+    if not key:
+        raise RuntimeError(f"missing openrouter key in {OPENROUTER_AUTH_PATH}")
+    return key
+
+
+def provider_key() -> str:
+    return openrouter_key() if PROVIDER == "openrouter" else opencode_key()
 
 
 def opencode_catalog() -> dict[str, dict]:
@@ -608,17 +644,24 @@ def upstream_chat(body: dict, context: ToolContext | None = None):
         base_payload["max_tokens"] = body["max_output_tokens"]
     model_id = str(body.get("model"))
     effort = (reasoning or {}).get("effort") or configured_reasoning_effort(model_id)
-    model_meta = opencode_catalog().get(model_id, {})
-    _, _, effort_options = model_reasoning(model_id, model_meta)
+    if PROVIDER == "openrouter":
+        effort_options = {}
+    else:
+        model_meta = opencode_catalog().get(model_id, {})
+        _, _, effort_options = model_reasoning(model_id, model_meta)
     effort_sequence = [effort]
-    if effort == "xhigh" and "medium" in effort_options:
+    if PROVIDER != "openrouter" and effort == "xhigh" and "medium" in effort_options:
         effort_sequence.append("medium")
 
     headers = {
-        "authorization": f"Bearer {opencode_key()}",
+        "authorization": f"Bearer {provider_key()}",
         "content-type": "application/json",
         "accept": "text/event-stream" if base_payload["stream"] else "application/json",
-        "user-agent": "opencode/1.17.9",
+        "user-agent": (
+            "codexswitch-openrouter-proxy/1"
+            if PROVIDER == "openrouter"
+            else "opencode/1.17.9"
+        ),
     }
     url = f"{UPSTREAM}/chat/completions"
 
@@ -631,6 +674,11 @@ def upstream_chat(body: dict, context: ToolContext | None = None):
             payload["reasoning_effort"] = options["reasoningEffort"]
         if "thinking" in options:
             payload["thinking"] = options["thinking"]
+        if PROVIDER == "openrouter" and effort:
+            payload["reasoning"] = {
+                **(reasoning if isinstance(reasoning, dict) else {}),
+                "effort": effort,
+            }
         if current_effort:
             print(f"upstream model={body.get('model')} reasoning={current_effort}", flush=True)
         data = json.dumps(payload).encode()
@@ -677,7 +725,7 @@ class Handler(BaseHTTPRequestHandler):
         auth = self.headers.get("authorization", "")
         candidates = [PROXY_TOKEN]
         try:
-            candidates.append(opencode_key())
+            candidates.append(provider_key())
         except Exception:
             pass
         return any(
@@ -960,7 +1008,7 @@ class Handler(BaseHTTPRequestHandler):
 
 def main():
     server = ThreadingHTTPServer((HOST, PORT), Handler)
-    print(f"codex-opencode-go-proxy listening on http://{HOST}:{PORT}/v1")
+    print(f"codexswitch {PROVIDER} proxy listening on http://{HOST}:{PORT}/v1")
     server.serve_forever()
 
 

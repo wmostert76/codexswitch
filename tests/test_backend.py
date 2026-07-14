@@ -875,6 +875,7 @@ class TestUpdateState:
         monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
         monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_home / "config.json")
         monkeypatch.setattr(cs, "OPENROUTER_AUTH", switch_home / "openrouter/auth.json")
+        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
 
         with pytest.raises(SystemExit):
             cs.update_codex_config("openrouter", "openrouter/auto")
@@ -911,6 +912,7 @@ class TestUpdateState:
             switch_home / "openrouter/codex-models.json",
         )
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(
             cs,
             "openrouter_model_catalog",
@@ -932,7 +934,7 @@ class TestUpdateState:
             f"model_catalog_json = {cs.toml_string(str(cs.OPENROUTER_CODEX_MODELS))}"
             in text
         )
-        assert 'base_url = "https://openrouter.ai/api/v1"' in text
+        assert 'base_url = "http://127.0.0.1:14556/v1"' in text
         assert 'env_key = "OPENROUTER_API_KEY"' in text
         assert "[model_providers.openrouter.auth]" not in text
         assert "command =" not in text
@@ -973,6 +975,7 @@ class TestUpdateState:
         )
         monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 
@@ -1025,6 +1028,7 @@ class TestOpenRouterCatalog:
         )
         monkeypatch.setattr(cs, "OPENROUTER_TOKEN_HELPER", str(token_helper))
         monkeypatch.setattr(cs, "openrouter_key_present", lambda: True)
+        monkeypatch.setattr(cs, "ensure_openrouter_proxy", lambda: None)
         monkeypatch.setattr(cs, "openrouter_model_catalog", lambda refresh=False: catalog)
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 

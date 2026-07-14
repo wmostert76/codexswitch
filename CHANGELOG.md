@@ -2,6 +2,16 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.4.2] - 2026-07-14
+
+### Fixed
+
+- OpenRouter now runs through a dedicated loopback compatibility proxy that
+  translates Codex native namespace, custom and function tools into standard
+  OpenRouter function calls and maps tool results back to Codex. This fixes
+  `No endpoints found that support the native namespace tool type` without
+  disabling plugins, MCP tools, shell tools or `apply_patch`.
+
 ## [1.4.1] - 2026-07-14
 
 ### Changed
