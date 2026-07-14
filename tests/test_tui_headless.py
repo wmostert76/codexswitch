@@ -214,6 +214,9 @@ class FakeBackend(dict[str, Any]):
                 "codex_bin": lambda: "/usr/bin/codex-test",
                 "codex_launch_environment": lambda: {"TEST_CODEX_ENV": "1"},
                 "proxy_statuses": lambda: {"unified": True},
+                "ensure_unified_provider_proxy": lambda: self.calls.append(
+                    ("ensure-unified-proxy",)
+                ),
                 "ensure_provider_proxy": lambda provider: self.calls.append(
                     ("ensure-proxy", provider)
                 ),
@@ -925,6 +928,7 @@ def test_startup_shows_unified_proxy_status(app_factory, fake_backend: FakeBacke
             assert "PROVIDER PROXY" in status
             assert "ON" in status
             assert "OpenCode Go / OpenRouter / Azure" in status
+            assert ("ensure-unified-proxy",) in fake_backend.calls
 
     asyncio.run(run())
 

@@ -68,8 +68,9 @@ codexswitch tui
 The installer detects missing Python/venv/npm dependencies on common Linux
 distros, installs or updates the Codex CLI when needed, creates `.venv`,
 installs Textual, links commands into `/usr/local/bin`, and installs proxy
-systemd units without enabling them at boot. Commander starts only the proxy
-required by the selected provider immediately before Codex. On an existing
+systemd units without enabling them at boot. Commander starts the unified
+provider proxy when the TUI opens and checks it again immediately before Codex.
+On an existing
 git checkout, re-running `./install.sh` fetches without modifying tags and
 performs a safe `git pull --ff-only`, so it can be used
 as the normal update command:

@@ -2,13 +2,20 @@
 
 All notable CodexSwitch changes are documented here.
 
-## [1.7.0] - 2026-07-14
+## [1.7.1] - 2026-07-14
 
 ### Fixed
 
 - Updates now fetch only the requested release tag and ignore unrelated
   historical tag conflicts, preventing a rewritten old tag from blocking both
   manual and automatic upgrades. Installer branch updates also skip tags.
+
+### Changed
+
+- Commander now starts the unified provider proxy when the TUI opens, so its
+  health is ready before selecting or launching a non-native provider.
+
+## [1.7.0] - 2026-07-14
 
 ### Changed
 

@@ -1625,6 +1625,10 @@ class CodexSwitchApp(App):
         statuses = self.safe_call("proxy_statuses", {})
         return {"unified": bool(statuses.get("unified"))}
 
+    def start_proxy_and_read_status_sync(self) -> dict[str, bool]:
+        self.safe_call("ensure_unified_provider_proxy", None)
+        return self.proxy_statuses_sync()
+
     async def refresh_proxy_statuses(self) -> None:
         self.proxy_states = await asyncio.to_thread(self.proxy_statuses_sync)
         self.render_proxy_statuses()
@@ -2057,7 +2061,7 @@ class CodexSwitchApp(App):
     async def startup_refresh_worker(self) -> None:
         providers = ("openai", "opencode-go", "openrouter")
         proxy_task = asyncio.create_task(
-            asyncio.to_thread(self.proxy_statuses_sync)
+            asyncio.to_thread(self.start_proxy_and_read_status_sync)
         )
         self.busy_providers.update(providers)
         self.vault_label = "CHECKING"

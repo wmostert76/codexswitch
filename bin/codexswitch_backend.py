@@ -1093,11 +1093,8 @@ def migrate_provider_proxy_url(provider: str) -> None:
     )
 
 
-def ensure_provider_proxy(provider: str) -> None:
-    """Start the unified proxy when the selected provider requires it."""
-    if provider not in {"opencode-go", "openrouter", "azure"}:
-        return
-    migrate_provider_proxy_url(provider)
+def ensure_unified_provider_proxy() -> None:
+    """Start the unified provider proxy when it is not already healthy."""
     if proxy_healthy():
         return
     if shutil.which("systemctl"):
@@ -1119,6 +1116,14 @@ def ensure_provider_proxy(provider: str) -> None:
     time.sleep(0.5)
     if not proxy_healthy():
         die(f"Provider proxy startte niet; zie {log}")
+
+
+def ensure_provider_proxy(provider: str) -> None:
+    """Prepare and start the unified proxy for the selected provider."""
+    if provider not in {"opencode-go", "openrouter", "azure"}:
+        return
+    migrate_provider_proxy_url(provider)
+    ensure_unified_provider_proxy()
 
 
 def require_proxy_service_support() -> None:
