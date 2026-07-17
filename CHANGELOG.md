@@ -2,6 +2,78 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [1.8.0] - 2026-07-17
+
+### Added
+
+- Added Claude Code as an alternative client for the existing provider, model
+  and reasoning selection. Commander can now apply and launch either Codex or
+  Claude with the same active configuration.
+- Added an Anthropic Messages compatibility route to the unified provider
+  proxy for Azure OpenAI, OpenCode Go, OpenRouter and an explicitly
+  experimental native OpenAI Codex OAuth route.
+- Added persistent, merge-safe Claude settings and an API-key helper that
+  starts the loopback proxy on demand without storing provider credentials in
+  Claude configuration.
+- Added Microsoft Foundry as a Claude-only provider using Claude Code's native,
+  proxy-free Foundry integration. It supports Entra ID, vault-backed API keys
+  and custom deployment names without writing keys to Claude settings.
+- Added proxy-free Claude Code routing for OpenRouter-hosted Anthropic models
+  through OpenRouter's native Messages endpoint. Non-Anthropic OpenRouter
+  models retain the compatibility proxy.
+
+### Fixed
+
+- The experimental OpenAI OAuth transport now conforms to the ChatGPT Codex
+  endpoint's required streaming-only, non-stored request format and rebuilds
+  complete Responses output from SSE events. Live Claude Code verification
+  passed with the Read, Write and Bash tools on the active OpenAI account.
+- Extended live OpenAI verification to Edit, Glob, Grep, WebSearch, WebFetch,
+  NotebookEdit, image reads, multi-call tool responses and a local MCP echo
+  server. Agent subcalls return correct results but can continue scheduling
+  calls instead of terminating; TodoWrite is unavailable in Claude Code
+  2.1.211 and is not advertised as supported.
+- Repeated the instrumented Claude/OpenAI tool matrix for `gpt-5.5`,
+  `gpt-5.4`, `gpt-5.4-mini` and `gpt-5.3-codex-spark`. Every model passed
+  Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch, NotebookEdit,
+  image reads, a local MCP echo call and a bounded single Agent subcall.
+- Tested the current OpenRouter flagships through Claude Code:
+  `deepseek/deepseek-v4-pro`, `z-ai/glm-5.2` and `qwen/qwen3.7-max` passed the
+  full built-in tool matrix, MCP and Agent. `moonshotai/kimi-k3` passed text,
+  Read, Write, Edit, Glob, Bash, web, image reads and Agent, but Grep,
+  NotebookEdit and MCP timed out amid repeated upstream failures.
+- Verified `moonshotai/kimi-k2.7-code` as the more reliable Kimi fallback: it
+  passed the complete built-in tool matrix, image reads, MCP and Agent in the
+  same Claude Code/OpenRouter test setup where Kimi K3 remained partial.
+- Retried the complete Kimi K3 matrix from a clean Claude configuration; the
+  run reached Read but OpenRouter rate-limited the continuation with HTTP 429
+  after roughly 290 seconds. The retry is recorded as inconclusive rather than
+  as a new tool-compatibility failure.
+- Verified `anthropic/claude-sonnet-5` directly from Claude Code to OpenRouter
+  with the local proxy stopped. Read, Write, Edit, Glob, Grep, Bash, web,
+  NotebookEdit, image reads, MCP and Agent all passed through OpenRouter's
+  Anthropic Messages endpoint.
+- Verified Claude Code end to end against Azure OpenAI `gpt-5.6-sol`: text,
+  Read, Write, Edit, Glob, Grep, Bash, WebSearch, WebFetch, NotebookEdit, image
+  reads, multi-tool tasks, a local MCP echo tool and a bounded Agent subcall
+  all passed through the unified proxy.
+- Codex now connects directly to Azure OpenAI Responses v1 instead of routing
+  through the local proxy. A command-backed vault helper supplies auth and a
+  local Codex catalog prevents incompatible Azure `/models` refreshes. Live
+  direct verification passed shell, file patching, web search and MCP tools.
+- Commander no longer starts the compatibility proxy during catalog loading;
+  proxy-backed clients start it on demand immediately before launch.
+- Claude health probes and disconnected streaming clients are now handled
+  without HTTP 501 responses or BrokenPipe tracebacks.
+- Claude compatibility routes now use only the configured `apiKeyHelper` for
+  loopback authentication, avoiding Claude Code's conflicting-auth warning
+  when `ANTHROPIC_AUTH_TOKEN` and `apiKeyHelper` were both configured.
+- Installation now stops a detached proxy launched through the installed
+  symlink and preserves/replaces a legacy per-user launcher that would shadow
+  the current checkout on `PATH`.
+- Claude launches now resolve npm's installed platform-native executable when
+  the generated `claude` symlink points at the non-executable fallback script.
+
 ## [1.7.3] - 2026-07-14
 
 ### Fixed

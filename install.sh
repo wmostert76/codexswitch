@@ -151,9 +151,28 @@ ensure_codex_cli() {
   "${SUDO[@]}" npm install -g @openai/codex
 }
 
+ensure_claude_cli() {
+  if command -v claude >/dev/null 2>&1; then
+    claude update || true
+    return
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    echo "npm is required to install Claude Code" >&2
+    exit 1
+  fi
+  echo "Installing Claude Code via npm"
+  "${SUDO[@]}" npm install -g @anthropic-ai/claude-code
+}
+
 maybe_self_update
 ensure_system_dependencies
 ensure_codex_cli
+ensure_claude_cli
+
+# A detached pre-upgrade proxy keeps its old Python modules in memory. Its
+# argv may contain either the checkout path or the /usr/local/bin symlink, so
+# match the command basename before installing the refreshed symlink.
+pkill -f '(^|/)codex-provider-proxy($| )' 2>/dev/null || true
 
 echo "Installing CodexSwitch for $TARGET_USER"
 if [[ $(id -u) -eq 0 && "$TARGET_USER" != "root" ]]; then
@@ -167,9 +186,19 @@ else
 fi
 
 sudo install -d -m 755 /usr/local/bin
-for command in codexswitch codex-provider-proxy opencode-go-token; do
+for command in codexswitch codex-provider-proxy codexswitch-azure-token codexswitch-claude-token opencode-go-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
+
+# Replace a legacy per-user CodexSwitch binary that would otherwise shadow the
+# canonical /usr/local/bin launcher. Preserve it as a backup for manual recovery.
+legacy_user_command="$TARGET_HOME/.local/bin/codexswitch"
+if [[ -f "$legacy_user_command" && ! -L "$legacy_user_command" ]]; then
+  legacy_backup="$legacy_user_command.legacy-$(date +%Y%m%d-%H%M%S)"
+  mv "$legacy_user_command" "$legacy_backup"
+  ln -s "$PROJECT_ROOT/bin/codexswitch" "$legacy_user_command"
+  echo "Preserved shadowing legacy launcher as: $legacy_backup"
+fi
 sudo rm -f /usr/local/bin/openswitch \
   /usr/local/bin/codex-opencode-go-proxy \
   /usr/local/bin/codex-openrouter-proxy \
@@ -186,4 +215,4 @@ sudo systemctl daemon-reload
 
 echo
 echo "Installed. Start with: codexswitch"
-echo "The provider proxy starts as a background process when Commander opens."
+echo "The provider proxy starts on demand for compatibility-backed launches."

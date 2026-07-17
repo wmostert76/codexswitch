@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""Start the loopback proxy and return Claude Code's local helper token."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codexswitch_backend import (
+    CLAUDE_PROXY_TOKEN,
+    SWITCH_CONFIG,
+    ensure_unified_provider_proxy,
+    openrouter_claude_direct,
+    openrouter_credentials,
+    read_json,
+)
+
+
+def main() -> int:
+    state = read_json(SWITCH_CONFIG, {})
+    provider = state.get("provider") if isinstance(state, dict) else None
+    model = state.get("model") if isinstance(state, dict) else None
+    if (
+        provider == "openrouter"
+        and isinstance(model, str)
+        and openrouter_claude_direct(model)
+    ):
+        key = openrouter_credentials().get("api_key")
+        if not key:
+            print("OpenRouter API-key ontbreekt", file=sys.stderr)
+            return 1
+        print(key)
+        return 0
+    ensure_unified_provider_proxy()
+    print(CLAUDE_PROXY_TOKEN)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

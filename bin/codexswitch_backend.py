@@ -63,6 +63,13 @@ AZURE_DEFAULT_REASONING_EFFORT = "low"
 AZURE_DEFAULT_ENDPOINT = ""
 AZURE_DEFAULT_API_VERSION = "v1"
 AZURE_API_KEY_ENV = "AZURE_OPENAI_API_KEY"
+FOUNDRY_MODELS = [
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-sonnet-4-6",
+    "claude-opus-4-6",
+    "claude-haiku-4-5",
+]
 DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
 OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENROUTER_CODEX_COMPATIBILITY_TESTED_AT = "2026-07-14"
@@ -116,12 +123,17 @@ OPENCODE_BASE_URL = "https://opencode.ai/zen/go/v1"
 PROVIDER_PROXY_URL = "http://127.0.0.1:14555"
 OPENCODE_PROXY_URL = f"{PROVIDER_PROXY_URL}/opencode-go/v1"
 OPENROUTER_BASE_URL = "https://openrouter.ai/api/v1"
+OPENROUTER_ANTHROPIC_BASE_URL = "https://openrouter.ai/api"
 OPENROUTER_PROXY_URL = f"{PROVIDER_PROXY_URL}/openrouter/v1"
 AZURE_PROXY_URL = f"{PROVIDER_PROXY_URL}/azure/v1"
+CLAUDE_PROXY_TOKEN = "codexswitch-loopback"
 OPENROUTER_API_KEY_ENV = "OPENROUTER_API_KEY"
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 MAX_CONFIG_BACKUPS = 5
 TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/opencode-go-token")
+AZURE_TOKEN_HELPER = shutil.which("codexswitch-azure-token") or str(
+    PROJECT_ROOT / "bin/codexswitch-azure-token"
+)
 PROXY_BIN = shutil.which("codex-provider-proxy") or str(PROJECT_ROOT / "bin/codex-provider-proxy")
 if os.name == "nt":
     TUI_PYTHON = str(PROJECT_ROOT / ".venv/Scripts/python.exe")
@@ -144,10 +156,14 @@ def user_home() -> Path:
 HOME = user_home()
 CODEX_HOME = Path(os.environ.get("CODEX_HOME", HOME / ".codex")).expanduser()
 CODEX_CONFIG = CODEX_HOME / "config.toml"
+CLAUDE_HOME = Path(os.environ.get("CLAUDE_CONFIG_DIR", HOME / ".claude")).expanduser()
+CLAUDE_SETTINGS = CLAUDE_HOME / "settings.json"
 SWITCH_HOME = HOME / ".config/codexswitch"
 SWITCH_CONFIG = SWITCH_HOME / "config.json"
 OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
 AZURE_AUTH = SWITCH_HOME / "azure/auth.json"
+AZURE_CODEX_MODELS = SWITCH_HOME / "azure/codex-models.json"
+FOUNDRY_AUTH = SWITCH_HOME / "foundry/auth.json"
 OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
 OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
 OPENROUTER_CODEX_MODELS = SWITCH_HOME / "openrouter/codex-models.json"
@@ -874,7 +890,7 @@ def migrate_secret_file(path: Path) -> bool:
 
 def migrate_vault() -> None:
     migrated = 0
-    for path in [AZURE_AUTH, OPENROUTER_AUTH, OPENCODE_GO_AUTH]:
+    for path in [AZURE_AUTH, FOUNDRY_AUTH, OPENROUTER_AUTH, OPENCODE_GO_AUTH]:
         if migrate_secret_file(path):
             migrated += 1
     if OPENAI_ACCOUNTS_DIR.exists():
@@ -995,6 +1011,58 @@ def azure_credentials_present() -> bool:
     return bool(data.get("endpoint") and data.get("api_key"))
 
 
+def normalize_foundry_endpoint(endpoint_or_resource: str) -> str:
+    """Return a Microsoft Foundry resource base URL without /anthropic."""
+    value = endpoint_or_resource.strip().rstrip("/")
+    if not value:
+        die("Foundry resource of endpoint is leeg")
+    if "://" not in value:
+        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", value):
+            die("Foundry resource bevat ongeldige tekens")
+        return f"https://{value}.services.ai.azure.com"
+    parsed = urlsplit(value)
+    if parsed.scheme != "https" or not parsed.netloc:
+        die("Foundry endpoint moet een geldige https-URL zijn")
+    if parsed.query or parsed.fragment:
+        die("Foundry endpoint mag geen query of fragment bevatten")
+    path = parsed.path.rstrip("/")
+    if path.endswith("/anthropic"):
+        path = path[: -len("/anthropic")]
+    if path:
+        die("Foundry endpoint moet de resource-base-URL zijn, zonder pad")
+    return urlunsplit((parsed.scheme, parsed.netloc, "", "", ""))
+
+
+def save_foundry_credentials(
+    endpoint_or_resource: str, key: str = "", deployments: str = ""
+) -> None:
+    endpoint = normalize_foundry_endpoint(endpoint_or_resource)
+    data = {"endpoint": endpoint}
+    normalized_key = key.strip()
+    if normalized_key:
+        data["api_key"] = normalized_key
+    models = list(
+        dict.fromkeys(
+            model.strip()
+            for model in deployments.split(",")
+            if model.strip()
+        )
+    )
+    if models:
+        data["models"] = models
+    vault_write_secret_json(FOUNDRY_AUTH, data, SWITCH_HOME)
+    print("Microsoft Foundry configuratie opgeslagen")
+
+
+def foundry_credentials() -> dict:
+    data = vault_read_secret_json(FOUNDRY_AUTH, {}, SWITCH_HOME)
+    return data if isinstance(data, dict) else {}
+
+
+def foundry_credentials_present() -> bool:
+    return bool(foundry_credentials().get("endpoint"))
+
+
 def opencode_go_key_present() -> bool:
     data = vault_read_secret_json(OPENCODE_GO_AUTH, {}, SWITCH_HOME)
     if isinstance(data, dict) and data.get("api_key"):
@@ -1011,6 +1079,202 @@ def codex_bin() -> str:
     if not found:
         die("codex niet gevonden in PATH")
     return found
+
+
+def claude_bin() -> str:
+    found = shutil.which("claude")
+    if not found:
+        die("claude niet gevonden in PATH; draai ./install.sh")
+    shim = Path(found)
+    try:
+        resolved = shim.resolve()
+    except OSError:
+        resolved = shim
+    if resolved.name == "claude.exe" and resolved.parent.name == "bin":
+        package_root = resolved.parent.parent
+        candidates = sorted(
+            package_root.glob(
+                "node_modules/@anthropic-ai/claude-code-*/claude"
+            )
+        )
+        for candidate in candidates:
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return str(candidate)
+    return found
+
+
+def active_client() -> str:
+    state = read_json(SWITCH_CONFIG, {})
+    client = state.get("client", "codex") if isinstance(state, dict) else "codex"
+    return client if client in {"codex", "claude"} else "codex"
+
+
+def claude_proxy_url(provider: str) -> str:
+    return f"{PROVIDER_PROXY_URL}/claude/{provider}"
+
+
+def openrouter_claude_direct(model: str) -> bool:
+    """Return whether OpenRouter exposes this model through its Anthropic skin."""
+    return model.startswith(("anthropic/", "~anthropic/"))
+
+
+CLAUDE_PROXY_ENV_KEYS = {
+    "ANTHROPIC_BASE_URL",
+    "ANTHROPIC_AUTH_TOKEN",
+    "ANTHROPIC_API_KEY",
+}
+CLAUDE_FOUNDRY_ENV_KEYS = {
+    "CLAUDE_CODE_USE_FOUNDRY",
+    "ANTHROPIC_FOUNDRY_RESOURCE",
+    "ANTHROPIC_FOUNDRY_BASE_URL",
+    "ANTHROPIC_FOUNDRY_API_KEY",
+}
+
+
+def _clear_environment_keys(environment: dict, keys: set[str]) -> None:
+    for key in keys:
+        environment.pop(key, None)
+
+
+def claude_provider_environment(
+    provider: str, model: str, include_secret: bool
+) -> dict[str, str]:
+    """Build only the provider-owned environment for a Claude launch."""
+    environment = {
+        "ANTHROPIC_MODEL": model,
+        "ANTHROPIC_DEFAULT_SONNET_MODEL": model,
+        "ANTHROPIC_DEFAULT_OPUS_MODEL": model,
+        "ANTHROPIC_DEFAULT_HAIKU_MODEL": model,
+    }
+    if provider == "foundry":
+        credentials = foundry_credentials()
+        endpoint = credentials.get("endpoint")
+        if not endpoint:
+            die("Microsoft Foundry configuratie ontbreekt; gebruik: codexswitch auth foundry")
+        environment.update(
+            {
+                "CLAUDE_CODE_USE_FOUNDRY": "1",
+                "ANTHROPIC_FOUNDRY_BASE_URL": str(endpoint),
+            }
+        )
+        key = credentials.get("api_key")
+        if include_secret and key:
+            environment["ANTHROPIC_FOUNDRY_API_KEY"] = str(key)
+        return environment
+    if provider == "openrouter" and openrouter_claude_direct(model):
+        environment.update(
+            {
+                "ANTHROPIC_BASE_URL": OPENROUTER_ANTHROPIC_BASE_URL,
+                # OpenRouter explicitly requires this to prevent Claude Code
+                # from falling back to cached Anthropic API-key auth.
+                "ANTHROPIC_API_KEY": "",
+            }
+        )
+        return environment
+    environment.update(
+        {
+            "ANTHROPIC_BASE_URL": claude_proxy_url(provider),
+        }
+    )
+    return environment
+
+
+def update_claude_settings(provider: str, model: str, reasoning: str | None) -> None:
+    """Merge CodexSwitch's Claude environment into the user's settings."""
+    settings = read_json(CLAUDE_SETTINGS, {})
+    if not isinstance(settings, dict):
+        die(f"{CLAUDE_SETTINGS} moet een JSON-object bevatten")
+    environment = settings.get("env", {})
+    if not isinstance(environment, dict):
+        die(f"env in {CLAUDE_SETTINGS} moet een JSON-object bevatten")
+    settings = dict(settings)
+    environment = dict(environment)
+    _clear_environment_keys(environment, CLAUDE_PROXY_ENV_KEYS)
+    _clear_environment_keys(environment, CLAUDE_FOUNDRY_ENV_KEYS)
+    environment.update(claude_provider_environment(provider, model, False))
+    if reasoning:
+        environment["CODEXSWITCH_REASONING_EFFORT"] = reasoning
+    else:
+        environment.pop("CODEXSWITCH_REASONING_EFFORT", None)
+    settings["env"] = environment
+    helper = shutil.which("codexswitch-claude-token") or str(
+        PROJECT_ROOT / "bin/codexswitch-claude-token"
+    )
+    if provider == "foundry":
+        if settings.get("apiKeyHelper") == helper:
+            settings.pop("apiKeyHelper", None)
+    else:
+        settings["apiKeyHelper"] = helper
+    CLAUDE_HOME.mkdir(parents=True, exist_ok=True)
+    os.chmod(CLAUDE_HOME, 0o700)
+    if CLAUDE_SETTINGS.exists():
+        backup = CLAUDE_SETTINGS.with_name(
+            f"settings.json.bak-{time.strftime('%Y%m%d-%H%M%S')}-{time.time_ns() % 1_000_000_000:09d}"
+        )
+        shutil.copy2(CLAUDE_SETTINGS, backup)
+        backups = sorted(CLAUDE_HOME.glob("settings.json.bak-*"), reverse=True)
+        for old in backups[MAX_CONFIG_BACKUPS:]:
+            old.unlink(missing_ok=True)
+    write_json(CLAUDE_SETTINGS, settings)
+    os.chmod(CLAUDE_SETTINGS, 0o600)
+
+
+def activate_selection(
+    client: str, provider: str, model: str, reasoning_effort: str | None = None
+) -> None:
+    if client not in {"codex", "claude"}:
+        die(f"onbekende client: {client}")
+    if provider == "foundry" and client != "claude":
+        die("Microsoft Foundry is alleen beschikbaar voor Claude Code")
+    if provider == "foundry":
+        validate_provider_model(provider, model)
+        if not foundry_credentials_present():
+            die("Microsoft Foundry configuratie ontbreekt; gebruik: codexswitch auth foundry")
+    else:
+        update_codex_config(provider, model, reasoning_effort)
+    if client == "claude":
+        update_claude_settings(provider, model, reasoning_effort)
+    state = read_json(SWITCH_CONFIG, {})
+    state.update({"client": client, "provider": provider, "model": model})
+    if reasoning_effort:
+        state["reasoning_effort"] = reasoning_effort
+    elif provider == "foundry":
+        state.pop("reasoning_effort", None)
+    if provider != "openai":
+        state.pop("openai_account", None)
+    write_json(SWITCH_CONFIG, state)
+
+
+def claude_launch_environment() -> dict[str, str]:
+    state = read_json(SWITCH_CONFIG, {})
+    provider = str(state.get("provider") or "openai")
+    model = str(state.get("model") or "")
+    env = dict(os.environ)
+    _clear_environment_keys(env, CLAUDE_PROXY_ENV_KEYS)
+    _clear_environment_keys(env, CLAUDE_FOUNDRY_ENV_KEYS)
+    if model:
+        env.update(claude_provider_environment(provider, model, True))
+    reasoning = state.get("reasoning_effort")
+    if reasoning:
+        env["CODEXSWITCH_REASONING_EFFORT"] = str(reasoning)
+    return env
+
+
+def client_launch(client: str, args: list[str]) -> None:
+    if client == "claude":
+        state = read_json(SWITCH_CONFIG, {})
+        provider = str(state.get("provider") or "openai")
+        model = str(state.get("model") or "")
+        if provider != "foundry" and not (
+            provider == "openrouter" and openrouter_claude_direct(model)
+        ):
+            ensure_unified_provider_proxy()
+        binary = claude_bin()
+        os.execvpe(binary, [binary, *args], claude_launch_environment())
+    binary = codex_launch_bin()
+    provider = str(codex_config_state().get("model_provider") or "openai")
+    ensure_provider_proxy(provider)
+    os.execvpe(binary, [binary, *args], codex_launch_environment())
 
 
 def codex_launch_bin() -> str:
@@ -1031,10 +1295,6 @@ def codex_launch_bin() -> str:
 def codex_launch_environment() -> dict[str, str]:
     """Build a Codex environment without persisting provider secrets in TOML."""
     env = dict(os.environ)
-    if codex_config_state().get("model_provider") == "azure":
-        key = azure_credentials().get("api_key")
-        if key:
-            env[AZURE_API_KEY_ENV] = str(key)
     if codex_config_state().get("model_provider") == "openrouter":
         key = openrouter_credentials().get("api_key")
         if key:
@@ -1069,9 +1329,12 @@ def migrate_provider_proxy_url(provider: str) -> None:
     expected_urls = {
         "opencode-go": OPENCODE_PROXY_URL,
         "openrouter": OPENROUTER_PROXY_URL,
-        "azure": AZURE_PROXY_URL,
     }
-    expected = expected_urls.get(provider)
+    expected = (
+        azure_credentials().get("endpoint")
+        if provider == "azure"
+        else expected_urls.get(provider)
+    )
     if expected is None or not CODEX_CONFIG.exists():
         return
     try:
@@ -1116,7 +1379,10 @@ def ensure_unified_provider_proxy() -> None:
 
 def ensure_provider_proxy(provider: str) -> None:
     """Prepare and start the unified proxy for the selected provider."""
-    if provider not in {"opencode-go", "openrouter", "azure"}:
+    if provider == "azure":
+        migrate_provider_proxy_url(provider)
+        return
+    if provider not in {"opencode-go", "openrouter"}:
         return
     migrate_provider_proxy_url(provider)
     ensure_unified_provider_proxy()
@@ -1129,6 +1395,66 @@ def openai_models() -> list[str]:
 
 def azure_models() -> list[str]:
     return list(AZURE_MODELS)
+
+
+def write_azure_codex_model_catalog() -> Path:
+    model = AZURE_MODEL
+    write_json(
+        AZURE_CODEX_MODELS,
+        {
+            "models": [
+                {
+                    "slug": model,
+                    "id": model,
+                    "display_name": "GPT-5.6 Sol",
+                    "description": "Azure OpenAI deployment",
+                    "default_reasoning_level": AZURE_DEFAULT_REASONING_EFFORT,
+                    "supported_reasoning_levels": [
+                        {"effort": effort, "description": f"{effort} reasoning"}
+                        for effort in ("low", "medium", "high", "xhigh")
+                    ],
+                    "shell_type": "shell_command",
+                    "visibility": "list",
+                    "supported_in_api": True,
+                    "priority": 1,
+                    "additional_speed_tiers": [],
+                    "service_tiers": [],
+                    "availability_nux": None,
+                    "upgrade": None,
+                    "base_instructions": "",
+                    "model_messages": {},
+                    "supports_reasoning_summaries": True,
+                    "default_reasoning_summary": "none",
+                    "support_verbosity": False,
+                    "default_verbosity": "low",
+                    "apply_patch_tool_type": "freeform",
+                    "web_search_tool_type": "text_and_image",
+                    "truncation_policy": {"mode": "tokens", "limit": 10000},
+                    "supports_parallel_tool_calls": True,
+                    "supports_image_detail_original": False,
+                    "context_window": 1_050_000,
+                    "max_context_window": 1_050_000,
+                    "effective_context_window_percent": 95,
+                    "experimental_supported_tools": [],
+                    "input_modalities": ["text", "image"],
+                    "use_responses_lite": False,
+                }
+            ]
+        },
+    )
+    return AZURE_CODEX_MODELS
+
+
+def foundry_models() -> list[str]:
+    configured = foundry_credentials().get("models", [])
+    if not isinstance(configured, list):
+        configured = []
+    return list(
+        dict.fromkeys(
+            [model for model in configured if isinstance(model, str) and model]
+            + FOUNDRY_MODELS
+        )
+    )
 
 
 def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
@@ -1508,6 +1834,13 @@ def default_reasoning_effort(model: str) -> str:
 
 
 def validate_provider_model(provider: str, model: str) -> None:
+    if provider == "foundry":
+        if model not in foundry_models():
+            print(
+                f"warning: Foundry deployment '{model}' staat niet in de bekende catalogus",
+                file=sys.stderr,
+            )
+        return
     if provider == "azure":
         if model not in AZURE_MODELS:
             die(f"Azure model '{model}' is niet beschikbaar; kies {AZURE_MODEL}")
@@ -1689,7 +2022,11 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
     elif provider == "openai":
         lines = remove_top_level(lines, "model_reasoning_effort")
 
-    if provider == "openrouter":
+    if provider == "azure":
+        lines = set_top_level(
+            lines, "model_catalog_json", str(write_azure_codex_model_catalog())
+        )
+    elif provider == "openrouter":
         catalog_path = write_openrouter_codex_model_catalog(model)
         if catalog_path.exists():
             lines = set_top_level(lines, "model_catalog_json", str(catalog_path))
@@ -1715,12 +2052,24 @@ refresh_interval_ms = 0
         lines.append(provider_block)
 
     if provider == "azure":
+        credentials = azure_credentials()
+        endpoint = credentials.get("endpoint")
+        if not endpoint:
+            die("Azure endpoint ontbreekt; gebruik: codexswitch auth azure")
+        if not Path(AZURE_TOKEN_HELPER).exists():
+            die(f"Azure token helper ontbreekt: {AZURE_TOKEN_HELPER}")
         provider_block = f'''
 
 [model_providers.azure]
 name = "Azure"
-base_url = "{AZURE_PROXY_URL}"
+base_url = {toml_string(str(endpoint))}
 wire_api = "responses"
+
+[model_providers.azure.auth]
+command = {toml_string(sys.executable)}
+args = [{toml_string(AZURE_TOKEN_HELPER)}]
+timeout_ms = 5000
+refresh_interval_ms = 0
 '''
         lines.append(provider_block)
 
@@ -1767,12 +2116,15 @@ def status() -> None:
     state = read_json(SWITCH_CONFIG, {})
     current_data = read_json(CODEX_HOME / "auth.json", {})
     current_openai_account = openai_auth_email(current_data)
+    print(f"client:       {active_client()}")
     print(f"codex:        {codex_bin()}")
+    print(f"claude:       {shutil.which('claude') or 'niet geïnstalleerd'}")
     print(f"codex config: {CODEX_CONFIG}")
     opencode_binary = _common_opencode_bin() or "niet nodig/niet gevonden"
     print(f"opencode:     {opencode_binary}")
     print(f"opencode-go auth: {'ok' if opencode_go_key_present() else 'ontbreekt'}")
     print(f"azure auth:      {'ok' if azure_credentials_present() else 'ontbreekt'}")
+    print(f"foundry config:  {'ok' if foundry_credentials_present() else 'ontbreekt'}")
     print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
     suffix = f" / denken={state['reasoning_effort']}" if state.get("reasoning_effort") else ""
@@ -1789,6 +2141,9 @@ def list_models() -> None:
         print(f"  {model}")
     print("\nAzure:")
     for model in azure_models():
+        print(f"  {model}")
+    print("\nMicrosoft Foundry (Claude only):")
+    for model in foundry_models():
         print(f"  {model}")
     print("\nOpenCode Go:")
     for model in opencode_models():
@@ -1867,7 +2222,9 @@ def choose(title: str, options: list[str], descriptions: dict[str, str] | None =
 
 
 def auth(provider: str | None = None) -> None:
-    provider = provider or choose("Auth provider", ["openai", "azure", "opencode-go", "openrouter"])
+    provider = provider or choose(
+        "Auth provider", ["openai", "azure", "foundry", "opencode-go", "openrouter"]
+    )
     if provider == "openai":
         ensure_home_owner(CODEX_HOME / "auth.json")
         current_auth = read_json(CODEX_HOME / "auth.json", {})
@@ -1886,6 +2243,14 @@ def auth(provider: str | None = None) -> None:
         endpoint = input("Azure resource endpoint: ").strip()
         key = getpass.getpass("Azure API-key: ")
         save_azure_credentials(endpoint, key)
+        return
+    if provider == "foundry":
+        endpoint = input("Foundry resource name or base URL: ").strip()
+        key = getpass.getpass("Foundry API-key (leeg voor Azure CLI/Entra ID): ")
+        deployments = input(
+            "Claude deploymentnamen, kommagescheiden (leeg voor standaardnamen): "
+        ).strip()
+        save_foundry_credentials(endpoint, key, deployments)
         return
     if provider == "openrouter":
         key = getpass.getpass("OpenRouter API-key: ")
@@ -1906,8 +2271,8 @@ def usage() -> None:
 
 Usage:
   codexswitch tui                    start Commander TUI
-  codexswitch use PROVIDER MODEL [REASONING]
-  codexswitch auth [openai|azure|opencode-go|openrouter]
+  codexswitch use [codex|claude] PROVIDER MODEL [REASONING]
+  codexswitch auth [openai|azure|foundry|opencode-go|openrouter]
   codexswitch account add            add OpenAI account with device sign-in
   codexswitch account save [EMAIL]   save current OpenAI login
   codexswitch account use EMAIL      activate saved OpenAI account
@@ -1918,12 +2283,13 @@ Usage:
   codexswitch update [--check]       update from latest GitHub release
   codexswitch list                   list known models
   codexswitch status                 show active config and auth status
-  codexswitch run [PROMPT...]        run codex with active config
+  codexswitch run [codex|claude] [ARGS...] run the active or selected client
   codexswitch version                print version
 
 Providers:
   openai                             native Codex/OpenAI account flow
   azure                              Azure OpenAI endpoint/API-key with gpt-5.6-sol
+  foundry                            Microsoft Foundry Claude (Claude client only)
   opencode-go                        OpenCode Go key through CodexSwitch store and local Responses proxy
   openrouter                         OpenRouter API key from the encrypted vault
 
@@ -1933,6 +2299,7 @@ Examples:
   codexswitch auth openrouter
   codexswitch update --check
   codexswitch use azure gpt-5.6-sol low
+  codexswitch use claude foundry claude-sonnet-5
   codexswitch use openai gpt-5.5
   codexswitch use opencode-go glm-5.2 high
   codexswitch use openrouter anthropic/claude-sonnet-4.5
@@ -2007,21 +2374,28 @@ def main(argv: list[str]) -> int:
             return 0
         die("gebruik: codexswitch account add | save [EMAIL] | use EMAIL")
     if cmd == "use":
-        if len(argv) not in {3, 4}:
-            die("gebruik: codexswitch use PROVIDER MODEL [DENKSTAND]")
-        validate_provider_model(argv[1], argv[2])
-        effort = argv[3] if len(argv) == 4 else None
-        if argv[1] == "opencode-go" and effort == "max":
+        client = "codex"
+        offset = 1
+        if len(argv) > 1 and argv[1] in {"codex", "claude"}:
+            client = argv[1]
+            offset = 2
+        if len(argv) not in {offset + 2, offset + 3}:
+            die("gebruik: codexswitch use [codex|claude] PROVIDER MODEL [DENKSTAND]")
+        provider, model = argv[offset], argv[offset + 1]
+        validate_provider_model(provider, model)
+        effort = argv[offset + 2] if len(argv) == offset + 3 else None
+        if provider == "opencode-go" and effort == "max":
             effort = "xhigh"
-        if argv[1] == "opencode-go" and effort == "thinking":
+        if provider == "opencode-go" and effort == "thinking":
             effort = "high"
-        update_codex_config(argv[1], argv[2], effort)
+        activate_selection(client, provider, model, effort)
         return 0
     if cmd == "run":
-        binary = codex_launch_bin()
-        provider = str(codex_config_state().get("model_provider") or "openai")
-        ensure_provider_proxy(provider)
-        os.execvpe(binary, [binary, *argv[1:]], codex_launch_environment())
+        client = active_client()
+        args = argv[1:]
+        if args and args[0] in {"codex", "claude"}:
+            client, args = args[0], args[1:]
+        client_launch(client, args)
     usage()
     return 2
 

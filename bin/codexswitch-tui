@@ -33,11 +33,13 @@ CODEX_TUI_LAUNCH_ARGS = (
     "--dangerously-bypass-approvals-and-sandbox",
     "--search",
 )
+CLAUDE_TUI_LAUNCH_ARGS = ("--dangerously-skip-permissions",)
 DEFAULT_REASONING_VALUE = "__default__"
-PROVIDERS = ("openai", "azure", "opencode-go", "openrouter")
+PROVIDERS = ("openai", "azure", "foundry", "opencode-go", "openrouter")
 PROVIDER_LABELS = {
     "openai": "OpenAI",
     "azure": "Azure",
+    "foundry": "MS Foundry",
     "opencode-go": "OpenCode Go",
     "openrouter": "OpenRouter",
 }
@@ -65,6 +67,7 @@ FUNCTION_KEYS = (
 
 @dataclass(frozen=True)
 class Selection:
+    client: str = "codex"
     provider: str = "openai"
     account: str | None = None
     model: str | None = None
@@ -137,7 +140,7 @@ class HelpScreen(ModalScreen[None]):
             yield Static(
                 """[bold #000087]CODEXSWITCH COMMANDER HELP[/]
 
-[black]WORKFLOW[/]  Providers → Models → Reasoning
+[black]WORKFLOW[/]  Clients → Providers → Models → Reasoning
   ↑↓ Move · Home/End First/last · PgUp/PgDn Page
   ←→ or Tab/Shift+Tab Switch panel
   Enter Next panel / start from Reasoning
@@ -150,8 +153,8 @@ class HelpScreen(ModalScreen[None]):
 
 [black]MARKERS[/]  ● Active   ◆ Pending   ○ Other
 
-[black]LAUNCH[/]  Enter from Reasoning or F9 applies and starts Codex
-  with sandbox bypass and search. F6 only applies.
+[black]LAUNCH[/]  Enter/F9 applies and starts the selected client.
+  Codex bypasses its sandbox; Claude skips permissions. F6 only applies.
 
 [black]ABOUT[/]
 """
@@ -349,6 +352,79 @@ class AzureAuthScreen(ModalScreen[tuple[str, str] | None]):
         self.dismiss((endpoint, key))
 
 
+class FoundryAuthScreen(ModalScreen[tuple[str, str, str] | None]):
+    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
+
+    def __init__(self, endpoint: str, deployments: str = "") -> None:
+        super().__init__()
+        self.endpoint = endpoint
+        self.deployments = deployments
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="modal-dialog", id="foundry-dialog"):
+            yield Label("MICROSOFT FOUNDRY · CLAUDE", classes="modal-title")
+            yield Static(
+                "Use a resource name or base URL. Leave the key empty to use az login / Entra ID.",
+                classes="modal-copy",
+            )
+            yield Label("Resource / base URL", classes="field-label")
+            yield Input(
+                value=self.endpoint,
+                placeholder="resource-name or https://…services.ai.azure.com",
+                id="foundry-endpoint-input",
+                classes="form-input",
+            )
+            yield Label("Claude deployment names", classes="field-label")
+            yield Input(
+                value=self.deployments,
+                placeholder="Optional, comma-separated",
+                id="foundry-models-input",
+                classes="form-input",
+            )
+            yield Label("API key (optional)", classes="field-label")
+            yield Input(
+                password=True,
+                placeholder="Empty uses Azure CLI / Entra ID",
+                id="api-key-input",
+                classes="form-input",
+            )
+            yield Label("", id="form-error", classes="form-error")
+            with Horizontal(classes="modal-actions"):
+                yield Button("Save", id="api-key-save", variant="primary")
+                yield Button("Cancel", id="api-key-cancel")
+
+    def on_mount(self) -> None:
+        self.query_one("#foundry-endpoint-input", Input).focus()
+
+    def action_cancel(self) -> None:
+        self.dismiss(None)
+
+    def on_input_submitted(self, event: Input.Submitted) -> None:
+        if event.input.id == "foundry-endpoint-input":
+            self.query_one("#foundry-models-input", Input).focus()
+        elif event.input.id == "foundry-models-input":
+            self.query_one("#api-key-input", Input).focus()
+        else:
+            self.submit()
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "api-key-cancel":
+            self.dismiss(None)
+        else:
+            self.submit()
+
+    def submit(self) -> None:
+        endpoint_field = self.query_one("#foundry-endpoint-input", Input)
+        endpoint = endpoint_field.value.strip()
+        if not endpoint:
+            self.query_one("#form-error", Label).update("Resource or endpoint is required")
+            endpoint_field.focus()
+            return
+        key = self.query_one("#api-key-input", Input).value.strip()
+        deployments = self.query_one("#foundry-models-input", Input).value.strip()
+        self.dismiss((endpoint, key, deployments))
+
+
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
     SUB_TITLE = f"v{BACKEND['VERSION']}"
@@ -381,19 +457,25 @@ class CodexSwitchApp(App):
     }
 
     #source-pane {
-        width: 28%;
-        min-width: 24;
+        width: 24%;
+        min-width: 16;
         max-width: 32;
+    }
+
+    #client-pane {
+        width: 10;
+        min-width: 10;
+        max-width: 12;
     }
 
     #model-pane {
         width: 1fr;
-        min-width: 34;
+        min-width: 33;
     }
 
     #reason-box {
         width: 24%;
-        min-width: 20;
+        min-width: 17;
         max-width: 28;
     }
 
@@ -712,6 +794,7 @@ class CodexSwitchApp(App):
         self.runtime_drift = False
         self.launch_codex = False
         self.loading_sources = False
+        self.loading_clients = False
         self.loading_models = False
         self.loading_reasoning = False
         self.operation_busy = False
@@ -734,12 +817,14 @@ class CodexSwitchApp(App):
         self.catalogs: dict[str, dict[str, dict]] = {
             "openai": dict(self.backend.get("OPENAI_FALLBACK_CATALOG", {})),
             "azure": {},
+            "foundry": {},
             "opencode-go": dict(self.backend.get("OPENCODE_GO_FALLBACK_CATALOG", {})),
             "openrouter": {},
         }
         self.model_lists: dict[str, list[str]] = {
             "openai": list(self.backend.get("OPENAI_FALLBACK_MODELS", ["gpt-5.5"])),
             "azure": list(self.backend.get("AZURE_MODELS", ["gpt-5.6-sol"])),
+            "foundry": list(self.backend.get("FOUNDRY_MODELS", ["claude-sonnet-5"])),
             "opencode-go": list(self.catalogs["opencode-go"]),
             "openrouter": list(
                 self.backend.get("OPENROUTER_FALLBACK_MODELS", ["openrouter/auto"])
@@ -789,6 +874,9 @@ class CodexSwitchApp(App):
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Horizontal(id="workspace"):
+            with Vertical(classes="pane", id="client-pane"):
+                yield Label("┤ CLIENTS ├", classes="pane-title")
+                yield OptionList(id="clients")
             with Vertical(classes="pane", id="source-pane"):
                 yield Label("┤ PROVIDERS ├", classes="pane-title", id="source-title")
                 yield OptionList(id="sources")
@@ -822,8 +910,11 @@ class CodexSwitchApp(App):
             models = self.model_lists.setdefault(self.active.provider, [])
             if self.active.model not in models:
                 models.insert(0, self.active.model)
+        self.load_clients()
         self.load_sources()
         self.load_models()
+        # Keep the frequently used provider pane as the initial focus while the
+        # client pane remains one Left/Shift-Tab away.
         self.query_one("#sources", OptionList).focus()
         self.update_responsive_ui(self.size.width, self.size.height)
         self.render_proxy_statuses()
@@ -858,7 +949,19 @@ class CodexSwitchApp(App):
         if not isinstance(codex_state, dict):
             codex_state = {}
 
+        client = state.get("client", "codex")
+        if client not in {"codex", "claude"}:
+            client = "codex"
         saved_provider = state.get("provider", "openai")
+        if client == "claude" and saved_provider == "foundry":
+            self.runtime_drift = False
+            return Selection(
+                client,
+                "foundry",
+                None,
+                state.get("model"),
+                state.get("reasoning_effort"),
+            )
         runtime_provider = codex_state.get("model_provider")
         provider = runtime_provider or saved_provider
         if provider not in PROVIDERS:
@@ -899,7 +1002,7 @@ class CodexSwitchApp(App):
             and saved_account != current_account
         ):
             self.runtime_drift = True
-        return Selection(provider, account, model, reasoning)
+        return Selection(client, provider, account, model, reasoning)
 
     def current_openai_account(self) -> str | None:
         if self.backend.get("CODEX_HOME") is None:
@@ -913,7 +1016,7 @@ class CodexSwitchApp(App):
 
     def selection_label(self, selection: Selection | None = None) -> str:
         selection = selection or self.draft
-        parts = [selection.provider, selection.model or "no model"]
+        parts = [selection.client, selection.provider, selection.model or "no model"]
         if selection.reasoning:
             parts.append(selection.reasoning)
         if selection.provider == "openai" and selection.account:
@@ -964,6 +1067,30 @@ class CodexSwitchApp(App):
 
     # ---------- Option construction and selection ----------
 
+    def load_clients(self) -> None:
+        clients = self.query_one("#clients", OptionList)
+        self.loading_clients = True
+        try:
+            clients.set_options(
+                [
+                    Option(
+                        self.plain_option(
+                            self.marker(self.active.client == client, self.draft.client == client),
+                            label,
+                            bold=True,
+                        ),
+                        id=f"client:{client}",
+                    )
+                    for client, label in (("codex", "CODEX"), ("claude", "CLAUDE"))
+                ]
+            )
+            for index, option in enumerate(clients.options):
+                if option.id == f"client:{self.draft.client}":
+                    clients.highlighted = index
+                    break
+        finally:
+            self.loading_clients = False
+
     def plain_option(
         self,
         marker: str,
@@ -985,7 +1112,10 @@ class CodexSwitchApp(App):
         accounts = self.safe_call("openai_accounts", [])
         if not isinstance(accounts, list):
             accounts = []
-        for provider in PROVIDERS:
+        providers = PROVIDERS if self.draft.client == "claude" else tuple(
+            provider for provider in PROVIDERS if provider != "foundry"
+        )
+        for provider in providers:
             active = self.active.provider == provider
             draft = self.draft.provider == provider
             options.append(
@@ -1070,6 +1200,7 @@ class CodexSwitchApp(App):
         defaults = {
             "openai": "gpt-5.5",
             "azure": self.backend.get("AZURE_MODEL", "gpt-5.6-sol"),
+            "foundry": (self.backend.get("FOUNDRY_MODELS", [None]) or [None])[0],
             "opencode-go": self.backend.get("DEFAULT_OPENCODE_MODEL"),
             "openrouter": (
                 self.backend.get("OPENROUTER_FALLBACK_MODELS", [None]) or [None]
@@ -1313,6 +1444,8 @@ class CodexSwitchApp(App):
         model = self.draft.model
         if not model:
             return [("Model default", None)]
+        if provider == "foundry":
+            return [("Model default", None)]
         if provider == "azure":
             choices = self.backend.get("AZURE_REASONING_CHOICES", [])
             return [
@@ -1491,6 +1624,7 @@ class CodexSwitchApp(App):
             return self.draft.account or "not detected"
         function = {
             "azure": "azure_credentials_present",
+            "foundry": "foundry_credentials_present",
             "opencode-go": "opencode_go_key_present",
             "openrouter": "openrouter_key_present",
         }.get(provider)
@@ -1618,7 +1752,9 @@ class CodexSwitchApp(App):
             else "bold #000000 on #bcbcbc"
         )
         text.append(f" {value} ", style=style)
-        text.append(" · OpenCode Go / OpenRouter / Azure", style="#bcbcbc")
+        text.append(
+            " · OpenCode Go / non-Anthropic Claude bridges", style="#bcbcbc"
+        )
         self.query_one("#proxy-status", Static).update(text)
 
     def proxy_statuses_sync(self) -> dict[str, bool]:
@@ -1681,7 +1817,7 @@ class CodexSwitchApp(App):
 
     def on_descendant_focus(self, event: DescendantFocus) -> None:
         focused_id = event.widget.id
-        if focused_id in {"sources", "models", "reasoning", "model-filter"}:
+        if focused_id in {"clients", "sources", "models", "reasoning", "model-filter"}:
             if focused_id != self.last_focus_id:
                 self.call_after_refresh(self.update_status_hint_if_clear)
 
@@ -1735,7 +1871,19 @@ class CodexSwitchApp(App):
         highlighted = event.option_list.highlighted_option
         if highlighted is None or highlighted.id != event.option.id:
             return
-        if event.option_list.id == "sources" and not self.loading_sources:
+        if event.option_list.id == "clients" and not self.loading_clients:
+            client = event.option.id.split(":", 1)[1]
+            if client != self.draft.client:
+                if client == "codex" and self.draft.provider == "foundry":
+                    self.draft = Selection(
+                        "codex", "openai", self.current_openai_account(), None, None
+                    )
+                else:
+                    self.draft = replace(self.draft, client=client)
+                self.load_sources()
+                self.load_models()
+                self.update_status_hint_if_clear()
+        elif event.option_list.id == "sources" and not self.loading_sources:
             kind, value = event.option.id.split(":", 1)
             if kind == "action":
                 self.update_status_hint_if_clear()
@@ -1746,6 +1894,7 @@ class CodexSwitchApp(App):
             )
             same_provider = provider == self.draft.provider
             self.draft = Selection(
+                self.draft.client,
                 provider,
                 account,
                 self.draft.model if same_provider else None,
@@ -1782,7 +1931,9 @@ class CodexSwitchApp(App):
     ) -> None:
         if not event.option.id:
             return
-        if event.option_list.id == "sources":
+        if event.option_list.id == "clients":
+            self.action_accounts()
+        elif event.option_list.id == "sources":
             kind, value = event.option.id.split(":", 1)
             if kind == "action" and value == "add-openai-account":
                 self.open_auth("openai")
@@ -1831,13 +1982,13 @@ class CodexSwitchApp(App):
         self.update_status_hint()
 
     def panel_index(self) -> int:
-        focused_id = self.focused.id if self.focused is not None else "sources"
+        focused_id = self.focused.id if self.focused is not None else "clients"
         if focused_id == "model-filter":
             focused_id = "models"
-        return {"sources": 0, "models": 1, "reasoning": 2}.get(focused_id, 0)
+        return {"clients": 0, "sources": 1, "models": 2, "reasoning": 3}.get(focused_id, 0)
 
     def focus_panel(self, index: int) -> None:
-        target = ("#sources", "#models", "#reasoning")[index]
+        target = ("#clients", "#sources", "#models", "#reasoning")[index]
         self.query_one(target, OptionList).focus()
         self.update_status_hint()
 
@@ -1853,7 +2004,7 @@ class CodexSwitchApp(App):
             return
         if self.focused is not None and self.focused.id == "model-filter":
             return
-        self.focus_panel(min(2, self.panel_index() + 1))
+        self.focus_panel(min(3, self.panel_index() + 1))
 
     def action_search_models(self) -> None:
         if self.operation_busy or self.too_small:
@@ -1901,6 +2052,7 @@ class CodexSwitchApp(App):
             return
         if self.draft != self.active:
             self.draft = self.active
+            self.load_clients()
             self.load_sources(self.source_target_id(self.active))
             self.load_models()
             self.set_status("Pending selection restored to active configuration")
@@ -1922,6 +2074,16 @@ class CodexSwitchApp(App):
         compact_footer = width < 120
         compact_source_title = width < 100
         try:
+            if width < 100:
+                self.query_one("#client-pane").styles.width = 10
+                self.query_one("#source-pane").styles.width = 17
+                self.query_one("#model-pane").styles.width = 33
+                self.query_one("#reason-box").styles.width = 18
+            else:
+                self.query_one("#client-pane").styles.width = 10
+                self.query_one("#source-pane").styles.width = "24%"
+                self.query_one("#model-pane").styles.width = "1fr"
+                self.query_one("#reason-box").styles.width = "24%"
             self.query_one("#source-title", Label).update(
                 "┤ PROVIDERS ├"
                 if compact_source_title
@@ -2015,6 +2177,7 @@ class CodexSwitchApp(App):
         getters = {
             "openai": ("openai_models", "openai_model_catalog"),
             "azure": ("azure_models", None),
+            "foundry": ("foundry_models", None),
             "opencode-go": ("opencode_models", "opencode_model_catalog"),
             "openrouter": ("openrouter_models", "openrouter_model_catalog"),
         }
@@ -2060,9 +2223,7 @@ class CodexSwitchApp(App):
 
     async def startup_refresh_worker(self) -> None:
         providers = ("openai", "opencode-go", "openrouter")
-        proxy_task = asyncio.create_task(
-            asyncio.to_thread(self.start_proxy_and_read_status_sync)
-        )
+        proxy_task = asyncio.create_task(asyncio.to_thread(self.proxy_statuses_sync))
         self.busy_providers.update(providers)
         self.vault_label = "CHECKING"
         self.set_status("Checking shared vault…")
@@ -2156,7 +2317,7 @@ class CodexSwitchApp(App):
     # ---------- Apply and launch workers ----------
 
     def workflow_disabled(self, disabled: bool) -> None:
-        for selector in ("#sources", "#models", "#reasoning", "#model-filter"):
+        for selector in ("#clients", "#sources", "#models", "#reasoning", "#model-filter"):
             self.query_one(selector).disabled = disabled
 
     def validate_draft(self) -> bool:
@@ -2204,7 +2365,8 @@ class CodexSwitchApp(App):
                 return "original model is unknown"
             try:
                 result, output = self.capture(
-                    self.backend["update_codex_config"],
+                    self.backend.get("activate_selection", self.backend["update_codex_config"]),
+                    *([original.client] if self.backend.get("activate_selection") else []),
                     original.provider,
                     original.model,
                     original.reasoning,
@@ -2224,7 +2386,8 @@ class CodexSwitchApp(App):
             if isinstance(result, SystemExit):
                 return False, output or "Invalid provider or model", "models"
             result, output = self.capture(
-                self.backend["update_codex_config"],
+                self.backend.get("activate_selection", self.backend["update_codex_config"]),
+                *([selection.client] if self.backend.get("activate_selection") else []),
                 selection.provider,
                 selection.model,
                 selection.reasoning,
@@ -2308,6 +2471,7 @@ class CodexSwitchApp(App):
                 return
             self.active = self.read_active_selection()
             self.draft = self.active
+            self.load_clients()
             self.load_sources(self.source_target_id(self.active))
             self.load_models(preserve_missing=True)
             if self.runtime_drift:
@@ -2398,6 +2562,22 @@ class CodexSwitchApp(App):
                 lambda payload: self.finish_credential_modal(provider, payload),
             )
             return
+        if provider == "foundry":
+            credential = self.safe_call("foundry_credentials", {})
+            if not isinstance(credential, dict):
+                credential = {}
+            self.push_screen(
+                FoundryAuthScreen(
+                    str(credential.get("endpoint") or ""),
+                    ", ".join(
+                        str(model)
+                        for model in credential.get("models", [])
+                        if isinstance(model, str)
+                    ),
+                ),
+                lambda payload: self.finish_credential_modal(provider, payload),
+            )
+            return
         self.push_screen(
             ApiKeyScreen(provider),
             lambda payload: self.finish_credential_modal(provider, payload),
@@ -2429,6 +2609,7 @@ class CodexSwitchApp(App):
                 return
             same_provider = self.draft.provider == "openai"
             self.draft = Selection(
+                self.draft.client,
                 "openai",
                 email,
                 self.draft.model if same_provider else None,
@@ -2467,6 +2648,14 @@ class CodexSwitchApp(App):
                 endpoint, key = payload
                 result, output = self.capture(
                     self.backend["save_azure_credentials"], endpoint, key
+                )
+            elif provider == "foundry":
+                endpoint, key, deployments = payload
+                result, output = self.capture(
+                    self.backend["save_foundry_credentials"],
+                    endpoint,
+                    key,
+                    deployments,
                 )
             elif provider == "opencode-go":
                 result, output = self.capture(
@@ -2540,14 +2729,29 @@ def codex_launch_argv(binary: str | None = None) -> list[str]:
     return [binary, *CODEX_TUI_LAUNCH_ARGS]
 
 
+def claude_launch_argv(binary: str | None = None) -> list[str]:
+    binary = binary or BACKEND["claude_bin"]()
+    return [binary, *CLAUDE_TUI_LAUNCH_ARGS]
+
+
 def main() -> int:
     app = CodexSwitchApp()
     app.run()
     if app.launch_codex:
-        BACKEND["ensure_provider_proxy"](app.active.provider)
-        BACKEND["ensure_codex_runtime_writable"]()
-        argv = codex_launch_argv()
-        environment = BACKEND["codex_launch_environment"]()
+        if app.active.client == "claude":
+            direct_openrouter = (
+                app.active.provider == "openrouter"
+                and BACKEND["openrouter_claude_direct"](app.active.model)
+            )
+            if app.active.provider != "foundry" and not direct_openrouter:
+                BACKEND["ensure_unified_provider_proxy"]()
+            argv = claude_launch_argv()
+            environment = BACKEND["claude_launch_environment"]()
+        else:
+            BACKEND["ensure_provider_proxy"](app.active.provider)
+            BACKEND["ensure_codex_runtime_writable"]()
+            argv = codex_launch_argv()
+            environment = BACKEND["codex_launch_environment"]()
         if os.name == "nt":
             return subprocess.run(
                 argv,

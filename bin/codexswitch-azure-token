@@ -1,0 +1,27 @@
+#!/usr/bin/env python3
+"""Return the Azure OpenAI API key for Codex command-backed auth."""
+
+import sys
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from codexswitch_common import read_secret_json, user_home  # noqa: E402
+
+
+def main() -> int:
+    auth_path = user_home() / ".config/codexswitch/azure/auth.json"
+    try:
+        data = read_secret_json(auth_path, {})
+    except Exception as exc:
+        print(f"Azure auth store could not be read: {exc}", file=sys.stderr)
+        return 1
+    key = data.get("api_key") if isinstance(data, dict) else None
+    if not key:
+        print("Azure API key not found in CodexSwitch auth store", file=sys.stderr)
+        return 1
+    print(key)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

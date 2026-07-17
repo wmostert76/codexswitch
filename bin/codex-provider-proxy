@@ -48,8 +48,11 @@ OPENROUTER_ENGINE = load_engine(
 AZURE_ENGINE = load_engine(
     "codexswitch_unified_azure", "codex-azure-proxy"
 )
+OPENAI_ENGINE = load_engine("codexswitch_unified_openai", "codex-openai-proxy")
+CLAUDE_ENGINE = load_engine("codexswitch_unified_claude", "codex-claude-proxy")
 
 ROUTES = {
+    "/openai": OPENAI_ENGINE,
     "/opencode-go": OPENCODE_ENGINE,
     "/openrouter": OPENROUTER_ENGINE,
     "/azure": AZURE_ENGINE,
@@ -111,23 +114,31 @@ class Handler(BaseHTTPRequestHandler):
 
     def resolve_route(self):
         parsed = urlsplit(self.path)
+        if parsed.path.startswith("/claude/"):
+            parts = parsed.path.split("/", 3)
+            if len(parts) < 4 or parts[2] not in {"openai", "azure", "opencode-go", "openrouter"}:
+                return None, self.path, None
+            routed_path = "/" + parts[3]
+            return CLAUDE_ENGINE, routed_path, parts[2]
         for prefix, engine in ROUTES.items():
             if parsed.path == prefix or parsed.path.startswith(f"{prefix}/"):
                 routed_path = parsed.path[len(prefix):] or "/"
                 routed_url = urlunsplit(
                     ("", "", routed_path, parsed.query, parsed.fragment)
                 )
-                return engine, routed_url
-        return None, self.path
+                return engine, routed_url, None
+        return None, self.path, None
 
     def delegate(self) -> None:
-        engine, routed_path = self.resolve_route()
+        engine, routed_path, provider = self.resolve_route()
         if engine is None:
             self.send_json(404, {"error": f"unknown provider route: {self.path}"})
             return
         delegate = object.__new__(engine.Handler)
         delegate.__dict__ = self.__dict__.copy()
         delegate.path = routed_path
+        if provider:
+            delegate.provider = provider
         method = getattr(delegate, f"do_{self.command}", None)
         if method is None:
             self.send_json(405, {"error": "method not allowed"})
@@ -142,7 +153,8 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
-                    "providers": ["opencode-go", "openrouter", "azure"],
+                    "providers": ["openai", "opencode-go", "openrouter", "azure"],
+                    "clients": ["codex", "claude"],
                 },
             )
             return
@@ -150,6 +162,14 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(200, {"models": AZURE_MODELS})
             return
         self.delegate()
+
+    def do_HEAD(self):
+        if urlsplit(self.path).path.startswith("/claude/"):
+            self.send_response(200)
+            self.send_header("content-length", "0")
+            self.end_headers()
+            return
+        self.send_json(404, {"error": f"unknown provider route: {self.path}"})
 
     def do_POST(self):
         self.delegate()

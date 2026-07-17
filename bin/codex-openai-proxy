@@ -1,0 +1,115 @@
+#!/usr/bin/env python3
+"""Experimental Responses forwarder using the active Codex OAuth account."""
+
+import json
+import os
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler
+from pathlib import Path
+from urllib.parse import urlparse
+
+from codexswitch_common import user_home
+
+UPSTREAM = "https://chatgpt.com/backend-api/codex/responses"
+
+
+def prepare_upstream_body(body: dict) -> dict:
+    prepared = dict(body)
+    prepared["stream"] = True
+    prepared["store"] = False
+    prepared.pop("max_output_tokens", None)
+    prepared.pop("instructions", None)
+    if isinstance(prepared.get("input"), list):
+        prepared["input"] = [
+            item
+            for item in prepared["input"]
+            if not (
+                isinstance(item, dict)
+                and item.get("type") == "message"
+                and item.get("role") in {"system", "developer"}
+            )
+        ]
+    return prepared
+
+
+def completed_response_from_sse(lines) -> dict:
+    completed = None
+    failure = None
+    output_items = {}
+    for raw_line in lines:
+        line = raw_line.decode(errors="replace").strip()
+        if not line.startswith("data:"):
+            continue
+        data = line[5:].strip()
+        if not data or data == "[DONE]":
+            continue
+        try:
+            event = json.loads(data)
+        except json.JSONDecodeError:
+            continue
+        if event.get("type") == "response.completed":
+            completed = event.get("response")
+        elif event.get("type") == "response.output_item.done":
+            output_items[int(event.get("output_index", len(output_items)))] = event.get("item")
+        elif event.get("type") in {"response.failed", "error"}:
+            failure = event
+    if completed is None:
+        raise RuntimeError(
+            f"OpenAI stream eindigde zonder completed response: {failure or 'onbekende fout'}"
+        )
+    if output_items and not completed.get("output"):
+        completed["output"] = [output_items[index] for index in sorted(output_items)]
+    return completed
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+
+    def _error(self, status: int, message: str) -> None:
+        print(f"openai oauth proxy error: {message}", flush=True)
+        raw = json.dumps({"error": {"message": message}}).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def do_POST(self):
+        if urlparse(self.path).path not in {"/responses", "/v1/responses"}:
+            self._error(404, "not found")
+            return
+        try:
+            codex_home = Path(os.environ.get("CODEX_HOME", user_home() / ".codex")).expanduser()
+            auth = json.loads((codex_home / "auth.json").read_text())
+            tokens = auth.get("tokens") or {}
+            token = tokens.get("access_token")
+            account = tokens.get("account_id")
+            if not token:
+                raise RuntimeError("OpenAI Codex-login ontbreekt; gebruik codexswitch auth openai")
+            length = int(self.headers.get("content-length", "0"))
+            body = prepare_upstream_body(
+                json.loads(self.rfile.read(length) or b"{}")
+            )
+            payload = json.dumps(body).encode()
+            headers = {"authorization": f"Bearer {token}", "content-type": "application/json", "accept": "text/event-stream", "originator": "codex_cli_rs"}
+            if account:
+                headers["chatgpt-account-id"] = str(account)
+            request = urllib.request.Request(UPSTREAM, data=payload, headers=headers, method="POST")
+            with urllib.request.urlopen(request, timeout=300) as response:
+                completed = completed_response_from_sse(response)
+                raw = json.dumps(completed).encode()
+                self.send_response(200)
+                self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(raw)))
+                self.end_headers()
+                self.wfile.write(raw)
+        except urllib.error.HTTPError as exc:
+            try:
+                detail = exc.read().decode(errors="replace")[:2000]
+            except Exception:
+                detail = ""
+            suffix = f": {detail}" if detail else ""
+            self._error(502, f"experimentele OpenAI OAuth-route faalde: HTTP {exc.code}{suffix}")
+        except Exception as exc:
+            self._error(502, f"experimentele OpenAI OAuth-route faalde: {exc}")

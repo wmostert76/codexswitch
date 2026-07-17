@@ -1,0 +1,194 @@
+#!/usr/bin/env python3
+"""Anthropic Messages compatibility handler for CodexSwitch providers."""
+
+import json
+import os
+import time
+import urllib.error
+import urllib.request
+from http.server import BaseHTTPRequestHandler
+from urllib.parse import urlparse
+
+from codexswitch_common import user_home
+
+LOOPBACK = os.environ.get("CODEXSWITCH_PROVIDER_PROXY_URL", "http://127.0.0.1:14555")
+MAX_REQUEST_BYTES = 32 * 1024 * 1024
+
+
+def _text_content(block: dict, role: str) -> dict | None:
+    kind = block.get("type")
+    if kind == "text":
+        return {"type": "output_text" if role == "assistant" else "input_text", "text": str(block.get("text", ""))}
+    if kind == "image" and role == "user":
+        source = block.get("source") or {}
+        if source.get("type") == "base64":
+            media = source.get("media_type", "image/png")
+            return {"type": "input_image", "image_url": f"data:{media};base64,{source.get('data', '')}"}
+    return None
+
+
+def messages_to_responses(body: dict) -> dict:
+    items: list[dict] = []
+    system = body.get("system")
+    if isinstance(system, list):
+        instructions = "\n".join(str(block.get("text", "")) for block in system if isinstance(block, dict) and block.get("type") == "text")
+    else:
+        instructions = str(system or "")
+    for message in body.get("messages") or []:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role", "user")
+        content = message.get("content", "")
+        blocks = [{"type": "text", "text": content}] if isinstance(content, str) else content
+        message_content = []
+        for block in blocks or []:
+            if not isinstance(block, dict):
+                continue
+            converted = _text_content(block, role)
+            if converted:
+                message_content.append(converted)
+            elif block.get("type") == "tool_use":
+                items.append({
+                    "type": "function_call",
+                    "call_id": str(block.get("id", "")),
+                    "name": str(block.get("name", "")),
+                    "arguments": json.dumps(block.get("input") or {}, separators=(",", ":")),
+                })
+            elif block.get("type") == "tool_result":
+                result = block.get("content", "")
+                if isinstance(result, list):
+                    result = "\n".join(str(part.get("text", "")) for part in result if isinstance(part, dict))
+                items.append({"type": "function_call_output", "call_id": str(block.get("tool_use_id", "")), "output": str(result)})
+        if message_content:
+            items.append({"type": "message", "role": role, "content": message_content})
+    tools = []
+    for tool in body.get("tools") or []:
+        if isinstance(tool, dict) and tool.get("name"):
+            tools.append({"type": "function", "name": tool["name"], "description": tool.get("description", ""), "parameters": tool.get("input_schema") or {"type": "object", "properties": {}}})
+    request = {
+        "model": body.get("model"),
+        "input": items,
+        "stream": False,
+        "store": False,
+        "max_output_tokens": body.get("max_tokens", 32000),
+    }
+    if instructions:
+        request["instructions"] = instructions
+    if tools:
+        request["tools"] = tools
+        request["tool_choice"] = "auto"
+        request["parallel_tool_calls"] = True
+    effort = os.environ.get("CODEXSWITCH_REASONING_EFFORT")
+    if not effort:
+        try:
+            state = json.loads((user_home() / ".config/codexswitch/config.json").read_text())
+            effort = state.get("reasoning_effort")
+        except (OSError, json.JSONDecodeError, AttributeError):
+            effort = None
+    if effort:
+        request["reasoning"] = {"effort": effort}
+    return request
+
+
+def responses_to_message(data: dict, model: str | None = None) -> dict:
+    content = []
+    for item in data.get("output") or []:
+        if not isinstance(item, dict):
+            continue
+        if item.get("type") == "message":
+            for part in item.get("content") or []:
+                if isinstance(part, dict) and part.get("type") in {"output_text", "text"}:
+                    content.append({"type": "text", "text": str(part.get("text", ""))})
+        elif item.get("type") in {"function_call", "custom_tool_call"}:
+            raw = item.get("arguments", item.get("input", "{}"))
+            try:
+                tool_input = json.loads(raw) if isinstance(raw, str) else raw
+            except json.JSONDecodeError:
+                tool_input = {"input": raw}
+            content.append({"type": "tool_use", "id": item.get("call_id") or item.get("id"), "name": item.get("name", ""), "input": tool_input or {}})
+    if not content:
+        text = data.get("output_text")
+        content = [{"type": "text", "text": str(text or "")}]
+    has_tools = any(block.get("type") == "tool_use" for block in content)
+    usage = data.get("usage") or {}
+    return {
+        "id": str(data.get("id") or f"msg_{int(time.time() * 1000)}"),
+        "type": "message",
+        "role": "assistant",
+        "model": str(data.get("model") or model or ""),
+        "content": content,
+        "stop_reason": "tool_use" if has_tools else "end_turn",
+        "stop_sequence": None,
+        "usage": {"input_tokens": int(usage.get("input_tokens", 0) or 0), "output_tokens": int(usage.get("output_tokens", 0) or 0)},
+    }
+
+
+class Handler(BaseHTTPRequestHandler):
+    protocol_version = "HTTP/1.1"
+    provider = ""
+
+    def send_json(self, status: int, payload: dict) -> None:
+        raw = json.dumps(payload).encode()
+        self.send_response(status)
+        self.send_header("content-type", "application/json")
+        self.send_header("content-length", str(len(raw)))
+        self.end_headers()
+        self.wfile.write(raw)
+
+    def sse(self, event: str, payload: dict) -> None:
+        self.wfile.write(f"event: {event}\ndata: {json.dumps(payload)}\n\n".encode())
+
+    def _stream_message(self, message: dict) -> None:
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("connection", "close")
+        self.end_headers()
+        start = {**message, "content": [], "stop_reason": None, "stop_sequence": None}
+        self.sse("message_start", {"type": "message_start", "message": start})
+        for index, block in enumerate(message["content"]):
+            initial = {"type": "text", "text": ""} if block["type"] == "text" else {**block, "input": {}}
+            self.sse("content_block_start", {"type": "content_block_start", "index": index, "content_block": initial})
+            if block["type"] == "text":
+                delta = {"type": "text_delta", "text": block.get("text", "")}
+            else:
+                delta = {"type": "input_json_delta", "partial_json": json.dumps(block.get("input") or {}, separators=(",", ":"))}
+            self.sse("content_block_delta", {"type": "content_block_delta", "index": index, "delta": delta})
+            self.sse("content_block_stop", {"type": "content_block_stop", "index": index})
+        self.sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": message["stop_reason"], "stop_sequence": None}, "usage": {"output_tokens": message["usage"]["output_tokens"]}})
+        self.sse("message_stop", {"type": "message_stop"})
+        self.wfile.flush()
+        self.close_connection = True
+
+    def do_POST(self):
+        if urlparse(self.path).path not in {"/messages", "/v1/messages"}:
+            self.send_json(404, {"type": "error", "error": {"type": "not_found_error", "message": "not found"}})
+            return
+        try:
+            length = int(self.headers.get("content-length", "0"))
+            if length < 0 or length > MAX_REQUEST_BYTES:
+                raise ValueError("request body too large")
+            body = json.loads(self.rfile.read(length) or b"{}")
+            request = messages_to_responses(body)
+            target = f"{LOOPBACK}/{self.provider}/v1/responses"
+            upstream = urllib.request.Request(target, data=json.dumps(request).encode(), headers={"content-type": "application/json"}, method="POST")
+            with urllib.request.urlopen(upstream, timeout=300) as response:
+                result = json.loads(response.read())
+            message = responses_to_message(result, body.get("model"))
+            if body.get("stream"):
+                self._stream_message(message)
+            else:
+                self.send_json(200, message)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        except Exception as exc:
+            detail = str(exc)
+            if isinstance(exc, urllib.error.HTTPError):
+                try:
+                    detail = exc.read().decode(errors="replace")[:2000] or detail
+                except Exception:
+                    pass
+            try:
+                self.send_json(502, {"type": "error", "error": {"type": "api_error", "message": detail}})
+            except (BrokenPipeError, ConnectionResetError):
+                return

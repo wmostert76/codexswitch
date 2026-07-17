@@ -26,7 +26,7 @@ def test_unified_proxy_loads_isolated_provider_engines():
 
     assert proxy.OPENCODE_ENGINE.PROVIDER == "opencode-go"
     assert proxy.OPENROUTER_ENGINE.PROVIDER == "openrouter"
-    assert sorted(proxy.ROUTES) == ["/azure", "/opencode-go", "/openrouter"]
+    assert sorted(proxy.ROUTES) == ["/azure", "/openai", "/opencode-go", "/openrouter"]
 
 
 def test_unified_proxy_routes_provider_prefix_and_preserves_query(monkeypatch):
@@ -84,8 +84,26 @@ def test_unified_health_lists_supported_providers():
 
     assert payload == {
         "ok": True,
-        "providers": ["opencode-go", "openrouter", "azure"],
+        "providers": ["openai", "opencode-go", "openrouter", "azure"],
+        "clients": ["codex", "claude"],
     }
+
+
+def test_claude_base_url_accepts_head_probe():
+    proxy = load_provider_proxy()
+    server = ThreadingHTTPServer(("127.0.0.1", 0), proxy.Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_port}/claude/openai",
+            method="HEAD",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            assert response.status == 200
+            assert response.read() == b""
+    finally:
+        server.shutdown()
 
 
 def test_unified_azure_models_route_avoids_catalog_404():
