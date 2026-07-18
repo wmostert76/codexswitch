@@ -45,6 +45,10 @@ jobs:
               echo "DO_RELEASE=true" >> "$GITHUB_ENV"
             fi
           fi
+          if [[ ! "$version" =~ ^[0-9]{2}\.(0[1-9]|1[0-2])\.([01][0-9]|2[0-3])[0-5][0-9]$ ]]; then
+            echo "Version must use JJ.MM.HHMM with a 24-hour clock: $version" >&2
+            exit 1
+          fi
 
       - name: Install dependencies
         if: env.DO_RELEASE == 'true'
@@ -60,6 +64,7 @@ jobs:
             bin/codexswitch \
             bin/codexswitch_backend.py \
             bin/codexswitch-tui \
+            bin/codexswitch-provider-credential \
             bin/codex-claude-proxy \
             bin/codex-openai-proxy \
             bin/codex-provider-proxy \

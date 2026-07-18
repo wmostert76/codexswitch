@@ -43,7 +43,7 @@ It is built for three workflows:
 - Native Claude Code routing to Claude deployments on Microsoft Foundry
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - Persistent provider/model defaults with on-demand proxy startup from Commander
-- One compatibility proxy for OpenCode Go, Codex/OpenRouter and non-Anthropic Claude routes
+- One statically linked Go compatibility proxy for OpenCode Go, Codex/OpenRouter and non-Anthropic Claude routes
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
 - Reproducible local install with dependency detection and on-demand proxy units
 - GitHub releases generated from `CHANGELOG.md`
@@ -53,6 +53,7 @@ It is built for three workflows:
 Requirements:
 
 - Linux with `sudo` and one of `apt`, `dnf`, `yum`, `pacman`, `zypper` or `apk`
+- Go 1.22 or newer; the installer installs it when the package manager provides it
 - OpenRouter API key for OpenRouter support
 - OpenCode Go API key for OpenCode Go support
 - `systemd` and `sudo` for installation into `/usr/local/bin`
@@ -69,10 +70,11 @@ Start the app:
 codexswitch tui
 ```
 
-The installer detects missing Python/venv/npm dependencies on common Linux
+The installer detects missing Python/venv/npm/Go dependencies on common Linux
 distros, installs or updates the Codex CLI when needed, creates `.venv`,
-installs Textual, links commands into `/usr/local/bin`, and removes obsolete
-proxy systemd units. On both Linux and Windows, Commander checks proxy health
+installs Textual, builds a stripped static `codex-provider-proxy` binary, links
+commands into `/usr/local/bin`, and removes obsolete proxy systemd units. On
+both Linux and Windows, Commander checks proxy health
 when the TUI opens and starts the unified proxy only when a compatibility-backed
 Codex or Claude Code session is launched. Direct Azure Codex and Microsoft
 Foundry Claude sessions do not start it. Once started, it remains active after
@@ -87,6 +89,10 @@ cd ~/codexswitch
 ./install.sh
 codexswitch version
 ```
+
+Release versions use `JJ.MM.HHMM`: two-digit year, two-digit month and local
+24-hour release time. For example, `26.06.1800` denotes a release created in
+June 2026 at 18:00.
 
 `codexswitch`, `codexswitch tui` and `codexswitch status` automatically check
 for a newer GitHub release or newer `origin/main` revision and immediately run
@@ -211,20 +217,28 @@ also permits a later plain `claude` launch without storing a key.
 
 The ChatGPT Codex endpoint rejects external system/developer messages, so the
 experimental OpenAI route omits Claude Code's system prompt while retaining
-the user conversation and tool schemas. Read, Write and Bash were verified
+the user conversation and tool schemas. Claude's server-side WebSearch schema
+is mapped to OpenAI's native Responses web-search tool and returned URL
+citations are streamed back as Claude server-tool results. Responses events are
+translated incrementally to Claude SSE, including thinking state, text,
+function calls and native web search. Long tool identifiers, explicit tool
+choice, parallel-tool settings, cached-token usage and terminal stop reasons
+are normalized across both protocols. Read, Write and Bash were verified
 end-to-end through the native Claude Code client; behavior may still differ
 from native Codex on complex agent workflows.
 
-Live OpenAI compatibility on Claude Code 2.1.211:
+Live OpenAI compatibility on Claude Code 2.1.212:
 
 | Capability | Result |
 | --- | --- |
-| Read, Write, Edit, Glob, Grep and Bash | Passed |
+| Read, Write, Edit and Bash | Passed with verified file/shell markers |
+| Glob and Grep | Not exposed by Claude Code 2.1.212; use Read, Bash or an available agent workflow |
 | WebSearch and WebFetch | Passed |
-| NotebookEdit and image reads | Passed |
-| MCP stdio tools | Passed with the MCP reference echo server |
-| Multiple tool calls in one task | Passed; concurrent timing was not proven |
-| Agent/subagent | Returns correct results, but may keep scheduling calls |
+| NotebookEdit | Passed with verified notebook content |
+| Image reads | Passed: logo, photo, two labeled diagrams, eight-panel orientation chart, exact 8×8 color counts and a two-image comparison |
+| MCP stdio tools | Passed with an exact echo marker from the MCP reference server |
+| Multiple tool calls in one task | Passed with paired Bash and Write results; concurrent timing was not proven |
+| Agent/subagent | Passed with an exact foreground-agent result marker |
 | TodoWrite | Not available in this Claude Code release |
 
 Live Azure OpenAI compatibility with `gpt-5.6-sol` on Claude Code 2.1.211:
@@ -289,7 +303,10 @@ catalog avoids an incompatible Azure `/models` refresh. Claude Code still uses
 the loopback Messages-to-Responses bridge when Azure `gpt-5.6-sol` is selected.
 
 OpenCode Go, Codex/OpenRouter and non-Anthropic Claude routes share one loopback
-process on port `14555`. Microsoft Foundry Claude and OpenRouter-hosted
+Go process on port `14555`. It exposes OpenAI Responses routes plus the Claude
+Messages compatibility routes, translates streaming events directly and reads
+vault-backed provider credentials through a narrow local helper. Microsoft
+Foundry Claude and OpenRouter-hosted
 Anthropic models bypass it entirely. Dispatch is
 never inferred from model names. Commander shows one compact health indicator
 and starts the unified proxy after F9 closes the TUI only for a proxy-backed
@@ -308,7 +325,7 @@ out of the repository.
 | Opgeslagen OpenAI accounts | Gedeelde versleutelde vault | CodexSwitch haalt accounts bij ieder gebruik opnieuw uit Object Storage |
 | Azure OpenAI credentials | Gedeelde versleutelde vault | Endpoint en API-key blijven uit `config.toml` en lokale caches |
 | OpenCode Go API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
-| OpenRouter API key | Gedeelde versleutelde vault | De unified proxy doet een verse remote vault-read |
+| OpenRouter API key | Gedeelde versleutelde vault | De credential helper doet voor de Go-proxy een verse remote vault-read |
 
 Vault flow:
 

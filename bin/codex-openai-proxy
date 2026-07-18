@@ -75,6 +75,17 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _forward_sse(self, response) -> None:
+        self.send_response(200)
+        self.send_header("content-type", "text/event-stream")
+        self.send_header("cache-control", "no-cache")
+        self.send_header("connection", "close")
+        self.end_headers()
+        for line in response:
+            self.wfile.write(line)
+            self.wfile.flush()
+        self.close_connection = True
+
     def do_POST(self):
         if urlparse(self.path).path not in {"/responses", "/v1/responses"}:
             self._error(404, "not found")
@@ -88,22 +99,25 @@ class Handler(BaseHTTPRequestHandler):
             if not token:
                 raise RuntimeError("OpenAI Codex-login ontbreekt; gebruik codexswitch auth openai")
             length = int(self.headers.get("content-length", "0"))
-            body = prepare_upstream_body(
-                json.loads(self.rfile.read(length) or b"{}")
-            )
+            incoming = json.loads(self.rfile.read(length) or b"{}")
+            downstream_stream = bool(incoming.get("stream"))
+            body = prepare_upstream_body(incoming)
             payload = json.dumps(body).encode()
             headers = {"authorization": f"Bearer {token}", "content-type": "application/json", "accept": "text/event-stream", "originator": "codex_cli_rs"}
             if account:
                 headers["chatgpt-account-id"] = str(account)
             request = urllib.request.Request(UPSTREAM, data=payload, headers=headers, method="POST")
             with urllib.request.urlopen(request, timeout=300) as response:
-                completed = completed_response_from_sse(response)
-                raw = json.dumps(completed).encode()
-                self.send_response(200)
-                self.send_header("content-type", "application/json")
-                self.send_header("content-length", str(len(raw)))
-                self.end_headers()
-                self.wfile.write(raw)
+                if downstream_stream:
+                    self._forward_sse(response)
+                else:
+                    completed = completed_response_from_sse(response)
+                    raw = json.dumps(completed).encode()
+                    self.send_response(200)
+                    self.send_header("content-type", "application/json")
+                    self.send_header("content-length", str(len(raw)))
+                    self.end_headers()
+                    self.wfile.write(raw)
         except urllib.error.HTTPError as exc:
             try:
                 detail = exc.read().decode(errors="replace")[:2000]

@@ -2,6 +2,68 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [26.07.1800] - 2026-07-18
+
+### Added
+
+- Replaced the active Python compatibility-proxy process with an in-repository,
+  statically linked Go implementation. It retains the existing port and routes
+  for OpenAI OAuth, Azure OpenAI, OpenCode Go, OpenRouter and Claude Messages,
+  while Commander, account management and the Textual TUI remain in Python.
+- The installer now detects Go, builds `cmd/codexswitch-proxy` reproducibly and
+  installs the binary as `codex-provider-proxy`. A narrow credential helper
+  preserves access to local and remote encrypted vault entries without placing
+  provider secrets in the Go process arguments, logs or configuration.
+- Added Go-native coverage for unified health, Claude tool/image translation,
+  long identifiers, thinking state, cached usage, namespace/custom tools,
+  Responses SSE collection, complete Codex model metadata and an end-to-end
+  Claude-to-Azure round trip.
+
+### Fixed
+
+- Claude Code WebSearch through the OpenAI Responses bridge now maps
+  Anthropic's server-side search schema to OpenAI's native `web_search` tool
+  and converts search calls plus URL citations back into Claude server-tool
+  streaming blocks. Live verification with `gpt-5.6-sol` returned real source
+  URLs instead of `Did 0 searches`.
+- Empty optional `pages` arguments emitted by GPT for Claude's Read tool are
+  now removed by the bridge, avoiding a needless validation failure before
+  text and image reads.
+- Claude Read image results are now retained as high-detail Responses vision
+  inputs instead of being discarded while translating the tool result. A live
+  six-image matrix with `gpt-5.6-sol` passed a logo, photo, two labeled
+  diagrams, an eight-panel orientation chart and exact 8x8 color-cell counts;
+  a separate two-image task also identified both files correctly.
+- Claude/OpenAI protocol translation now preserves mixed content ordering,
+  safely shortens overlong tool names and call IDs with deterministic reverse
+  mapping, honors explicit `auto`/`any`/`none`/named tool choices and Claude's
+  parallel-tool switch, and forwards web-search location hints.
+- OpenAI reasoning summaries and encrypted continuation state are now returned
+  as Claude thinking blocks. Cached-token usage, terminal stop reasons and stop
+  sequences are retained instead of being flattened to generic defaults.
+- Streaming Claude requests now translate OpenAI Responses SSE events directly
+  to Claude SSE for thinking, text, function calls and native web search. The
+  experimental ChatGPT OAuth transport forwards the upstream event stream
+  instead of buffering the complete response first. Live Claude Code checks
+  passed Bash, WebSearch and an image Read through the streaming route.
+- The Go OpenAI transport forces the downstream SSE content type when the
+  ChatGPT Codex endpoint omits it, preventing Claude from treating a valid
+  stream as plain text. OpenRouter's catalog is normalized to Codex's complete
+  `models` schema instead of forwarding the provider-specific `data` envelope.
+- Live Go-proxy verification passed Claude Code tool calls on OpenAI, Azure and
+  OpenRouter, image input and OpenAI WebSearch/thinking, plus a normal Codex CLI
+  OpenRouter shell call. OpenCode Go returned its current insufficient-balance
+  error correctly, so a paid completion could not be re-run in this session.
+- Revalidated tool results on Claude Code 2.1.212 rather than counting tool
+  invocations: Read, Write, Edit, Bash, NotebookEdit, WebSearch, WebFetch,
+  image reads, namespaced MCP and Agent passed. Claude Code 2.1.212 does not
+  advertise standalone Glob or Grep tools in these sessions.
+
+### Changed
+
+- Releases now use the `JJ.MM.HHMM` version format with local 24-hour time;
+  this release is `26.07.1800` for 18 July 2026 at 18:00 CEST.
+
 ## [1.8.0] - 2026-07-17
 
 ### Added
@@ -597,7 +659,7 @@ All notable CodexSwitch changes are documented here.
   Hover a key label to highlight it and click to trigger the action.
 
 
-Versioning follows pragmatic semantic versioning:
+Releases through `1.8.0` followed pragmatic semantic versioning:
 
 - Patch (`0.0.x`) for fixes and low-risk compatibility improvements.
 - Minor (`0.x.0`) for new user-visible features or provider support.

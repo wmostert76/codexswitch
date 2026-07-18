@@ -1,5 +1,6 @@
 import importlib.machinery
 import importlib.util
+import io
 import json
 from pathlib import Path
 
@@ -51,3 +52,32 @@ def test_sse_completed_response_collects_text_and_tool_items():
     response = proxy.completed_response_from_sse(lines)
     assert response["id"] == "resp-1"
     assert response["output"] == [item]
+
+
+def test_streaming_request_is_forwarded_without_buffering_or_rewriting():
+    proxy = load_proxy()
+
+    class RecordingHandler(proxy.Handler):
+        def __init__(self):
+            self.status = None
+            self.headers = []
+            self.wfile = io.BytesIO()
+            self.close_connection = False
+
+        def send_response(self, status):
+            self.status = status
+
+        def send_header(self, name, value):
+            self.headers.append((name, value))
+
+        def end_headers(self):
+            pass
+
+    lines = [b'data: {"type":"response.created"}\n', b"data: [DONE]\n"]
+    handler = RecordingHandler()
+    handler._forward_sse(iter(lines))
+
+    assert handler.status == 200
+    assert ("content-type", "text/event-stream") in handler.headers
+    assert handler.wfile.getvalue() == b"".join(lines)
+    assert handler.close_connection is True

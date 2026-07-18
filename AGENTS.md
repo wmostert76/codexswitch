@@ -10,7 +10,9 @@ The repository contains:
 - `bin/codexswitch`: Thin CLI launcher
 - `bin/codexswitch_backend.py`: Importable backend and CLI implementation
 - `bin/codexswitch-tui`: Textual Commander-style interface
-- `bin/codex-opencode-go-proxy`: Responses API compatibility proxy
+- `cmd/codexswitch-proxy`: Active unified Go compatibility proxy
+- `internal/proxy`: Provider transports and protocol translators
+- `bin/codex-*-proxy`: Legacy Python compatibility references and fallback
 - `bin/opencode-go-token`: Reads the existing OpenCode Go credential
 - `install.sh`: Reproducible local installation
 
@@ -49,6 +51,9 @@ configuration logic in the TUI.
 Run before committing:
 
 ```bash
+gofmt -w cmd/codexswitch-proxy internal/proxy
+go test ./...
+go vet ./...
 python3 -m py_compile bin/codexswitch bin/codexswitch_backend.py bin/codex-provider-proxy bin/codex-opencode-go-proxy bin/codex-azure-proxy bin/opencode-go-token bin/codexswitch_common.py
 .venv/bin/python -m py_compile bin/codexswitch-tui
 bash -n install.sh uninstall.sh

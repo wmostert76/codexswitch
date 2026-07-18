@@ -132,6 +132,15 @@ ensure_system_dependencies() {
   if ! command -v curl >/dev/null 2>&1; then
     packages+=(curl)
   fi
+  if ! command -v go >/dev/null 2>&1; then
+    case "$manager" in
+      apt-get) packages+=(golang-go) ;;
+      dnf|yum) packages+=(golang) ;;
+      pacman) packages+=(go) ;;
+      zypper) packages+=(go) ;;
+      apk) packages+=(go) ;;
+    esac
+  fi
   if [[ ${#packages[@]} -gt 0 ]]; then
     echo "Installing missing system dependencies: ${packages[*]}"
     install_packages "$manager" "${packages[@]}"
@@ -185,8 +194,24 @@ else
   "$VENV/bin/pip" install -r "$PROJECT_ROOT/requirements.txt"
 fi
 
+BUILD_DIR="$PROJECT_ROOT/.build"
+PROXY_BUILD="$BUILD_DIR/codex-provider-proxy"
+mkdir -p "$BUILD_DIR"
+echo "Building the CodexSwitch Go provider proxy"
+if [[ $(id -u) -eq 0 && "$TARGET_USER" != "root" ]]; then
+  chown "$TARGET_USER" "$BUILD_DIR"
+  sudo -u "$TARGET_USER" bash -c \
+    'cd "$1" && CGO_ENABLED=0 GOCACHE="$2/go-cache" go build -trimpath -ldflags="-s -w" -o "$3" ./cmd/codexswitch-proxy' \
+    _ "$PROJECT_ROOT" "$BUILD_DIR" "$PROXY_BUILD"
+else
+  (cd "$PROJECT_ROOT" && env CGO_ENABLED=0 GOCACHE="$BUILD_DIR/go-cache" \
+    go build -trimpath -ldflags='-s -w' -o "$PROXY_BUILD" \
+    ./cmd/codexswitch-proxy)
+fi
+
 sudo install -d -m 755 /usr/local/bin
-for command in codexswitch codex-provider-proxy codexswitch-azure-token codexswitch-claude-token opencode-go-token; do
+sudo install -m 755 "$PROXY_BUILD" /usr/local/bin/codex-provider-proxy
+for command in codexswitch codexswitch-azure-token codexswitch-claude-token codexswitch-provider-credential opencode-go-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
 
