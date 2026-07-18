@@ -2,6 +2,14 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [26.7.18.1946] - 2026-07-18
+
+### Fixed
+
+- Limited the startup `git ls-remote` update check to ten seconds. Commander
+  now continues to the TUI with a warning when the configured Git remote is
+  unreachable instead of hanging indefinitely before startup.
+
 ## [26.7.18.1816] - 2026-07-18
 
 ### Fixed

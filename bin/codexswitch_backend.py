@@ -147,6 +147,7 @@ GITHUB_GIT_URL = f"https://github.com/{GITHUB_REPOSITORY}.git"
 GITHUB_LATEST_RELEASE_API = (
     f"https://api.github.com/repos/{GITHUB_REPOSITORY}/releases/latest"
 )
+GIT_REMOTE_TIMEOUT_SECONDS = 10
 
 
 def user_home() -> Path:
@@ -187,8 +188,14 @@ def run(cmd: list[str], check: bool = True) -> subprocess.CompletedProcess:
     return subprocess.run(cmd, text=True, encoding="utf-8", errors="replace", check=check)
 
 
-def command_output(cmd: list[str]) -> str:
-    return subprocess.check_output(cmd, text=True, encoding="utf-8", errors="replace").strip()
+def command_output(cmd: list[str], timeout: float | None = None) -> str:
+    return subprocess.check_output(
+        cmd,
+        text=True,
+        encoding="utf-8",
+        errors="replace",
+        timeout=timeout,
+    ).strip()
 
 
 def run_post_update_install(skip_self_update: bool = False) -> None:
@@ -416,7 +423,13 @@ def local_git_revision(ref: str = "HEAD") -> str:
 def remote_git_revision(remote: str = "origin", branch: str = "main") -> str:
     try:
         output = command_output(
-            ["git", "-C", str(PROJECT_ROOT), "ls-remote", "--heads", remote, branch]
+            ["git", "-C", str(PROJECT_ROOT), "ls-remote", "--heads", remote, branch],
+            timeout=GIT_REMOTE_TIMEOUT_SECONDS,
+        )
+    except subprocess.TimeoutExpired:
+        die(
+            "time-out bij lezen van remote git revisie: "
+            f"{remote}/{branch} ({GIT_REMOTE_TIMEOUT_SECONDS}s)"
         )
     except subprocess.CalledProcessError:
         die(f"kan remote git revisie niet lezen: {remote}/{branch}")

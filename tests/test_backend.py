@@ -345,6 +345,45 @@ def test_update_check_reports_main_branch_update(monkeypatch, capsys):
     assert "latest release: https://example.test/release" in output
 
 
+def test_remote_git_revision_limits_network_wait(monkeypatch):
+    calls = []
+
+    def fake_command_output(cmd, timeout=None):
+        calls.append((cmd, timeout))
+        return "a" * 40 + "\trefs/heads/main\n"
+
+    monkeypatch.setattr(cs, "command_output", fake_command_output)
+
+    assert cs.remote_git_revision("origin", "main") == "a" * 40
+    assert calls == [
+        (
+            [
+                "git",
+                "-C",
+                str(cs.PROJECT_ROOT),
+                "ls-remote",
+                "--heads",
+                "origin",
+                "main",
+            ],
+            cs.GIT_REMOTE_TIMEOUT_SECONDS,
+        )
+    ]
+
+
+def test_auto_update_continues_after_remote_timeout(monkeypatch, capsys):
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setattr(cs, "latest_github_release", lambda: (f"v{cs.VERSION}", ""))
+
+    def remote_timeout():
+        raise SystemExit("git remote time-out")
+
+    monkeypatch.setattr(cs, "main_branch_update_available", remote_timeout)
+
+    assert cs.auto_update_from_github() is False
+    assert "auto-update check mislukt: git remote time-out" in capsys.readouterr().err
+
+
 def test_update_refuses_dirty_repository(monkeypatch):
     import pytest
 
