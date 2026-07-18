@@ -14,10 +14,11 @@ import codexswitch_backend as cs
 
 
 def test_version_constant_is_release_version():
-    # Releases use JJ.MM.HHMM with a 24-hour clock.
+    # Releases use JJ.M.DD.HHMM with a 24-hour clock.
     import re
     assert re.fullmatch(
-        r"\d{2}\.(?:0[1-9]|1[0-2])\.(?:[01]\d|2[0-3])[0-5]\d",
+        r"\d{2}\.(?:[1-9]|1[0-2])\.(?:0[1-9]|[12]\d|3[01])\."
+        r"(?:[01]\d|2[0-3])[0-5]\d",
         cs.VERSION,
     ), f"Invalid version: {cs.VERSION}"
     proc = subprocess.run(
@@ -299,18 +300,20 @@ def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
 
 
 def test_parse_version_accepts_release_tags():
-    assert cs.parse_version("0.6.0") == (0, 6, 0)
-    assert cs.parse_version("v0.6.0") == (0, 6, 0)
+    assert cs.parse_version("0.6.0") == (0, 6, 0, 0)
+    assert cs.parse_version("v0.6.0") == (0, 6, 0, 0)
+    assert cs.parse_version("v26.7.18.1816") == (26, 7, 18, 1816)
+    assert cs.parse_version("26.07.1800") < cs.parse_version("26.7.18.1816")
 
 
 def test_update_check_reports_newer_release(monkeypatch, capsys):
-    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.2359", "https://example.test/release"))
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.31.2359", "https://example.test/release"))
     monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
 
     assert cs.update_from_github(check_only=True) is True
 
     output = capsys.readouterr().out
-    assert f"{cs.VERSION} -> 99.12.2359" in output
+    assert f"{cs.VERSION} -> 99.12.31.2359" in output
     assert "https://example.test/release" in output
 
 
@@ -345,7 +348,7 @@ def test_update_check_reports_main_branch_update(monkeypatch, capsys):
 def test_update_refuses_dirty_repository(monkeypatch):
     import pytest
 
-    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.2359", ""))
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.31.2359", ""))
     monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: True)
 
@@ -367,7 +370,7 @@ def test_auto_update_is_quiet_when_current(monkeypatch, capsys):
 
 def test_auto_update_skips_dirty_checkout(monkeypatch, capsys):
     monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
-    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.2359", ""))
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.31.2359", ""))
     monkeypatch.setattr(cs, "main_branch_update_available", lambda: (False, "", ""))
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: True)
 
@@ -415,7 +418,7 @@ def test_auto_update_main_branch_runs_install_without_self_update(monkeypatch):
 
 def test_release_update_on_main_does_not_fetch_release_tag(monkeypatch):
     calls = []
-    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.2359", ""))
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.31.2359", ""))
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
     monkeypatch.setattr(cs, "current_git_branch", lambda: "main")
     monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append(cmd))
@@ -438,7 +441,7 @@ def test_release_update_on_main_does_not_fetch_release_tag(monkeypatch):
 
 def test_detached_release_update_fetches_canonical_internal_ref(monkeypatch):
     calls = []
-    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.2359", ""))
+    monkeypatch.setattr(cs, "latest_github_release", lambda: ("v99.12.31.2359", ""))
     monkeypatch.setattr(cs, "local_repo_is_dirty", lambda: False)
     monkeypatch.setattr(cs, "current_git_branch", lambda: "release-checkout")
     monkeypatch.setattr(cs, "run", lambda cmd, check=True: calls.append(cmd))
@@ -453,7 +456,7 @@ def test_detached_release_update_fetches_canonical_internal_ref(monkeypatch):
         "fetch",
         "--no-tags",
         cs.GITHUB_GIT_URL,
-        "+refs/tags/v99.12.2359:refs/codexswitch/releases/v99.12.2359",
+        "+refs/tags/v99.12.31.2359:refs/codexswitch/releases/v99.12.31.2359",
     ] in calls
     assert [
         "git",
@@ -461,7 +464,7 @@ def test_detached_release_update_fetches_canonical_internal_ref(monkeypatch):
         str(cs.PROJECT_ROOT),
         "checkout",
         "--detach",
-        "refs/codexswitch/releases/v99.12.2359",
+        "refs/codexswitch/releases/v99.12.31.2359",
     ] in calls
     assert not any("--tags" in call for call in calls)
 

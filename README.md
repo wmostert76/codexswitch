@@ -90,9 +90,9 @@ cd ~/codexswitch
 codexswitch version
 ```
 
-Release versions use `JJ.MM.HHMM`: two-digit year, two-digit month and local
-24-hour release time. For example, `26.06.1800` denotes a release created in
-June 2026 at 18:00.
+Release versions use `JJ.M.DD.HHMM`: two-digit year, month, two-digit day and
+local 24-hour release time. For example, `26.7.18.1816` denotes a release
+created on 18 July 2026 at 18:16.
 
 `codexswitch`, `codexswitch tui` and `codexswitch status` automatically check
 for a newer GitHub release or newer `origin/main` revision and immediately run

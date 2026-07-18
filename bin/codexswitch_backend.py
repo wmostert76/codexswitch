@@ -345,11 +345,26 @@ def write_secret_json(path: Path, data) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def parse_version(value: str) -> tuple[int, int, int]:
-    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)", value.strip())
+def parse_version(value: str) -> tuple[int, int, int, int]:
+    match = re.fullmatch(r"v?(\d+)\.(\d+)\.(\d+)(?:\.(\d+))?", value.strip())
     if not match:
         die(f"ongeldige versie: {value}")
-    return tuple(int(part) for part in match.groups())
+    year_or_major, month_or_minor, day_or_patch, release_time = match.groups()
+    if release_time is None:
+        # Preserve ordering for historical SemVer and the short-lived
+        # JJ.MM.HHMM format by treating their third part as the final key.
+        return (
+            int(year_or_major),
+            int(month_or_minor),
+            0,
+            int(day_or_patch),
+        )
+    return (
+        int(year_or_major),
+        int(month_or_minor),
+        int(day_or_patch),
+        int(release_time),
+    )
 
 
 def latest_github_release() -> tuple[str, str]:

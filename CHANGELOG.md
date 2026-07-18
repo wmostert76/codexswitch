@@ -2,6 +2,16 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [26.7.18.1816] - 2026-07-18
+
+### Fixed
+
+- Corrected the timestamp release format to include the day. Releases now use
+  `JJ.M.DD.HHMM` in local 24-hour time; this release is `26.7.18.1816` for
+  18 July 2026 at 18:16 CEST.
+- Version comparison remains compatible with historical SemVer tags and the
+  superseded three-part `JJ.MM.HHMM` release.
+
 ## [26.07.1800] - 2026-07-18
 
 ### Added
@@ -61,8 +71,8 @@ All notable CodexSwitch changes are documented here.
 
 ### Changed
 
-- Releases now use the `JJ.MM.HHMM` version format with local 24-hour time;
-  this release is `26.07.1800` for 18 July 2026 at 18:00 CEST.
+- This release introduced the superseded `JJ.MM.HHMM` format; it was corrected
+  in `26.7.18.1816` to include the day.
 
 ## [1.8.0] - 2026-07-17
 
