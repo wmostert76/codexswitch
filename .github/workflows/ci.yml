@@ -24,8 +24,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          python -m pip install -r requirements.txt
-          python -m pip install pytest
+          python -m pip install -r requirements-dev.txt
 
       - name: Compile Python entry points
         run: |
@@ -51,3 +50,24 @@ jobs:
 
       - name: Headless TUI test (80x24 and 120x40)
         run: python -m pytest tests/test_tui_headless.py -v
+
+  go-checks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: go.mod
+
+      - name: Check formatting
+        run: test -z "$(gofmt -d cmd/codexswitch cmd/codexswitch-proxy internal/proxy)"
+
+      - name: Test with race detector
+        run: go test -race ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Build production proxy
+        run: go build ./cmd/codexswitch-proxy

@@ -42,7 +42,7 @@ It is built for three workflows:
 - Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
 - Native Claude Code routing to Claude deployments on Microsoft Foundry
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
-- Persistent provider/model defaults with on-demand proxy startup from Commander
+- Persistent provider/model defaults with on-demand proxy startup during activation and launch
 - One statically linked Go compatibility proxy for OpenCode Go, Codex/OpenRouter and non-Anthropic Claude routes
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
 - Reproducible local install with dependency detection and on-demand proxy units
@@ -309,8 +309,10 @@ vault-backed provider credentials through a narrow local helper. Microsoft
 Foundry Claude and OpenRouter-hosted
 Anthropic models bypass it entirely. Dispatch is
 never inferred from model names. Commander shows one compact health indicator
-and starts the unified proxy after F9 closes the TUI only for a proxy-backed
-selection. F5 refreshes the display.
+and starts the unified proxy when a proxy-backed selection is activated and
+again verifies it immediately before launch. This also keeps a subsequent
+plain `codex` invocation working after `codexswitch use`. F5 refreshes the
+display.
 Windows creates no service or Scheduled Task; the Linux unit is disabled at
 boot and started on demand.
 

@@ -100,7 +100,7 @@ func (s *server) chatRequest(r *http.Request, target, key, provider string, payl
 	}
 	var last error
 	for attempt := 0; attempt < 3; attempt++ {
-		response, err := s.request(http.MethodPost, target, payload, headers)
+		response, err := s.request(r.Context(), http.MethodPost, target, payload, headers)
 		if err == nil && (response.StatusCode < 500 || attempt == 2) {
 			return response, nil
 		}

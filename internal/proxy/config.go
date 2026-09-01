@@ -1,6 +1,7 @@
 package proxy
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -140,10 +142,15 @@ func (c config) helperCredential(provider string) (map[string]any, error) {
 	if helper == "" {
 		return nil, fmt.Errorf("%s credential helper is missing", provider)
 	}
-	command := exec.Command(helper, provider)
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	command := exec.CommandContext(ctx, helper, provider)
 	command.Env = os.Environ()
 	raw, err := command.Output()
 	if err != nil {
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			return nil, fmt.Errorf("%s credential helper timed out", provider)
+		}
 		return nil, fmt.Errorf("%s credential helper failed", provider)
 	}
 	var value map[string]any

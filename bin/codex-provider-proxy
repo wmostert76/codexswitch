@@ -153,6 +153,7 @@ class Handler(BaseHTTPRequestHandler):
                 200,
                 {
                     "ok": True,
+                    "implementation": "python-fallback",
                     "providers": ["openai", "opencode-go", "openrouter", "azure"],
                     "clients": ["codex", "claude"],
                 },

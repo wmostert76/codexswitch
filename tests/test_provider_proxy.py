@@ -84,6 +84,7 @@ def test_unified_health_lists_supported_providers():
 
     assert payload == {
         "ok": True,
+        "implementation": "python-fallback",
         "providers": ["openai", "opencode-go", "openrouter", "azure"],
         "clients": ["codex", "claude"],
     }

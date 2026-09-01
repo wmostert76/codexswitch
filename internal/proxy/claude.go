@@ -61,7 +61,7 @@ func (s *server) handleClaude(w http.ResponseWriter, r *http.Request, provider s
 		return
 	}
 	target := "http://" + s.config.Address + "/" + provider + "/v1/responses"
-	response, err := s.request(http.MethodPost, target, requestBody, map[string]string{"Accept": acceptFor(requestBody)})
+	response, err := s.request(r.Context(), http.MethodPost, target, requestBody, map[string]string{"Accept": acceptFor(requestBody)})
 	if err != nil {
 		writeJSON(w, http.StatusBadGateway, map[string]any{"type": "error", "error": map[string]any{"type": "api_error", "message": err.Error()}})
 		return

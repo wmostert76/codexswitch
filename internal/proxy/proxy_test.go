@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestHealthIdentifiesGoImplementation(t *testing.T) {
@@ -27,6 +29,31 @@ func TestHealthIdentifiesGoImplementation(t *testing.T) {
 	}
 	if body["implementation"] != "go" {
 		t.Fatalf("implementation=%v", body["implementation"])
+	}
+}
+
+func TestUpstreamRequestStopsWhenClientContextIsCancelled(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer upstream.Close()
+	s := newServer(config{Home: t.TempDir()}, log.New(io.Discard, "", 0))
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	started := time.Now()
+	_, err := s.request(ctx, http.MethodGet, upstream.URL, nil, nil)
+	if err == nil {
+		t.Fatal("expected cancelled request")
+	}
+	if time.Since(started) > time.Second {
+		t.Fatal("cancelled request did not stop promptly")
+	}
+}
+
+func TestMalformedSSEIsReported(t *testing.T) {
+	err := scanSSE(strings.NewReader("data: {broken}\n\n"), func(map[string]any) error { return nil })
+	if err == nil || !strings.Contains(err.Error(), "invalid SSE JSON") {
+		t.Fatalf("err=%v", err)
 	}
 }
 

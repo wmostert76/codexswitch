@@ -9,6 +9,23 @@ All notable CodexSwitch changes are documented here.
 - Limited the startup `git ls-remote` update check to ten seconds. Commander
   now continues to the TUI with a warning when the configured Git remote is
   unreachable instead of hanging indefinitely before startup.
+- Proxy-backed provider activation now starts and verifies the unified proxy,
+  so a subsequent plain `codex` command no longer reconnects repeatedly to an
+  unused loopback port. Startup uses bounded health polling and verifies the
+  responding implementation instead of trusting any HTTP 200 on port 14555.
+- Configuration and switch-state writes now use atomic replacement, preventing
+  interrupted writes from leaving truncated TOML or JSON. Status explicitly
+  marks a removed native OpenAI model as invalid instead of presenting stale
+  state as healthy.
+- Go upstream requests now inherit client cancellation, credential helpers have
+  a bounded timeout, malformed SSE is reported, and server input/header limits
+  are explicit.
+
+### Changed
+
+- CI now formats, race-tests, vets and builds the active Go proxy in addition to
+  the Python matrix. A development requirements file makes the documented local
+  pytest workflow reproducible.
 
 ## [26.7.18.1816] - 2026-07-18
 

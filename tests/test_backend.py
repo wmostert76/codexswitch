@@ -299,6 +299,32 @@ def test_status_shows_reasoning_effort(tmp_path, monkeypatch, capsys):
     assert "huidig:       openrouter / z-ai/glm-5.2 / denken=high" in capsys.readouterr().out
 
 
+def test_status_marks_removed_openai_model_invalid(tmp_path, monkeypatch, capsys):
+    codex_home = tmp_path / ".codex"
+    switch_home = tmp_path / "switch"
+    codex_home.mkdir()
+    switch_home.mkdir()
+    switch_config = switch_home / "config.json"
+    switch_config.write_text(json.dumps({"provider": "openai", "model": "retired-model"}))
+    monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+    monkeypatch.setattr(cs, "CODEX_CONFIG", codex_home / "config.toml")
+    monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+    monkeypatch.setattr(cs, "SWITCH_CONFIG", switch_config)
+    monkeypatch.setattr(cs, "enable_vault_session_cache", lambda _home: None)
+    monkeypatch.setattr(cs, "codex_bin", lambda: "/tmp/codex")
+    monkeypatch.setattr(cs, "_common_opencode_bin", lambda: None)
+    monkeypatch.setattr(cs, "opencode_go_key_present", lambda: False)
+    monkeypatch.setattr(cs, "azure_credentials_present", lambda: False)
+    monkeypatch.setattr(cs, "foundry_credentials_present", lambda: False)
+    monkeypatch.setattr(cs, "openrouter_key_present", lambda: False)
+    monkeypatch.setattr(cs, "codex_usage_summary", lambda _data: [])
+    monkeypatch.setattr(cs, "openai_models", lambda: ["supported-model"])
+
+    cs.status()
+
+    assert "openai / retired-model / ONGELDIG MODEL" in capsys.readouterr().out
+
+
 def test_parse_version_accepts_release_tags():
     assert cs.parse_version("0.6.0") == (0, 6, 0, 0)
     assert cs.parse_version("v0.6.0") == (0, 6, 0, 0)
@@ -580,6 +606,36 @@ def test_ensure_provider_proxy_starts_detached_process_only_when_required(
     assert calls == [expected]
 
 
+def test_activation_starts_required_proxy_before_writing_selection(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs, "ensure_unified_provider_proxy", lambda: calls.append("proxy"))
+    monkeypatch.setattr(
+        cs,
+        "update_codex_config",
+        lambda provider, model, effort: calls.append((provider, model, effort)),
+    )
+    monkeypatch.setattr(cs, "read_json", lambda _path, default: dict(default))
+    monkeypatch.setattr(cs, "write_json", lambda _path, data: calls.append(("state", data)))
+
+    cs.activate_selection("codex", "openrouter", "openai/gpt-5.4", None)
+
+    assert calls[0] == "proxy"
+    assert calls[1] == ("openrouter", "openai/gpt-5.4", None)
+
+
+def test_direct_anthropic_claude_activation_skips_proxy(monkeypatch):
+    calls = []
+    monkeypatch.setattr(cs, "ensure_unified_provider_proxy", lambda: calls.append("proxy"))
+    monkeypatch.setattr(cs, "update_codex_config", lambda *args: calls.append("config"))
+    monkeypatch.setattr(cs, "update_claude_settings", lambda *args: calls.append("claude"))
+    monkeypatch.setattr(cs, "read_json", lambda _path, default: dict(default))
+    monkeypatch.setattr(cs, "write_json", lambda *_args: None)
+
+    cs.activate_selection("claude", "openrouter", "anthropic/claude-sonnet-4.6")
+
+    assert calls == ["config", "claude"]
+
+
 def test_ensure_provider_proxy_migrates_legacy_active_base_url(
     tmp_path, monkeypatch
 ):
@@ -787,6 +843,26 @@ class TestReadJson:
         f.write_text("not json")
         with pytest.raises(SystemExit):
             cs.read_json(f, {})
+
+
+def test_write_json_replaces_existing_file_atomically(tmp_path, monkeypatch):
+    target = tmp_path / "state.json"
+    target.write_text('{"old": true}\n')
+    replacements = []
+    real_replace = os.replace
+    monkeypatch.setattr(
+        cs.os,
+        "replace",
+        lambda source, destination: (
+            replacements.append((Path(source), Path(destination))),
+            real_replace(source, destination),
+        )[-1],
+    )
+
+    cs.write_json(target, {"new": True})
+
+    assert cs.read_json(target, {}) == {"new": True}
+    assert replacements and replacements[0][1] == target
 
 
 class TestCodexConfigState:

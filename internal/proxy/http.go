@@ -93,8 +93,8 @@ func scanSSE(body io.Reader, fn func(map[string]any) error) error {
 			continue
 		}
 		var event map[string]any
-		if json.Unmarshal([]byte(payload), &event) != nil {
-			continue
+		if err := json.Unmarshal([]byte(payload), &event); err != nil {
+			return fmt.Errorf("invalid SSE JSON: %w", err)
 		}
 		if err := fn(event); err != nil {
 			return err

@@ -331,9 +331,24 @@ def ensure_codex_runtime_writable() -> None:
 
 def write_json(path: Path, data) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2, sort_keys=True) + "\n")
+    atomic_write_text(path, json.dumps(data, indent=2, sort_keys=True) + "\n")
     set_home_owner(path.parent)
     set_home_owner(path)
+
+
+def atomic_write_text(path: Path, content: str) -> None:
+    """Replace a text file atomically so interrupted writes cannot truncate it."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
+    mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
+    try:
+        temporary.write_text(content)
+        temporary.chmod(mode)
+        with temporary.open("rb") as handle:
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
 
 def write_secret_json(path: Path, data) -> None:
@@ -1259,6 +1274,12 @@ def activate_selection(
         if not foundry_credentials_present():
             die("Microsoft Foundry configuratie ontbreekt; gebruik: codexswitch auth foundry")
     else:
+        proxy_required = provider in {"opencode-go", "openrouter"} and (
+            client == "codex"
+            or not (provider == "openrouter" and openrouter_claude_direct(model))
+        )
+        if proxy_required:
+            ensure_unified_provider_proxy()
         update_codex_config(provider, model, reasoning_effort)
     if client == "claude":
         update_claude_settings(provider, model, reasoning_effort)
@@ -1342,8 +1363,17 @@ def proxy_healthy() -> bool:
 
     try:
         with urllib.request.urlopen(f"{PROVIDER_PROXY_URL}/health", timeout=1) as res:
-            return res.status == 200
-    except Exception:
+            if res.status != 200:
+                return False
+            payload = json.loads(res.read())
+            implementation = payload.get("implementation")
+            providers = payload.get("providers")
+            return (
+                implementation in {"go", "python-fallback"}
+                and isinstance(providers, list)
+                and {"opencode-go", "openrouter"}.issubset(providers)
+            )
+    except (OSError, ValueError, urllib.error.URLError):
         return False
 
 
@@ -1394,15 +1424,22 @@ def ensure_unified_provider_proxy() -> None:
     log = SWITCH_HOME / "provider-proxy.log"
     SWITCH_HOME.mkdir(parents=True, exist_ok=True)
     proxy_argv = [sys.executable, PROXY_BIN] if os.name == "nt" else [PROXY_BIN]
-    subprocess.Popen(
-        proxy_argv,
-        stdout=log.open("ab"),
-        stderr=subprocess.STDOUT,
-        start_new_session=True,
-    )
-    time.sleep(0.5)
-    if not proxy_healthy():
-        die(f"Provider proxy startte niet; zie {log}")
+    with log.open("ab") as log_handle:
+        process = subprocess.Popen(
+            proxy_argv,
+            stdout=log_handle,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if proxy_healthy():
+            return
+        poll = getattr(process, "poll", None)
+        if callable(poll) and poll() is not None:
+            break
+        time.sleep(0.1)
+    die(f"Provider proxy startte niet; zie {log}")
 
 
 def ensure_provider_proxy(provider: str) -> None:
@@ -2111,7 +2148,7 @@ wire_api = "responses"
 '''
         lines.append(provider_block)
 
-    CODEX_CONFIG.write_text("".join(lines))
+    atomic_write_text(CODEX_CONFIG, "".join(lines))
     state = read_json(SWITCH_CONFIG, {})
     state.update({"provider": provider, "model": model})
     if reasoning_effort:
@@ -2156,7 +2193,12 @@ def status() -> None:
     print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
     suffix = f" / denken={state['reasoning_effort']}" if state.get("reasoning_effort") else ""
-    print(f"huidig:       {state.get('provider', '?')} / {state.get('model', '?')}{suffix}")
+    provider = state.get("provider", "?")
+    model = state.get("model", "?")
+    stale = ""
+    if provider == "openai" and isinstance(model, str) and model not in openai_models():
+        stale = " / ONGELDIG MODEL"
+    print(f"huidig:       {provider} / {model}{suffix}{stale}")
     print(f"openai acct:  {current_openai_account or 'onbekend'}")
     for line in codex_usage_summary(current_data):
         print(line)

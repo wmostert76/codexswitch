@@ -2,6 +2,7 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,7 +18,7 @@ func (s *server) handleResponsesProvider(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	if (provider == "opencode-go" || provider == "openrouter") && r.Method == http.MethodGet && (subpath == "/models" || subpath == "/v1/models") {
-		s.handleModels(w, provider)
+		s.handleModels(w, r, provider)
 		return
 	}
 	if r.Method != http.MethodPost || (subpath != "/responses" && subpath != "/v1/responses") {
@@ -38,7 +39,7 @@ func (s *server) handleResponsesProvider(w http.ResponseWriter, r *http.Request,
 	}
 }
 
-func (s *server) request(method, target string, body any, headers map[string]string) (*http.Response, error) {
+func (s *server) request(ctx context.Context, method, target string, body any, headers map[string]string) (*http.Response, error) {
 	var reader io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -47,7 +48,7 @@ func (s *server) request(method, target string, body any, headers map[string]str
 		}
 		reader = bytes.NewReader(raw)
 	}
-	request, err := http.NewRequest(method, target, reader)
+	request, err := http.NewRequestWithContext(ctx, method, target, reader)
 	if err != nil {
 		return nil, err
 	}
@@ -60,13 +61,13 @@ func (s *server) request(method, target string, body any, headers map[string]str
 	return s.client.Do(request)
 }
 
-func (s *server) handleAzure(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+func (s *server) handleAzure(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	endpoint, key, err := s.config.azureCredentials()
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
 		return
 	}
-	response, err := s.request(http.MethodPost, endpoint+"/responses", body, map[string]string{
+	response, err := s.request(r.Context(), http.MethodPost, endpoint+"/responses", body, map[string]string{
 		"api-key": key,
 		"Accept":  acceptFor(body),
 	})
@@ -77,7 +78,7 @@ func (s *server) handleAzure(w http.ResponseWriter, _ *http.Request, body map[st
 	copyResponse(w, response)
 }
 
-func (s *server) handleOpenAI(w http.ResponseWriter, _ *http.Request, body map[string]any) {
+func (s *server) handleOpenAI(w http.ResponseWriter, r *http.Request, body map[string]any) {
 	token, account, err := s.config.openAIAccount()
 	if err != nil {
 		writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
@@ -91,7 +92,7 @@ func (s *server) handleOpenAI(w http.ResponseWriter, _ *http.Request, body map[s
 	delete(prepared, "instructions")
 	prepared["input"] = withoutSystemInput(prepared["input"])
 	openAIUpstream := envOr("CODEXSWITCH_OPENAI_UPSTREAM", "https://chatgpt.com/backend-api/codex/responses")
-	response, err := s.request(http.MethodPost, openAIUpstream, prepared, map[string]string{
+	response, err := s.request(r.Context(), http.MethodPost, openAIUpstream, prepared, map[string]string{
 		"Authorization":      "Bearer " + token,
 		"Accept":             "text/event-stream",
 		"Originator":         "codex_cli_rs",
@@ -191,14 +192,14 @@ func intNumber(value any) int {
 	}
 }
 
-func (s *server) handleModels(w http.ResponseWriter, provider string) {
+func (s *server) handleModels(w http.ResponseWriter, r *http.Request, provider string) {
 	if provider == "openrouter" {
 		key, err := s.config.openRouterKey()
 		if err != nil {
 			writeJSON(w, http.StatusServiceUnavailable, map[string]any{"error": err.Error()})
 			return
 		}
-		response, err := s.request(http.MethodGet, "https://openrouter.ai/api/v1/models", nil, map[string]string{"Authorization": "Bearer " + key})
+		response, err := s.request(r.Context(), http.MethodGet, "https://openrouter.ai/api/v1/models", nil, map[string]string{"Authorization": "Bearer " + key})
 		if err != nil {
 			writeJSON(w, http.StatusBadGateway, map[string]any{"error": err.Error()})
 			return

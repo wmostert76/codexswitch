@@ -26,7 +26,9 @@ func Run(logger *log.Logger) error {
 		Addr:              configuration.Address,
 		Handler:           s,
 		ReadHeaderTimeout: 15 * time.Second,
+		ReadTimeout:       30 * time.Second,
 		IdleTimeout:       90 * time.Second,
+		MaxHeaderBytes:    1 << 20,
 		BaseContext: func(net.Listener) context.Context {
 			return context.Background()
 		},
