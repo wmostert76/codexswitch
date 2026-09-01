@@ -5,6 +5,7 @@ import os
 import tempfile
 import subprocess
 import sys
+import tomllib
 from pathlib import Path
 from unittest.mock import patch
 
@@ -865,6 +866,27 @@ def test_write_json_replaces_existing_file_atomically(tmp_path, monkeypatch):
     assert replacements and replacements[0][1] == target
 
 
+def test_atomic_write_fsyncs_a_writable_descriptor(tmp_path, monkeypatch):
+    target = tmp_path / "config.toml"
+    sync_checks = []
+    real_fsync = os.fsync
+
+    def assert_writable_and_sync(fd):
+        # A zero-byte write is non-destructive but still verifies that the
+        # descriptor passed to fsync is writable. This prevents the Windows
+        # EBADF regression caused by reopening the temporary file as "rb".
+        assert os.write(fd, b"") == 0
+        sync_checks.append(fd)
+        real_fsync(fd)
+
+    monkeypatch.setattr(cs.os, "fsync", assert_writable_and_sync)
+
+    cs.atomic_write_text(target, 'model = "gpt-5.6-sol"\n')
+
+    assert target.read_text(encoding="utf-8") == 'model = "gpt-5.6-sol"\n'
+    assert len(sync_checks) == 1
+
+
 class TestCodexConfigState:
     def test_reads_top_level_model_provider_and_reasoning(self, tmp_path, monkeypatch):
         config = tmp_path / "config.toml"
@@ -1069,7 +1091,8 @@ class TestUpdateState:
         assert saved["env"]["CODEXSWITCH_REASONING_EFFORT"] == "high"
         assert "ANTHROPIC_AUTH_TOKEN" not in saved["env"]
         assert saved["apiKeyHelper"].endswith("codexswitch-claude-token")
-        assert settings.stat().st_mode & 0o777 == 0o600
+        if os.name != "nt":
+            assert settings.stat().st_mode & 0o777 == 0o600
 
     def test_openrouter_anthropic_claude_settings_are_direct_and_secret_free(
         self, tmp_path, monkeypatch
@@ -1204,13 +1227,16 @@ class TestUpdateState:
         cs.update_codex_config("azure", cs.AZURE_MODEL)
 
         text = config.read_text()
+        parsed = tomllib.loads(text)
         state = json.loads(state_path.read_text())
         assert 'model = "gpt-5.6-sol"' in text
         assert 'model_reasoning_effort = "low"' in text
         assert 'base_url = "https://example.invalid/openai/v1"' in text
         assert "env_http_headers" not in text
         assert "[model_providers.azure.auth]" in text
-        assert str(cs.AZURE_TOKEN_HELPER) in text
+        assert parsed["model_providers"]["azure"]["auth"]["args"] == [
+            str(cs.AZURE_TOKEN_HELPER)
+        ]
         assert "fixture-value" not in text
         assert "api-version" not in text
         assert state["reasoning_effort"] == "low"

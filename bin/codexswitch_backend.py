@@ -342,10 +342,14 @@ def atomic_write_text(path: Path, content: str) -> None:
     temporary = path.with_name(f".{path.name}.{os.getpid()}.{time.time_ns()}.tmp")
     mode = path.stat().st_mode & 0o777 if path.exists() else 0o600
     try:
-        temporary.write_text(content)
-        temporary.chmod(mode)
-        with temporary.open("rb") as handle:
+        # Windows' os.fsync() uses _commit(), which rejects a read-only file
+        # descriptor with EBADF. Keep the temporary file open for writing,
+        # flush Python's buffer and then sync that writable descriptor.
+        with temporary.open("w", encoding="utf-8") as handle:
+            handle.write(content)
+            handle.flush()
             os.fsync(handle.fileno())
+        temporary.chmod(mode)
         os.replace(temporary, path)
     finally:
         temporary.unlink(missing_ok=True)

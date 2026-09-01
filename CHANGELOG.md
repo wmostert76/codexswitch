@@ -2,13 +2,10 @@
 
 All notable CodexSwitch changes are documented here.
 
-## [26.7.18.1946] - 2026-07-18
+## [26.9.01.1039] - 2026-09-01
 
 ### Fixed
 
-- Limited the startup `git ls-remote` update check to ten seconds. Commander
-  now continues to the TUI with a warning when the configured Git remote is
-  unreachable instead of hanging indefinitely before startup.
 - Proxy-backed provider activation now starts and verifies the unified proxy,
   so a subsequent plain `codex` command no longer reconnects repeatedly to an
   unused loopback port. Startup uses bounded health polling and verifies the
@@ -17,6 +14,9 @@ All notable CodexSwitch changes are documented here.
   interrupted writes from leaving truncated TOML or JSON. Status explicitly
   marks a removed native OpenAI model as invalid instead of presenting stale
   state as healthy.
+- Fixed those atomic writes on native Windows by syncing the still-writable
+  temporary file instead of reopening it read-only. Selecting an account or
+  applying a provider no longer fails with `[Errno 9] Bad file descriptor`.
 - Go upstream requests now inherit client cancellation, credential helpers have
   a bounded timeout, malformed SSE is reported, and server input/header limits
   are explicit.
@@ -26,6 +26,16 @@ All notable CodexSwitch changes are documented here.
 - CI now formats, race-tests, vets and builds the active Go proxy in addition to
   the Python matrix. A development requirements file makes the documented local
   pytest workflow reproducible.
+- CI now also runs the Python and Commander test suite on native Windows so
+  Windows-only file-descriptor and path-escaping regressions are caught.
+
+## [26.7.18.1946] - 2026-07-18
+
+### Fixed
+
+- Limited the startup `git ls-remote` update check to ten seconds. Commander
+  now continues to the TUI with a warning when the configured Git remote is
+  unreachable instead of hanging indefinitely before startup.
 
 ## [26.7.18.1816] - 2026-07-18
 

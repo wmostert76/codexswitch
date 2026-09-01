@@ -71,3 +71,24 @@ jobs:
 
       - name: Build production proxy
         run: go build ./cmd/codexswitch-proxy
+
+  windows-checks:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -r requirements-dev.txt
+
+      - name: Compile Python entry points
+        run: |
+          python -m py_compile bin/codexswitch bin/codexswitch_backend.py bin/codexswitch-tui bin/codex-claude-proxy bin/codex-openai-proxy bin/codex-provider-proxy bin/codex-opencode-go-proxy bin/codex-azure-proxy bin/codexswitch-azure-token bin/codexswitch-claude-token bin/opencode-go-token bin/codexswitch_common.py
+
+      - name: Run Windows test suite
+        run: python -m pytest tests/ -v
