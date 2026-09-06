@@ -3,6 +3,7 @@ package proxy
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -21,8 +22,27 @@ func decodeObject(w http.ResponseWriter, r *http.Request) (map[string]any, bool)
 	decoder := json.NewDecoder(r.Body)
 	decoder.UseNumber()
 	var body map[string]any
-	if err := decoder.Decode(&body); err != nil {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"error": "invalid JSON: " + err.Error()})
+	err := decoder.Decode(&body)
+	if err == nil && body == nil {
+		err = fmt.Errorf("expected a JSON object")
+	}
+	if err == nil {
+		var extra any
+		if next := decoder.Decode(&extra); next != io.EOF {
+			if next == nil {
+				err = fmt.Errorf("expected exactly one JSON object")
+			} else {
+				err = next
+			}
+		}
+	}
+	if err != nil {
+		status := http.StatusBadRequest
+		var oversized *http.MaxBytesError
+		if errors.As(err, &oversized) {
+			status = http.StatusRequestEntityTooLarge
+		}
+		writeJSON(w, status, map[string]any{"error": "invalid JSON: " + err.Error()})
 		return nil, false
 	}
 	return body, true
@@ -30,13 +50,37 @@ func decodeObject(w http.ResponseWriter, r *http.Request) (map[string]any, bool)
 
 func copyResponse(w http.ResponseWriter, response *http.Response) {
 	defer response.Body.Close()
-	for _, header := range []string{"Content-Type", "Cache-Control"} {
+	for _, header := range []string{"Content-Type", "Cache-Control", "Retry-After", "X-Request-Id"} {
 		if value := response.Header.Get(header); value != "" {
 			w.Header().Set(header, value)
 		}
 	}
 	w.WriteHeader(response.StatusCode)
-	_, _ = io.Copy(w, response.Body)
+	var destination io.Writer = w
+	if strings.Contains(response.Header.Get("Content-Type"), "text/event-stream") {
+		if flusher, ok := w.(http.Flusher); ok {
+			flusher.Flush()
+			destination = flushingWriter{w, flusher}
+		}
+	}
+	if _, err := io.Copy(destination, response.Body); err != nil {
+		// Headers are already sent. Abort so clients cannot mistake a truncated
+		// upstream response for a successful, complete HTTP response.
+		panic(http.ErrAbortHandler)
+	}
+}
+
+type flushingWriter struct {
+	w io.Writer
+	f http.Flusher
+}
+
+func (w flushingWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if err == nil {
+		w.f.Flush()
+	}
+	return n, err
 }
 
 type sseWriter struct {

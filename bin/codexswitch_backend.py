@@ -1369,12 +1369,19 @@ def proxy_healthy() -> bool:
         with urllib.request.urlopen(f"{PROVIDER_PROXY_URL}/health", timeout=1) as res:
             if res.status != 200:
                 return False
-            payload = json.loads(res.read())
+            raw = res.read(65537)
+            if len(raw) > 65536:
+                return False
+            payload = json.loads(raw)
+            if not isinstance(payload, dict) or payload.get("ok") is not True:
+                return False
             implementation = payload.get("implementation")
             providers = payload.get("providers")
             return (
-                implementation in {"go", "python-fallback"}
+                isinstance(implementation, str)
+                and implementation in {"go", "python-fallback"}
                 and isinstance(providers, list)
+                and all(isinstance(provider, str) for provider in providers)
                 and {"opencode-go", "openrouter"}.issubset(providers)
             )
     except (OSError, ValueError, urllib.error.URLError):

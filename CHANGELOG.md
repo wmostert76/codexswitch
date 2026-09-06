@@ -2,6 +2,22 @@
 
 All notable CodexSwitch changes are documented here.
 
+## [Unreleased]
+
+### Fixed
+
+- Malformed, oversized or unrelated proxy health responses now report unhealthy
+  instead of crashing status and activation.
+- The Go proxy rejects null, multiple and trailing JSON request bodies and
+  returns HTTP 413 for oversized requests.
+- Forwarded SSE responses flush incrementally; truncated upstream responses
+  abort the downstream connection. Retry-After and request IDs are preserved.
+
+### Changed
+
+- Upgraded Textual to the 8.2 series and cryptography to the 50.0 series,
+  verified with the backend, vault and headless Commander test suite.
+
 ## [26.9.01.1039] - 2026-09-01
 
 ### Fixed

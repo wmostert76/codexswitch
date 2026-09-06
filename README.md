@@ -402,6 +402,12 @@ codexswitch auth opencode-go
 
 ## Unified provider proxy
 
+Forwarded streams are flushed incrementally. Interrupted upstream responses
+close the connection so clients can detect the failure; retry hints and request
+IDs are preserved. Invalid JSON requests return HTTP 400 and requests larger
+than 32 MiB return HTTP 413. Health checks validate the proxy response before
+reporting it ready.
+
 OpenCode Go exposes a chat-completions style API. Codex expects the Responses
 API. The unified local proxy bridges that gap, routes OpenRouter, and translates
 Claude Messages requests for providers that do not natively implement that

@@ -1,4 +1,4 @@
-textual>=6,<7
+textual>=8.2.8,<9
 rich>=13,<16
-cryptography>=42,<47
+cryptography>=50.0.1,<51
 keyring>=25,<27
