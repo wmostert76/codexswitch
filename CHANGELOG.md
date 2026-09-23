@@ -17,6 +17,8 @@ All notable CodexSwitch changes are documented here.
 
 - Added GPT-6 Sol and GPT-5.6 Terra to the native OpenAI fallback model list,
   keeping both selectable when Codex cannot refresh its live catalog.
+- Read the native Codex model catalog from the active Codex home so account-
+  available models such as GPT-6 Sol appear in Commander.
 - Upgraded Textual to the 8.2 series and cryptography to the 50.0 series,
   verified with the backend, vault and headless Commander test suite.
 

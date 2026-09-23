@@ -1548,20 +1548,19 @@ def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
         if not binary:
             _OPENAI_CATALOG_CACHE = {}
             return {}
-        with tempfile.TemporaryDirectory(prefix="codexswitch-models-") as temporary_home:
-            env = os.environ.copy()
-            env["CODEX_HOME"] = temporary_home
-            proc = subprocess.run(
-                [binary, "debug", "models"],
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                stdout=subprocess.PIPE,
-                stderr=subprocess.DEVNULL,
-                timeout=12,
-                check=False,
-                env=env,
-            )
+        # Use the active Codex home so the catalog reflects models available to
+        # the user's configured account instead of an anonymous default list.
+        proc = subprocess.run(
+            [binary, "debug", "models"],
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=12,
+            check=False,
+            env=os.environ.copy(),
+        )
         data = json.loads(proc.stdout)
         _OPENAI_CATALOG_CACHE = {
             model["slug"]: model
