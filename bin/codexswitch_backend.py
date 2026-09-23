@@ -48,7 +48,13 @@ from codexswitch_common import (
 )
 
 
-OPENAI_FALLBACK_MODELS = ["gpt-5.5", "gpt-5.4-mini", "gpt-5.3-codex-spark"]
+OPENAI_FALLBACK_MODELS = [
+    "gpt-6-sol",
+    "gpt-5.6-terra",
+    "gpt-5.5",
+    "gpt-5.4-mini",
+    "gpt-5.3-codex-spark",
+]
 AZURE_MODELS = ["gpt-5.6-sol"]
 AZURE_MODEL = AZURE_MODELS[0]
 AZURE_REASONING_CHOICES = [
