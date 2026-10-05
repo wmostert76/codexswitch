@@ -3,7 +3,8 @@
 ## Project
 
 CodexSwitch Commander is a Python terminal application that configures Codex
-CLI for native OpenAI, OpenCode Go or OpenRouter models.
+CLI for native OpenAI, Azure OpenAI, Microsoft Foundry, OpenCode Go or
+OpenRouter models. Codex is the only supported client.
 
 The repository contains:
 
@@ -14,6 +15,8 @@ The repository contains:
 - `internal/proxy`: Provider transports and protocol translators
 - `bin/codex-*-proxy`: Legacy Python compatibility references and fallback
 - `bin/opencode-go-token`: Reads the existing OpenCode Go credential
+- `bin/codexswitch-azure-token`, `bin/codexswitch-foundry-token`: Hand the
+  vault-backed Azure or Foundry API key to Codex
 - `install.sh`: Reproducible local installation
 
 ## Safety

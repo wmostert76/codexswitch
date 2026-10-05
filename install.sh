@@ -160,23 +160,9 @@ ensure_codex_cli() {
   "${SUDO[@]}" npm install -g @openai/codex
 }
 
-ensure_claude_cli() {
-  if command -v claude >/dev/null 2>&1; then
-    claude update || true
-    return
-  fi
-  if ! command -v npm >/dev/null 2>&1; then
-    echo "npm is required to install Claude Code" >&2
-    exit 1
-  fi
-  echo "Installing Claude Code via npm"
-  "${SUDO[@]}" npm install -g @anthropic-ai/claude-code
-}
-
 maybe_self_update
 ensure_system_dependencies
 ensure_codex_cli
-ensure_claude_cli
 
 # A detached pre-upgrade proxy keeps its old Python modules in memory. Its
 # argv may contain either the checkout path or the /usr/local/bin symlink, so
@@ -211,7 +197,7 @@ fi
 
 sudo install -d -m 755 /usr/local/bin
 sudo install -m 755 "$PROXY_BUILD" /usr/local/bin/codex-provider-proxy
-for command in codexswitch codexswitch-azure-token codexswitch-claude-token codexswitch-provider-credential opencode-go-token; do
+for command in codexswitch codexswitch-azure-token codexswitch-foundry-token codexswitch-provider-credential opencode-go-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
 
@@ -228,6 +214,8 @@ sudo rm -f /usr/local/bin/openswitch \
   /usr/local/bin/codex-opencode-go-proxy \
   /usr/local/bin/codex-openrouter-proxy \
   /usr/local/bin/codex-azure-proxy \
+  /usr/local/bin/codex-claude-proxy \
+  /usr/local/bin/codexswitch-claude-token \
   /usr/local/bin/openrouter-token
 
 for legacy_service in codex-opencode-go-proxy codex-openrouter-proxy codex-azure-proxy; do

@@ -4,6 +4,26 @@ All notable CodexSwitch changes are documented here.
 
 ## [Unreleased]
 
+### Removed
+
+- Removed all Claude Code support: the Clients pane, the `claude` launcher and
+  settings merge, the Claude Messages proxy routes (`/claude/...`), the Python
+  and Go Claude translators and the `codexswitch-claude-token` helper.
+  CodexSwitch works with the Codex CLI only again.
+- `codexswitch use` and `codexswitch run` no longer take a `codex|claude`
+  client argument: use `codexswitch use PROVIDER MODEL [REASONING]` and
+  `codexswitch run [ARGS...]`. The obsolete `client` key is dropped from the
+  switch state on the next activation.
+
+### Changed
+
+- Microsoft Foundry is now a Codex provider that connects directly to the
+  resource's `/openai/v1` Responses endpoint, like Azure. It needs an API key
+  and at least one deployment name; the Claude model defaults and the Entra ID
+  / Azure CLI key-less mode (which only served Claude Code) are gone. Re-run
+  `codexswitch auth foundry` to store the key and deployments. The new
+  `codexswitch-foundry-token` helper hands the key to Codex from the vault.
+
 ### Fixed
 
 - Malformed, oversized or unrelated proxy health responses now report unhealthy

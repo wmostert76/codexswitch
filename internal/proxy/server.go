@@ -54,25 +54,13 @@ func (s *server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			"ok":             true,
 			"implementation": "go",
 			"providers":      []string{"openai", "opencode-go", "openrouter", "azure"},
-			"clients":        []string{"codex", "claude"},
+			"clients":        []string{"codex"},
 		})
-		return
-	}
-	if r.Method == http.MethodHead && strings.HasPrefix(r.URL.Path, "/claude/") {
-		w.WriteHeader(http.StatusOK)
 		return
 	}
 	parts := strings.Split(strings.TrimPrefix(r.URL.Path, "/"), "/")
 	if len(parts) == 0 || parts[0] == "" {
 		writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown provider route"})
-		return
-	}
-	if parts[0] == "claude" {
-		if len(parts) < 2 || !knownProvider(parts[1]) {
-			writeJSON(w, http.StatusNotFound, map[string]any{"error": "unknown Claude provider route"})
-			return
-		}
-		s.handleClaude(w, r, parts[1])
 		return
 	}
 	provider := parts[0]
@@ -93,11 +81,7 @@ func knownProvider(provider string) bool {
 }
 
 func providerSubpath(path, provider string) string {
-	prefix := "/" + provider
-	if strings.HasPrefix(path, "/claude/") {
-		prefix = "/claude/" + provider
-	}
-	result := strings.TrimPrefix(path, prefix)
+	result := strings.TrimPrefix(path, "/"+provider)
 	if result == "" {
 		return "/"
 	}

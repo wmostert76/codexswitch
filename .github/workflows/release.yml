@@ -65,13 +65,12 @@ jobs:
             bin/codexswitch_backend.py \
             bin/codexswitch-tui \
             bin/codexswitch-provider-credential \
-            bin/codex-claude-proxy \
             bin/codex-openai-proxy \
             bin/codex-provider-proxy \
             bin/codex-opencode-go-proxy \
             bin/codex-azure-proxy \
             bin/codexswitch-azure-token \
-            bin/codexswitch-claude-token \
+            bin/codexswitch-foundry-token \
             bin/opencode-go-token \
             bin/codexswitch_common.py
 

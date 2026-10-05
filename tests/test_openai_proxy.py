@@ -21,7 +21,7 @@ def test_chatgpt_body_enforces_stream_and_removes_system_fields():
             "stream": False,
             "store": True,
             "max_output_tokens": 123,
-            "instructions": "Claude system prompt",
+            "instructions": "System prompt",
             "input": [
                 {"type": "message", "role": "system", "content": []},
                 {"type": "message", "role": "developer", "content": []},

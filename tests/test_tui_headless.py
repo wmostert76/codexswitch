@@ -61,7 +61,8 @@ class FakeBackend(dict[str, Any]):
             "endpoint": "https://example.invalid/openai/v1",
         }
         self.foundry_state: dict[str, Any] = {
-            "endpoint": "https://example.invalid",
+            "endpoint": "https://example.invalid/openai/v1",
+            "models": ["foundry-gpt-test"],
         }
         self.openai_catalog: dict[str, dict[str, Any]] = {
             "gpt-main": {
@@ -158,7 +159,13 @@ class FakeBackend(dict[str, Any]):
                 "OPENAI_FALLBACK_MODELS": list(self.openai_catalog),
                 "OPENAI_FALLBACK_CATALOG": dict(self.openai_catalog),
                 "AZURE_MODELS": ["azure-gpt"],
-                "FOUNDRY_MODELS": ["claude-sonnet-test"],
+                "FOUNDRY_REASONING_CHOICES": [
+                    ("Low", "low"),
+                    ("Medium (default)", "medium"),
+                    ("High", "high"),
+                    ("Extra high", "xhigh"),
+                ],
+                "FOUNDRY_DEFAULT_REASONING_EFFORT": "medium",
                 "AZURE_REASONING_CHOICES": [
                     ("Low (default)", "low"),
                     ("Medium", "medium"),
@@ -179,7 +186,7 @@ class FakeBackend(dict[str, Any]):
                 "openai_accounts": lambda: ["tester@example.invalid"],
                 "openai_models": lambda: list(self.openai_catalog),
                 "azure_models": lambda: ["azure-gpt"],
-                "foundry_models": lambda: ["claude-sonnet-test"],
+                "foundry_models": lambda: list(self.foundry_state.get("models", [])),
                 "opencode_models": lambda: list(self.opencode_catalog),
                 "openrouter_models": lambda: list(self.openrouter_catalog),
                 "openai_model_catalog": lambda refresh=False: dict(
@@ -224,9 +231,6 @@ class FakeBackend(dict[str, Any]):
                 "proxy_statuses": lambda: {"unified": True},
                 "ensure_unified_provider_proxy": lambda: self.calls.append(
                     ("ensure-unified-proxy",)
-                ),
-                "openrouter_claude_direct": lambda model: bool(
-                    model and model.startswith(("anthropic/", "~anthropic/"))
                 ),
                 "ensure_provider_proxy": lambda provider: self.calls.append(
                     ("ensure-proxy", provider)
@@ -286,18 +290,6 @@ class FakeBackend(dict[str, Any]):
         elif provider != "openai":
             self.config_state.pop("openai_account", None)
 
-    def activate_selection(
-        self, client: str, provider: str, model: str, effort: str | None = None
-    ) -> None:
-        if provider == "foundry":
-            self.calls.append(("apply", provider, model, effort))
-            self.config_state = {"provider": provider, "model": model}
-            if effort:
-                self.config_state["reasoning_effort"] = effort
-        else:
-            self.update_codex_config(provider, model, effort)
-        self.config_state["client"] = client
-
     def use_openai_account(self, email: str) -> None:
         self.calls.append(("use-account", email))
         self.auth_state = {"email": email}
@@ -308,14 +300,15 @@ class FakeBackend(dict[str, Any]):
         self.azure_state = {"endpoint": endpoint}
 
     def save_foundry_credentials(
-        self, endpoint: str, key: str, deployments: str = ""
+        self, endpoint: str, key: str, deployments: str
     ) -> None:
         self.calls.append(("save-key", "foundry"))
-        self.foundry_state = {"endpoint": endpoint}
-        if deployments:
-            self.foundry_state["models"] = [
+        self.foundry_state = {
+            "endpoint": endpoint,
+            "models": [
                 model.strip() for model in deployments.split(",") if model.strip()
-            ]
+            ],
+        }
 
     def refresher(self, provider: str) -> Callable[[bool], bool]:
         def refresh(strict: bool = False) -> bool:
@@ -459,19 +452,18 @@ def test_splash_is_once_per_version_and_fits_80x24(
 @pytest.mark.parametrize(
     ("size", "expected_widths"),
     [
-        ((80, 24), (10, 17, 33, 18)),
-        ((120, 40), (10, 28, 52, 28)),
+        ((80, 24), (20, 38, 20)),
+        ((120, 40), (28, 62, 28)),
     ],
 )
-def test_four_pane_layout_has_exact_commander_geometry(
-    app_factory, size: tuple[int, int], expected_widths: tuple[int, int, int, int]
+def test_three_pane_layout_has_exact_commander_geometry(
+    app_factory, size: tuple[int, int], expected_widths: tuple[int, int, int]
 ):
     app = app_factory()
 
     async def run() -> None:
         async with app.run_test(size=size) as pilot:
             await settle(pilot)
-            clients = app.query_one("#client-pane").region
             sources = app.query_one("#source-pane").region
             models = app.query_one("#model-pane").region
             reasoning = app.query_one("#reason-box").region
@@ -481,14 +473,13 @@ def test_four_pane_layout_has_exact_commander_geometry(
             status = app.query_one("#status").region
             buttonbar = app.query_one("#buttonbar").region
 
-            assert (clients.width, sources.width, models.width, reasoning.width) == expected_widths
-            assert clients.x == workspace.x == detail.x == status.x == 1
-            assert sources.x == clients.right
+            assert (sources.width, models.width, reasoning.width) == expected_widths
+            assert sources.x == workspace.x == detail.x == status.x == 1
             assert models.x == sources.right
             assert reasoning.x == models.right
             assert reasoning.right == workspace.right == size[0] - 1
-            assert clients.y == sources.y == models.y == reasoning.y
-            assert clients.height == sources.height == models.height == reasoning.height
+            assert sources.y == models.y == reasoning.y
+            assert sources.height == models.height == reasoning.height
             assert detail.y == workspace.bottom
             assert detail.width == status.width == size[0] - 2
             assert detail.height == 7
@@ -604,22 +595,19 @@ def test_resize_warning_preserves_pending_selection_and_focus(app_factory):
     asyncio.run(run())
 
 
-def test_arrow_and_tab_navigation_follow_client_provider_model_reasoning_order(app_factory):
+def test_arrow_and_tab_navigation_follow_provider_model_reasoning_order(app_factory):
     app = app_factory()
 
     async def run() -> None:
         async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot)
             sources = app.query_one("#sources")
-            clients = app.query_one("#clients")
             models = app.query_one("#models")
             reasoning = app.query_one("#reasoning")
 
             assert sources.has_focus
             await pilot.press("left")
-            assert clients.has_focus
-            await pilot.press("right")
-            assert sources.has_focus
+            assert sources.has_focus  # no wrap at the first panel
             await pilot.press("right")
             assert models.has_focus
             await pilot.press("right")
@@ -636,11 +624,9 @@ def test_arrow_and_tab_navigation_follow_client_provider_model_reasoning_order(a
             assert reasoning.has_focus
             assert "ENTER: START" in app.query_one("#status").render().plain.upper()
             await pilot.press("tab")
-            assert clients.has_focus  # Tab deliberately cycles
-            await pilot.press("tab")
-            assert sources.has_focus
+            assert sources.has_focus  # Tab deliberately cycles
             await pilot.press("shift+tab")
-            assert clients.has_focus
+            assert reasoning.has_focus
 
     asyncio.run(run())
 
@@ -714,31 +700,6 @@ def test_active_and_pending_markers_remain_distinct(app_factory):
             assert "◆" in option_plain(option_by_id(models, "model:gpt-alpha"))
             assert app.selection_is_dirty() is True
             assert "PENDING" in app.query_one("#status").render().plain.upper()
-
-    asyncio.run(run())
-
-
-def test_claude_client_is_persisted_through_apply(
-    app_factory, fake_backend: FakeBackend
-):
-    def activate(client: str, provider: str, model: str, effort: str | None = None):
-        fake_backend.update_codex_config(provider, model, effort)
-        fake_backend.config_state["client"] = client
-
-    fake_backend["activate_selection"] = activate
-    app = app_factory(fake_backend)
-
-    async def run() -> None:
-        async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot)
-            clients = app.query_one("#clients", OptionList)
-            highlight(clients, "client:claude")
-            await settle(pilot)
-            assert app.draft.client == "claude"
-            await pilot.press("f6")
-            await wait_until(pilot, lambda: not app.operation_busy)
-            assert app.active.client == "claude"
-            assert fake_backend.config_state["client"] == "claude"
 
     asyncio.run(run())
 
@@ -992,7 +953,7 @@ def test_startup_shows_unified_proxy_status(app_factory, fake_backend: FakeBacke
             status = app.query_one("#proxy-status").render().plain
             assert "PROVIDER PROXY" in status
             assert "ON" in status
-            assert "OpenCode Go / non-Anthropic Claude bridges" in status
+            assert "OpenCode Go / OpenRouter bridge" in status
             assert ("ensure-unified-proxy",) not in fake_backend.calls
 
     asyncio.run(run())
@@ -1493,16 +1454,13 @@ def test_azure_modal_fits_80x24_and_validates_in_field_order(
     asyncio.run(run())
 
 
-def test_foundry_modal_fits_80x24_and_supports_entra_without_key(
+def test_foundry_modal_fits_80x24_and_requires_deployments_and_key(
     app_factory, fake_backend: FakeBackend
 ):
     app = app_factory(fake_backend)
 
     async def run() -> None:
         async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot)
-            clients = app.query_one("#clients", OptionList)
-            highlight(clients, "client:claude")
             await settle(pilot)
             sources = app.query_one("#sources", OptionList)
             highlight(sources, "provider:foundry")
@@ -1512,18 +1470,38 @@ def test_foundry_modal_fits_80x24_and_supports_entra_without_key(
 
             dialog = app.screen.query_one("#foundry-dialog")
             assert dialog.region.right <= 80 and dialog.region.bottom <= 24
+            assert "CLAUDE" not in app.screen.query_one(".modal-title").render().plain.upper()
             endpoint = app.screen.query_one("#foundry-endpoint-input", Input)
             deployments = app.screen.query_one("#foundry-models-input", Input)
             key = app.screen.query_one("#api-key-input", Input)
+            error = app.screen.query_one("#form-error")
             assert endpoint.has_focus
+            assert deployments.value == "foundry-gpt-test"
             await pilot.press("enter")
             assert deployments.has_focus
             await pilot.press("enter")
             assert key.has_focus
-            key.value = ""
+
+            deployments.value = " , "
+            await pilot.press("enter")
+            await settle(pilot)
+            assert deployments.has_focus
+            assert "deployment name is required" in error.render().plain
+            assert not any(call[0] == "save-key" for call in fake_backend.calls)
+
+            deployments.value = "dep-a, dep-b"
+            key.focus()
+            await pilot.press("enter")
+            await settle(pilot)
+            assert key.has_focus
+            assert "API key is required" in error.render().plain
+            assert not any(call[0] == "save-key" for call in fake_backend.calls)
+
+            key.value = "fixture-secret"
             await pilot.press("enter")
             await wait_until(pilot, lambda: not app.operation_busy)
             assert ("save-key", "foundry") in fake_backend.calls
+            assert fake_backend.foundry_state["models"] == ["dep-a", "dep-b"]
 
     asyncio.run(run())
 
@@ -1746,40 +1724,69 @@ def test_azure_apply_updates_codex_provider_model_and_reasoning(
     asyncio.run(run())
 
 
-def test_foundry_is_direct_claude_only_and_does_not_replace_codex_runtime(
+def test_foundry_is_a_codex_provider_with_configured_deployments(
     app_factory, fake_backend: FakeBackend
 ):
-    fake_backend["activate_selection"] = fake_backend.activate_selection
-    app = app_factory(fake_backend)
+    fake_backend.foundry_state = {
+        "endpoint": "https://example.invalid/openai/v1",
+        "models": ["dep-a", "dep-b"],
+    }
+    app = app_factory(fake_backend, refresh_on_start=True)
 
     async def run() -> None:
         async with app.run_test(size=(120, 40)) as pilot:
+            await app.workers.wait_for_complete()
             await settle(pilot)
             sources = app.query_one("#sources", OptionList)
-            assert all(option.id != "provider:foundry" for option in sources.options)
-
-            clients = app.query_one("#clients", OptionList)
-            highlight(clients, "client:claude")
-            await settle(pilot)
             assert option_by_id(sources, "provider:foundry")
 
             highlight(sources, "provider:foundry")
             await settle(pilot)
-            assert app.draft.model == "claude-sonnet-test"
-            assert app.draft.reasoning is None
-            original_codex = dict(fake_backend.codex_state)
+            models = app.query_one("#models", OptionList)
+            assert [option.id for option in models.options] == [
+                "model:dep-a",
+                "model:dep-b",
+            ]
+            assert app.draft.provider == "foundry"
+            assert app.draft.model == "dep-a"
+            reasoning = app.query_one("#reasoning", OptionList)
+            assert [option.id for option in reasoning.options] == [
+                "reason:low",
+                "reason:medium",
+                "reason:high",
+                "reason:xhigh",
+            ]
 
             await pilot.press("f6")
             await wait_until(pilot, lambda: not app.operation_busy)
-            assert app.active.client == "claude"
             assert app.active.provider == "foundry"
-            assert fake_backend.codex_state == original_codex
-            assert ("apply", "foundry", "claude-sonnet-test", None) in fake_backend.calls
+            assert fake_backend.codex_state == {
+                "model_provider": "foundry",
+                "model": "dep-a",
+                "model_reasoning_effort": "medium",
+            }
+            assert ("apply", "foundry", "dep-a", "medium") in fake_backend.calls
 
-            highlight(clients, "client:codex")
+    asyncio.run(run())
+
+
+def test_stale_client_key_and_unknown_provider_in_saved_state_are_ignored(
+    app_factory, fake_backend: FakeBackend
+):
+    fake_backend.config_state = {
+        "client": "claude",
+        "provider": "legacy-provider",
+        "model": "gpt-main",
+    }
+    fake_backend.codex_state = {}
+    app = app_factory(fake_backend)
+
+    async def run() -> None:
+        async with app.run_test(size=(80, 24)) as pilot:
             await settle(pilot)
-            assert app.draft.provider == "openai"
-            assert all(option.id != "provider:foundry" for option in sources.options)
+            assert app.active.provider == "openai"
+            assert not hasattr(app.active, "client")
+            assert app.query_one("#sources").has_focus
 
     asyncio.run(run())
 

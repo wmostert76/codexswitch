@@ -2,6 +2,7 @@ import importlib.machinery
 import importlib.util
 import json
 import threading
+import urllib.error
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -86,23 +87,26 @@ def test_unified_health_lists_supported_providers():
         "ok": True,
         "implementation": "python-fallback",
         "providers": ["openai", "opencode-go", "openrouter", "azure"],
-        "clients": ["codex", "claude"],
+        "clients": ["codex"],
     }
 
 
-def test_claude_base_url_accepts_head_probe():
+def test_unknown_provider_route_is_not_found():
     proxy = load_provider_proxy()
     server = ThreadingHTTPServer(("127.0.0.1", 0), proxy.Handler)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
         request = urllib.request.Request(
-            f"http://127.0.0.1:{server.server_port}/claude/openai",
+            f"http://127.0.0.1:{server.server_port}/unknown/openai",
             method="HEAD",
         )
-        with urllib.request.urlopen(request, timeout=5) as response:
-            assert response.status == 200
-            assert response.read() == b""
+        try:
+            urllib.request.urlopen(request, timeout=5)
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+        else:
+            raise AssertionError("expected a 404 response")
     finally:
         server.shutdown()
 

@@ -9,9 +9,9 @@
                     C O M M A N D E R
 ```
 
-Switch both Codex CLI and Claude Code between native OpenAI accounts, Azure
-OpenAI, Microsoft Foundry Claude, OpenCode Go models and OpenRouter models from
-one terminal control center.
+Switch Codex CLI between native OpenAI accounts, Azure OpenAI, Microsoft
+Foundry deployments, OpenCode Go models and OpenRouter models from one terminal
+control center.
 
 ![CodexSwitch Commander](docs/codexswitch-commander.svg)
 
@@ -20,30 +20,28 @@ one terminal control center.
 
 ## What it does
 
-CodexSwitch keeps normal `codex` and `claude` usage simple: pick a client,
-provider, account, model and reasoning mode once, then launch the selected
-client with that active configuration. Claude is the agent client here, not a
-separate model provider.
+CodexSwitch keeps normal `codex` usage simple: pick a provider, account, model
+and reasoning mode once, then launch Codex with that active configuration.
 
-It is built for three workflows:
+It is built for these providers:
 
 | Provider | What CodexSwitch handles |
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
-| Azure OpenAI | Direct Codex Responses v1 access plus a Claude Messages compatibility bridge for `gpt-5.6-sol` |
-| Microsoft Foundry | Direct, proxy-free Claude Code integration using Entra ID or a vault-backed project API key |
+| Azure OpenAI | Direct Codex Responses v1 access for `gpt-5.6-sol` |
+| Microsoft Foundry | Direct Codex Responses v1 access to your own Foundry deployments with a vault-backed API key |
 | OpenCode Go | Own API-key store, unified Responses-compatible proxy and model catalog |
-| OpenRouter | Direct Claude routing for Anthropic models; compatibility proxy routing for other models and Codex |
+| OpenRouter | Compatibility proxy routing for OpenRouter models through Codex |
 
 ## Highlights
 
-- Commander-style TUI with Clients, Providers, Models and Reasoning panes
+- Commander-style TUI with Providers, Models and Reasoning panes
 - OpenAI multi-account management without losing rotated refresh tokens
 - Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
-- Native Claude Code routing to Claude deployments on Microsoft Foundry
+- Microsoft Foundry selection for the deployments you configure
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - Persistent provider/model defaults with on-demand proxy startup during activation and launch
-- One statically linked Go compatibility proxy for OpenCode Go, Codex/OpenRouter and non-Anthropic Claude routes
+- One statically linked Go compatibility proxy for OpenCode Go and OpenRouter
 - Provider/model isolation so OpenAI accounts never mix with OpenCode/OpenRouter
 - Reproducible local install with dependency detection and on-demand proxy units
 - GitHub releases generated from `CHANGELOG.md`
@@ -76,8 +74,8 @@ installs Textual, builds a stripped static `codex-provider-proxy` binary, links
 commands into `/usr/local/bin`, and removes obsolete proxy systemd units. On
 both Linux and Windows, Commander checks proxy health
 when the TUI opens and starts the unified proxy only when a compatibility-backed
-Codex or Claude Code session is launched. Direct Azure Codex and Microsoft
-Foundry Claude sessions do not start it. Once started, it remains active after
+Codex session is launched. Direct OpenAI, Azure and Microsoft Foundry
+sessions do not start it. Once started, it remains active after
 the terminal closes but does not start automatically after a reboot.
 On an existing
 git checkout, re-running `./install.sh` fetches without modifying tags and
@@ -128,8 +126,8 @@ SHA256SUMS
 
 ## Keyboard workflow
 
-The Commander TUI follows a left-to-right `Clients → Providers → Models → Reasoning`
-workflow, with full-width model details below the three selection panes. The
+The Commander TUI follows a left-to-right `Providers → Models → Reasoning`
+workflow, with full-width model details below the selection panes. The
 cyan cursor shows the item being inspected, `●` marks the active Codex
 configuration and `◆` marks a pending selection. Moving through choices only
 updates the pending selection; Codex configuration is not changed until you
@@ -179,8 +177,8 @@ splash appears once per installed version and remains available from Help.
 ```bash
 codexswitch                         # show help
 codexswitch tui                     # start Commander TUI
-codexswitch use [codex|claude] PROVIDER MODEL [REASONING]
-codexswitch auth [openai|azure|opencode-go|openrouter]
+codexswitch use PROVIDER MODEL [REASONING]
+codexswitch auth [openai|azure|foundry|opencode-go|openrouter]
 codexswitch account add             # OpenAI device sign-in
 codexswitch account save [EMAIL]
 codexswitch account use user@example.com
@@ -188,7 +186,7 @@ codexswitch refresh                 # OpenCode Go + OpenRouter catalogs
 codexswitch update [--check]        # update from latest GitHub release
 codexswitch list
 codexswitch status
-codexswitch run [codex|claude] [ARGS...]
+codexswitch run [ARGS...]
 codexswitch version
 ```
 
@@ -197,84 +195,6 @@ From the TUI, `F9` applies the current selection and then starts Codex as:
 ```bash
 codex --dangerously-bypass-approvals-and-sandbox --search
 ```
-
-With Claude selected, F9 starts `claude --dangerously-skip-permissions`.
-CodexSwitch merges only its endpoint and model values into Claude's user
-settings and leaves permissions, MCP configuration and other settings intact.
-Its API-key helper starts the loopback proxy on demand when protocol translation
-is required, so a later plain `claude` command uses the applied selection too.
-OpenRouter-hosted Anthropic models use OpenRouter's native Messages endpoint
-directly; the helper returns the vault-backed OpenRouter key without starting
-the proxy. Native OpenAI through Claude uses an experimental ChatGPT/Codex
-OAuth transport.
-
-Microsoft Foundry is the exception: Claude Code uses its official native
-Foundry integration directly, without the loopback proxy. Configure a Foundry
-resource or base URL, optional comma-separated deployment names and either an
-API key or an existing `az login` session. API keys stay in the CodexSwitch
-vault and are injected only into processes launched by CodexSwitch; Entra ID
-also permits a later plain `claude` launch without storing a key.
-
-The ChatGPT Codex endpoint rejects external system/developer messages, so the
-experimental OpenAI route omits Claude Code's system prompt while retaining
-the user conversation and tool schemas. Claude's server-side WebSearch schema
-is mapped to OpenAI's native Responses web-search tool and returned URL
-citations are streamed back as Claude server-tool results. Responses events are
-translated incrementally to Claude SSE, including thinking state, text,
-function calls and native web search. Long tool identifiers, explicit tool
-choice, parallel-tool settings, cached-token usage and terminal stop reasons
-are normalized across both protocols. Read, Write and Bash were verified
-end-to-end through the native Claude Code client; behavior may still differ
-from native Codex on complex agent workflows.
-
-Live OpenAI compatibility on Claude Code 2.1.212:
-
-| Capability | Result |
-| --- | --- |
-| Read, Write, Edit and Bash | Passed with verified file/shell markers |
-| Glob and Grep | Not exposed by Claude Code 2.1.212; use Read, Bash or an available agent workflow |
-| WebSearch and WebFetch | Passed |
-| NotebookEdit | Passed with verified notebook content |
-| Image reads | Passed: logo, photo, two labeled diagrams, eight-panel orientation chart, exact 8×8 color counts and a two-image comparison |
-| MCP stdio tools | Passed with an exact echo marker from the MCP reference server |
-| Multiple tool calls in one task | Passed with paired Bash and Write results; concurrent timing was not proven |
-| Agent/subagent | Passed with an exact foreground-agent result marker |
-| TodoWrite | Not available in this Claude Code release |
-
-Live Azure OpenAI compatibility with `gpt-5.6-sol` on Claude Code 2.1.211:
-
-| Capability | Result |
-| --- | --- |
-| Text response | Passed |
-| Read, Write, Edit, Glob, Grep and Bash | Passed |
-| WebSearch and WebFetch | Passed |
-| NotebookEdit and image reads | Passed |
-| MCP stdio tools | Passed with the MCP reference echo server |
-| Agent/subagent | Passed from a Git worktree with a bounded parent run |
-| Multiple tool calls in one task | Passed |
-
-Live OpenRouter compatibility on Claude Code 2.1.211, tested 2026-07-17:
-
-| Model | Built-in tool matrix | MCP | Agent |
-| --- | --- | --- | --- |
-| `deepseek/deepseek-v4-pro` | Passed | Passed | Passed |
-| `z-ai/glm-5.2` | Passed; slower multi-tool completion | Passed | Passed |
-| `qwen/qwen3.7-max` | Passed | Passed | Passed |
-| `moonshotai/kimi-k3` | Partial: Read, Write, Edit, Glob, Bash, web and image reads passed; Grep and NotebookEdit timed out | Timed out | Passed |
-| `moonshotai/kimi-k2.7-code` | Passed | Passed | Passed |
-
-The built-in matrix covers Read, Write, Edit, Glob, Grep, Bash, WebSearch,
-WebFetch, NotebookEdit and image reads. Kimi K3 answered ordinary prompts and
-individual tool calls, but repeated OpenRouter upstream failures made long
-tool chains unreliable during this test. A clean full-matrix retry ended after
-approximately 290 seconds with OpenRouter HTTP 429 after the initial Read call,
-so that retry was rate-limited and is not counted as an additional tool
-compatibility failure.
-Kimi K2.7 Code completed the same full matrix and is therefore the recommended
-Kimi option for tool-heavy Claude Code sessions until K3 is more reliable.
-
-`TodoWrite` remains unavailable in this Claude Code release regardless of the
-selected provider.
 
 In the normal keyboard flow, choose a model, press `Enter` to move to
 reasoning, choose the reasoning mode, then press `Enter` again to apply and
@@ -289,25 +209,25 @@ codexswitch auth openrouter
 codexswitch auth azure
 codexswitch auth foundry
 codexswitch use azure gpt-5.6-sol low
-codexswitch use claude foundry claude-sonnet-5
+codexswitch use foundry my-deployment medium
 codexswitch use openai gpt-5.5
-codexswitch use claude openrouter anthropic/claude-sonnet-4.5 high
 codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
-codexswitch use openrouter anthropic/claude-sonnet-4.5
+codexswitch use openrouter openai/gpt-5.5
 ```
 
 Codex connects directly to Azure OpenAI Responses v1. A command-backed auth
 helper reads the Azure key from the protected vault, and a local fixed model
-catalog avoids an incompatible Azure `/models` refresh. Claude Code still uses
-the loopback Messages-to-Responses bridge when Azure `gpt-5.6-sol` is selected.
+catalog avoids an incompatible Azure `/models` refresh.
 
-OpenCode Go, Codex/OpenRouter and non-Anthropic Claude routes share one loopback
-Go process on port `14555`. It exposes OpenAI Responses routes plus the Claude
-Messages compatibility routes, translates streaming events directly and reads
-vault-backed provider credentials through a narrow local helper. Microsoft
-Foundry Claude and OpenRouter-hosted
-Anthropic models bypass it entirely. Dispatch is
+Microsoft Foundry works the same way: Codex connects directly to the resource's
+`/openai/v1` Responses endpoint, a command-backed helper reads the API key from
+the vault, and a local catalog lists the deployment names you configured.
+
+OpenCode Go and OpenRouter share one loopback Go process on port `14555`. It
+exposes OpenAI Responses routes, translates them to chat completions, streams
+the events back and reads vault-backed provider credentials through a narrow
+local helper. Native OpenAI, Azure and Foundry bypass it entirely. Dispatch is
 never inferred from model names. Commander shows one compact health indicator
 and starts the unified proxy when a proxy-backed selection is activated and
 again verifies it immediately before launch. This also keeps a subsequent
@@ -326,6 +246,7 @@ out of the repository.
 | Actieve OpenAI login | `~/.codex/auth.json` | `codex login` blijft eigenaar van de actieve login |
 | Opgeslagen OpenAI accounts | Gedeelde versleutelde vault | CodexSwitch haalt accounts bij ieder gebruik opnieuw uit Object Storage |
 | Azure OpenAI credentials | Gedeelde versleutelde vault | Endpoint en API-key blijven uit `config.toml` en lokale caches |
+| Microsoft Foundry credentials | Gedeelde versleutelde vault | Endpoint, API-key en deployments blijven uit `config.toml` en lokale caches |
 | OpenCode Go API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
 | OpenRouter API key | Gedeelde versleutelde vault | De credential helper doet voor de Go-proxy een verse remote vault-read |
 
@@ -386,12 +307,13 @@ codexswitch account add
 Azure, Foundry, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
 and API key and normalizes the URL to `/openai/v1`. Foundry accepts a resource
-name or base URL, optional deployment names and an optional API key; an empty
-key selects Azure CLI/Entra ID authentication. Azure and OpenCode Go use
-installed token helpers for later direct client starts, while proxy-backed
-routes read their keys from the protected vault. Provider, model and reasoning remain selected,
-while Commander ensures the required proxy is running immediately before
-Codex starts. No API key is stored in `~/.codex/config.toml`.
+name or base URL, an API key and the comma-separated names of the deployments
+that support the Responses API, and normalizes the URL to `/openai/v1`. Azure
+and Foundry use installed token helpers for direct Codex starts, while
+proxy-backed routes read their keys from the protected vault. Provider, model
+and reasoning remain selected, while Commander ensures the required proxy is
+running immediately before Codex starts. No API key is stored in
+`~/.codex/config.toml`.
 
 ```bash
 codexswitch auth azure
@@ -409,9 +331,8 @@ than 32 MiB return HTTP 413. Health checks validate the proxy response before
 reporting it ready.
 
 OpenCode Go exposes a chat-completions style API. Codex expects the Responses
-API. The unified local proxy bridges that gap, routes OpenRouter, and translates
-Claude Messages requests for providers that do not natively implement that
-protocol. Its OpenCode Go engine handles:
+API. The unified local proxy bridges that gap and routes OpenRouter the same
+way. Its chat-completions engine handles:
 
 - Responses input/output conversion
 - custom/function/namespace tool conversion

@@ -152,26 +152,51 @@ def test_azure_endpoint_is_normalized_to_responses_v1():
     assert cs.normalize_azure_endpoint(
         "https://example.invalid/openai/v1/"
     ) == "https://example.invalid/openai/v1"
-
-
-def test_foundry_endpoint_accepts_resource_name_and_base_url():
-    assert cs.normalize_foundry_endpoint("team-resource") == (
-        "https://team-resource.services.ai.azure.com"
-    )
-    assert cs.normalize_foundry_endpoint(
-        "https://team-resource.services.ai.azure.com/anthropic/"
-    ) == "https://team-resource.services.ai.azure.com"
-
-
-def test_foundry_is_rejected_for_codex_client(monkeypatch):
-    import pytest
-
-    monkeypatch.setattr(cs, "foundry_credentials_present", lambda: True)
-    with pytest.raises(SystemExit):
-        cs.activate_selection("codex", "foundry", "claude-sonnet-5")
     assert cs.normalize_azure_endpoint(
         "https://example.invalid/openai/v1/responses"
     ) == "https://example.invalid/openai/v1"
+
+
+def test_foundry_endpoint_accepts_resource_name_and_base_url():
+    expected = "https://team-resource.services.ai.azure.com/openai/v1"
+    assert cs.normalize_foundry_endpoint("team-resource") == expected
+    assert cs.normalize_foundry_endpoint(
+        "https://team-resource.services.ai.azure.com"
+    ) == expected
+    assert cs.normalize_foundry_endpoint(expected + "/") == expected
+
+
+def test_foundry_endpoint_must_be_https():
+    import pytest
+
+    with pytest.raises(SystemExit):
+        cs.normalize_foundry_endpoint("http://team-resource.example.invalid")
+
+
+def test_foundry_credentials_require_key_and_deployments(monkeypatch):
+    import pytest
+
+    saved = []
+    monkeypatch.setattr(
+        cs, "vault_write_secret_json", lambda path, data, home: saved.append(data)
+    )
+    with pytest.raises(SystemExit):
+        cs.save_foundry_credentials("team-resource", "", "my-deployment")
+    with pytest.raises(SystemExit):
+        cs.save_foundry_credentials("team-resource", "fixture-value", " , ")
+    assert saved == []
+
+    cs.save_foundry_credentials(
+        "team-resource", " fixture-value ", "dep-a, dep-b,dep-a"
+    )
+
+    assert saved == [
+        {
+            "endpoint": "https://team-resource.services.ai.azure.com/openai/v1",
+            "api_key": "fixture-value",
+            "models": ["dep-a", "dep-b"],
+        }
+    ]
 
 
 def test_cli_without_args_shows_help_not_tui():
@@ -618,23 +643,27 @@ def test_activation_starts_required_proxy_before_writing_selection(monkeypatch):
     monkeypatch.setattr(cs, "read_json", lambda _path, default: dict(default))
     monkeypatch.setattr(cs, "write_json", lambda _path, data: calls.append(("state", data)))
 
-    cs.activate_selection("codex", "openrouter", "openai/gpt-5.4", None)
+    cs.activate_selection("openrouter", "openai/gpt-5.4", None)
 
     assert calls[0] == "proxy"
     assert calls[1] == ("openrouter", "openai/gpt-5.4", None)
 
 
-def test_direct_anthropic_claude_activation_skips_proxy(monkeypatch):
-    calls = []
-    monkeypatch.setattr(cs, "ensure_unified_provider_proxy", lambda: calls.append("proxy"))
-    monkeypatch.setattr(cs, "update_codex_config", lambda *args: calls.append("config"))
-    monkeypatch.setattr(cs, "update_claude_settings", lambda *args: calls.append("claude"))
-    monkeypatch.setattr(cs, "read_json", lambda _path, default: dict(default))
-    monkeypatch.setattr(cs, "write_json", lambda *_args: None)
+def test_activation_drops_legacy_client_key(monkeypatch):
+    written = []
+    monkeypatch.setattr(cs, "update_codex_config", lambda *args: None)
+    monkeypatch.setattr(
+        cs,
+        "read_json",
+        lambda _path, default: {"client": "legacy", "openai_account": "a@b.c"},
+    )
+    monkeypatch.setattr(cs, "write_json", lambda _path, data: written.append(data))
 
-    cs.activate_selection("claude", "openrouter", "anthropic/claude-sonnet-4.6")
+    cs.activate_selection("azure", cs.AZURE_MODEL, "low")
 
-    assert calls == ["config", "claude"]
+    assert written == [
+        {"provider": "azure", "model": cs.AZURE_MODEL, "reasoning_effort": "low"}
+    ]
 
 
 def test_ensure_provider_proxy_migrates_legacy_active_base_url(
@@ -666,31 +695,6 @@ def test_ensure_provider_proxy_migrates_legacy_active_base_url(
 def test_proxy_statuses_reports_unified_health(monkeypatch):
     monkeypatch.setattr(cs, "proxy_healthy", lambda: True)
     assert cs.proxy_statuses() == {"unified": True}
-
-
-def test_claude_bin_resolves_native_binary_behind_broken_npm_shim(
-    tmp_path, monkeypatch
-):
-    package = tmp_path / "lib" / "node_modules" / "@anthropic-ai" / "claude-code"
-    shim = package / "bin" / "claude.exe"
-    native = (
-        package
-        / "node_modules"
-        / "@anthropic-ai"
-        / "claude-code-linux-x64"
-        / "claude"
-    )
-    shim.parent.mkdir(parents=True)
-    native.parent.mkdir(parents=True)
-    shim.write_text('echo "native binary missing"\n')
-    native.write_text("native")
-    native.chmod(0o755)
-    command = tmp_path / "bin" / "claude"
-    command.parent.mkdir()
-    command.symlink_to(shim)
-    monkeypatch.setattr(cs.shutil, "which", lambda _name: str(command))
-
-    assert cs.claude_bin() == str(native)
 
 
 # ─── JWT / auth helpers ───────────────────────────────────────────
@@ -1071,134 +1075,6 @@ class TestAccountSwitchSafety:
 
 
 class TestUpdateState:
-    def test_claude_settings_merge_preserves_user_configuration(self, tmp_path, monkeypatch):
-        claude_home = tmp_path / ".claude"
-        claude_home.mkdir()
-        settings = claude_home / "settings.json"
-        settings.write_text(json.dumps({"permissions": {"allow": ["Read"]}, "env": {"USER_VALUE": "keep"}}))
-        monkeypatch.setattr(cs, "CLAUDE_HOME", claude_home)
-        monkeypatch.setattr(cs, "CLAUDE_SETTINGS", settings)
-        monkeypatch.setattr(cs, "PROJECT_ROOT", tmp_path)
-        monkeypatch.setattr(cs.shutil, "which", lambda _command: None)
-
-        cs.update_claude_settings("openrouter", "vendor/model", "high")
-
-        saved = json.loads(settings.read_text())
-        assert saved["permissions"] == {"allow": ["Read"]}
-        assert saved["env"]["USER_VALUE"] == "keep"
-        assert saved["env"]["ANTHROPIC_BASE_URL"].endswith("/claude/openrouter")
-        assert saved["env"]["ANTHROPIC_MODEL"] == "vendor/model"
-        assert saved["env"]["CODEXSWITCH_REASONING_EFFORT"] == "high"
-        assert "ANTHROPIC_AUTH_TOKEN" not in saved["env"]
-        assert saved["apiKeyHelper"].endswith("codexswitch-claude-token")
-        if os.name != "nt":
-            assert settings.stat().st_mode & 0o777 == 0o600
-
-    def test_openrouter_anthropic_claude_settings_are_direct_and_secret_free(
-        self, tmp_path, monkeypatch
-    ):
-        claude_home = tmp_path / ".claude"
-        claude_home.mkdir()
-        settings = claude_home / "settings.json"
-        settings.write_text(json.dumps({"env": {"USER_VALUE": "keep"}}))
-        monkeypatch.setattr(cs, "CLAUDE_HOME", claude_home)
-        monkeypatch.setattr(cs, "CLAUDE_SETTINGS", settings)
-        monkeypatch.setattr(cs, "PROJECT_ROOT", tmp_path)
-        monkeypatch.setattr(cs.shutil, "which", lambda _command: None)
-
-        cs.update_claude_settings(
-            "openrouter", "anthropic/claude-sonnet-5", "high"
-        )
-
-        saved = json.loads(settings.read_text())
-        assert saved["env"]["USER_VALUE"] == "keep"
-        assert saved["env"]["ANTHROPIC_BASE_URL"] == "https://openrouter.ai/api"
-        assert saved["env"]["ANTHROPIC_API_KEY"] == ""
-        assert "ANTHROPIC_AUTH_TOKEN" not in saved["env"]
-        assert saved["apiKeyHelper"].endswith("codexswitch-claude-token")
-
-    def test_only_anthropic_openrouter_models_use_direct_claude_route(self):
-        assert cs.openrouter_claude_direct("anthropic/claude-sonnet-5")
-        assert cs.openrouter_claude_direct("~anthropic/claude-sonnet-latest")
-        assert not cs.openrouter_claude_direct("deepseek/deepseek-v4-pro")
-        assert not cs.openrouter_claude_direct("moonshotai/kimi-k3")
-
-    def test_foundry_claude_settings_are_direct_and_do_not_store_key(
-        self, tmp_path, monkeypatch
-    ):
-        claude_home = tmp_path / ".claude"
-        claude_home.mkdir()
-        settings = claude_home / "settings.json"
-        helper = str(tmp_path / "bin" / "codexswitch-claude-token")
-        settings.write_text(
-            json.dumps(
-                {
-                    "apiKeyHelper": helper,
-                    "env": {
-                        "ANTHROPIC_BASE_URL": "http://127.0.0.1:14555/claude/azure",
-                        "ANTHROPIC_AUTH_TOKEN": "loopback",
-                    },
-                }
-            )
-        )
-        monkeypatch.setattr(cs, "CLAUDE_HOME", claude_home)
-        monkeypatch.setattr(cs, "CLAUDE_SETTINGS", settings)
-        monkeypatch.setattr(cs, "PROJECT_ROOT", tmp_path)
-        monkeypatch.setattr(cs.shutil, "which", lambda _command: None)
-        monkeypatch.setattr(
-            cs,
-            "foundry_credentials",
-            lambda: {
-                "endpoint": "https://foundry.example.invalid",
-                "api_key": "fixture-secret",
-            },
-        )
-
-        cs.update_claude_settings("foundry", "claude-sonnet-5", None)
-
-        saved = json.loads(settings.read_text())
-        assert "apiKeyHelper" not in saved
-        assert saved["env"]["CLAUDE_CODE_USE_FOUNDRY"] == "1"
-        assert saved["env"]["ANTHROPIC_FOUNDRY_BASE_URL"] == (
-            "https://foundry.example.invalid"
-        )
-        assert "ANTHROPIC_BASE_URL" not in saved["env"]
-        assert "ANTHROPIC_AUTH_TOKEN" not in saved["env"]
-        assert "ANTHROPIC_FOUNDRY_API_KEY" not in saved["env"]
-        assert "fixture-secret" not in settings.read_text()
-
-    def test_foundry_launch_environment_reads_key_without_mutating_process_env(
-        self, tmp_path, monkeypatch
-    ):
-        state_path = tmp_path / "config.json"
-        state_path.write_text(
-            json.dumps(
-                {
-                    "client": "claude",
-                    "provider": "foundry",
-                    "model": "claude-opus-4-8",
-                }
-            )
-        )
-        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
-        monkeypatch.setattr(
-            cs,
-            "foundry_credentials",
-            lambda: {
-                "endpoint": "https://foundry.example.invalid",
-                "api_key": "fixture-secret",
-            },
-        )
-        monkeypatch.delenv("ANTHROPIC_FOUNDRY_API_KEY", raising=False)
-
-        environment = cs.claude_launch_environment()
-
-        assert environment["CLAUDE_CODE_USE_FOUNDRY"] == "1"
-        assert environment["ANTHROPIC_FOUNDRY_API_KEY"] == "fixture-secret"
-        assert environment["ANTHROPIC_MODEL"] == "claude-opus-4-8"
-        assert "ANTHROPIC_BASE_URL" not in environment
-        assert "ANTHROPIC_FOUNDRY_API_KEY" not in cs.os.environ
-
     def test_azure_uses_low_reasoning_by_default(self, tmp_path, monkeypatch):
         codex_home = tmp_path / ".codex"
         switch_home = tmp_path / ".config" / "codexswitch"
@@ -1242,6 +1118,57 @@ class TestUpdateState:
         assert state["reasoning_effort"] == "low"
         catalog = json.loads(cs.AZURE_CODEX_MODELS.read_text())
         assert catalog["models"][0]["slug"] == cs.AZURE_MODEL
+
+    def test_foundry_is_a_codex_responses_provider(self, tmp_path, monkeypatch):
+        codex_home = tmp_path / ".codex"
+        switch_home = tmp_path / ".config" / "codexswitch"
+        codex_home.mkdir(parents=True)
+        switch_home.mkdir(parents=True)
+        config = codex_home / "config.toml"
+        state_path = switch_home / "config.json"
+        base_url = "https://team-resource.services.ai.azure.com/openai/v1"
+
+        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
+        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
+        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
+        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
+        monkeypatch.setattr(
+            cs, "FOUNDRY_CODEX_MODELS", switch_home / "foundry" / "codex-models.json"
+        )
+        monkeypatch.setattr(
+            cs,
+            "foundry_credentials",
+            lambda: {
+                "endpoint": "https://team-resource.services.ai.azure.com",
+                "api_key": "fixture-value",
+                "models": ["dep-a", "dep-b"],
+            },
+        )
+
+        cs.update_codex_config("foundry", "dep-b")
+
+        text = config.read_text()
+        parsed = tomllib.loads(text)
+        state = json.loads(state_path.read_text())
+        provider = parsed["model_providers"]["foundry"]
+        assert parsed["model"] == "dep-b"
+        assert parsed["model_provider"] == "foundry"
+        assert parsed["model_reasoning_effort"] == "medium"
+        assert provider["base_url"] == base_url
+        assert provider["wire_api"] == "responses"
+        assert provider["auth"]["args"] == [str(cs.FOUNDRY_TOKEN_HELPER)]
+        assert "fixture-value" not in text
+        assert state["reasoning_effort"] == "medium"
+        catalog = json.loads(cs.FOUNDRY_CODEX_MODELS.read_text())
+        assert [model["slug"] for model in catalog["models"]] == ["dep-a", "dep-b"]
+        assert parsed["model_catalog_json"] == str(cs.FOUNDRY_CODEX_MODELS)
+
+    def test_foundry_without_credentials_is_refused(self, monkeypatch):
+        import pytest
+
+        monkeypatch.setattr(cs, "foundry_credentials_present", lambda: False)
+        with pytest.raises(SystemExit):
+            cs.update_codex_config("foundry", "dep-a")
 
     def test_openrouter_launch_environment_reads_key_from_vault(
         self, tmp_path, monkeypatch
@@ -1402,16 +1329,16 @@ class TestUpdateState:
             cs,
             "openrouter_model_catalog",
             lambda refresh=False: {
-                "anthropic/claude-test": {
-                    "id": "anthropic/claude-test",
-                    "name": "Claude Test",
+                "vendor/test-model": {
+                    "id": "vendor/test-model",
+                    "name": "Test Model",
                     "context_length": 200000,
                 }
             },
         )
         monkeypatch.setattr(cs, "warm_codex_model_catalog", lambda: True)
 
-        cs.update_codex_config("openrouter", "anthropic/claude-test", "medium")
+        cs.update_codex_config("openrouter", "vendor/test-model", "medium")
         text = config.read_text()
         state = json.loads(state_path.read_text())
         assert 'model_provider = "openrouter"' in text
@@ -1430,7 +1357,7 @@ class TestUpdateState:
         codex_catalog = json.loads(
             (switch_home / "openrouter/codex-models.json").read_text()
         )
-        assert codex_catalog["models"][0]["slug"] == "anthropic/claude-test"
+        assert codex_catalog["models"][0]["slug"] == "vendor/test-model"
         assert "api_key" not in json.dumps(codex_catalog)
 
     def test_openrouter_all_catalog_models_can_apply_without_secret_or_provider_leak(self, tmp_path, monkeypatch):
