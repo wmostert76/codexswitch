@@ -70,7 +70,6 @@ jobs:
             bin/codex-opencode-go-proxy \
             bin/codex-azure-proxy \
             bin/codexswitch-azure-token \
-            bin/codexswitch-foundry-token \
             bin/opencode-go-token \
             bin/codexswitch_common.py
 

@@ -34,11 +34,10 @@ CODEX_TUI_LAUNCH_ARGS = (
     "--search",
 )
 DEFAULT_REASONING_VALUE = "__default__"
-PROVIDERS = ("openai", "azure", "foundry", "opencode-go", "openrouter")
+PROVIDERS = ("openai", "azure", "opencode-go", "openrouter")
 PROVIDER_LABELS = {
     "openai": "OpenAI",
     "azure": "Azure",
-    "foundry": "MS Foundry",
     "opencode-go": "OpenCode Go",
     "openrouter": "OpenRouter",
 }
@@ -350,90 +349,6 @@ class AzureAuthScreen(ModalScreen[tuple[str, str] | None]):
         self.dismiss((endpoint, key))
 
 
-class FoundryAuthScreen(ModalScreen[tuple[str, str, str] | None]):
-    BINDINGS = [Binding("escape", "cancel", "Cancel", show=False)]
-
-    def __init__(self, endpoint: str, deployments: str = "") -> None:
-        super().__init__()
-        self.endpoint = endpoint
-        self.deployments = deployments
-
-    def compose(self) -> ComposeResult:
-        with Vertical(classes="modal-dialog", id="foundry-dialog"):
-            yield Label("MICROSOFT FOUNDRY", classes="modal-title")
-            yield Static(
-                "Use a resource name or base URL. Credentials are stored in the encrypted CodexSwitch vault.",
-                classes="modal-copy",
-            )
-            yield Label("Resource / base URL", classes="field-label")
-            yield Input(
-                value=self.endpoint,
-                placeholder="resource-name or https://…services.ai.azure.com",
-                id="foundry-endpoint-input",
-                classes="form-input",
-            )
-            yield Label("Deployment names (Responses API)", classes="field-label")
-            yield Input(
-                value=self.deployments,
-                placeholder="Comma-separated deployment names",
-                id="foundry-models-input",
-                classes="form-input",
-            )
-            yield Label("API key", classes="field-label")
-            yield Input(
-                password=True,
-                placeholder="Foundry API key",
-                id="api-key-input",
-                classes="form-input",
-            )
-            yield Label("", id="form-error", classes="form-error")
-            with Horizontal(classes="modal-actions"):
-                yield Button("Save / Renew", id="api-key-save", variant="primary")
-                yield Button("Cancel", id="api-key-cancel")
-
-    def on_mount(self) -> None:
-        self.query_one("#foundry-endpoint-input", Input).focus()
-
-    def action_cancel(self) -> None:
-        self.dismiss(None)
-
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "foundry-endpoint-input":
-            self.query_one("#foundry-models-input", Input).focus()
-        elif event.input.id == "foundry-models-input":
-            self.query_one("#api-key-input", Input).focus()
-        else:
-            self.submit()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "api-key-cancel":
-            self.dismiss(None)
-        else:
-            self.submit()
-
-    def submit(self) -> None:
-        endpoint_field = self.query_one("#foundry-endpoint-input", Input)
-        models_field = self.query_one("#foundry-models-input", Input)
-        key_field = self.query_one("#api-key-input", Input)
-        error = self.query_one("#form-error", Label)
-        endpoint = endpoint_field.value.strip()
-        deployments = models_field.value.strip()
-        key = key_field.value.strip()
-        if not endpoint:
-            error.update("Resource or endpoint is required")
-            endpoint_field.focus()
-            return
-        if not any(name.strip() for name in deployments.split(",")):
-            error.update("At least one deployment name is required")
-            models_field.focus()
-            return
-        if not key:
-            error.update("API key is required")
-            key_field.focus()
-            return
-        self.dismiss((endpoint, key, deployments))
-
-
 class CodexSwitchApp(App):
     TITLE = "CodexSwitch Commander"
     SUB_TITLE = f"v{BACKEND['VERSION']}"
@@ -621,7 +536,7 @@ class CodexSwitchApp(App):
     }
 
     SplashScreen, HelpScreen, ConfirmQuitScreen,
-    OpenAIAuthScreen, ApiKeyScreen, AzureAuthScreen, FoundryAuthScreen {
+    OpenAIAuthScreen, ApiKeyScreen, AzureAuthScreen {
         align: center middle;
         background: transparent;
     }
@@ -819,14 +734,12 @@ class CodexSwitchApp(App):
         self.catalogs: dict[str, dict[str, dict]] = {
             "openai": dict(self.backend.get("OPENAI_FALLBACK_CATALOG", {})),
             "azure": {},
-            "foundry": {},
             "opencode-go": dict(self.backend.get("OPENCODE_GO_FALLBACK_CATALOG", {})),
             "openrouter": {},
         }
         self.model_lists: dict[str, list[str]] = {
             "openai": list(self.backend.get("OPENAI_FALLBACK_MODELS", ["gpt-5.5"])),
             "azure": list(self.backend.get("AZURE_MODELS", ["gpt-5.6-sol"])),
-            "foundry": [],
             "opencode-go": list(self.catalogs["opencode-go"]),
             "openrouter": list(
                 self.backend.get("OPENROUTER_FALLBACK_MODELS", ["openrouter/auto"])
@@ -1400,13 +1313,8 @@ class CodexSwitchApp(App):
         model = self.draft.model
         if not model:
             return [("Model default", None)]
-        if provider in {"azure", "foundry"}:
-            choices = self.backend.get(
-                "AZURE_REASONING_CHOICES"
-                if provider == "azure"
-                else "FOUNDRY_REASONING_CHOICES",
-                [],
-            )
+        if provider == "azure":
+            choices = self.backend.get("AZURE_REASONING_CHOICES", [])
             return [
                 (str(label), str(effort))
                 for label, effort in choices
@@ -1479,12 +1387,8 @@ class CodexSwitchApp(App):
             return None
         provider = self.draft.provider
         model = self.draft.model
-        if provider in {"azure", "foundry"}:
-            default = (
-                self.backend.get("AZURE_DEFAULT_REASONING_EFFORT", "low")
-                if provider == "azure"
-                else self.backend.get("FOUNDRY_DEFAULT_REASONING_EFFORT", "medium")
-            )
+        if provider == "azure":
+            default = self.backend.get("AZURE_DEFAULT_REASONING_EFFORT", "low")
             return str(default) if default in values else choices[0][1]
         meta = self.catalogs.get(provider, {}).get(model or "", {})
         default = None
@@ -1587,7 +1491,6 @@ class CodexSwitchApp(App):
             return self.draft.account or "not detected"
         function = {
             "azure": "azure_credentials_present",
-            "foundry": "foundry_credentials_present",
             "opencode-go": "opencode_go_key_present",
             "openrouter": "openrouter_key_present",
         }.get(provider)
@@ -2120,7 +2023,6 @@ class CodexSwitchApp(App):
         getters = {
             "openai": ("openai_models", "openai_model_catalog"),
             "azure": ("azure_models", None),
-            "foundry": ("foundry_models", None),
             "opencode-go": ("opencode_models", "opencode_model_catalog"),
             "openrouter": ("openrouter_models", "openrouter_model_catalog"),
         }
@@ -2165,7 +2067,7 @@ class CodexSwitchApp(App):
         )
 
     async def startup_refresh_worker(self) -> None:
-        providers = ("openai", "foundry", "opencode-go", "openrouter")
+        providers = ("openai", "opencode-go", "openrouter")
         proxy_task = asyncio.create_task(asyncio.to_thread(self.proxy_statuses_sync))
         self.busy_providers.update(providers)
         self.vault_label = "CHECKING"
@@ -2502,22 +2404,6 @@ class CodexSwitchApp(App):
                 lambda payload: self.finish_credential_modal(provider, payload),
             )
             return
-        if provider == "foundry":
-            credential = self.safe_call("foundry_credentials", {})
-            if not isinstance(credential, dict):
-                credential = {}
-            self.push_screen(
-                FoundryAuthScreen(
-                    str(credential.get("endpoint") or ""),
-                    ", ".join(
-                        str(model)
-                        for model in credential.get("models", [])
-                        if isinstance(model, str)
-                    ),
-                ),
-                lambda payload: self.finish_credential_modal(provider, payload),
-            )
-            return
         self.push_screen(
             ApiKeyScreen(provider),
             lambda payload: self.finish_credential_modal(provider, payload),
@@ -2587,14 +2473,6 @@ class CodexSwitchApp(App):
                 endpoint, key = payload
                 result, output = self.capture(
                     self.backend["save_azure_credentials"], endpoint, key
-                )
-            elif provider == "foundry":
-                endpoint, key, deployments = payload
-                result, output = self.capture(
-                    self.backend["save_foundry_credentials"],
-                    endpoint,
-                    key,
-                    deployments,
                 )
             elif provider == "opencode-go":
                 result, output = self.capture(

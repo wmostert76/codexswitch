@@ -37,7 +37,6 @@ jobs:
             bin/codex-opencode-go-proxy \
             bin/codex-azure-proxy \
             bin/codexswitch-azure-token \
-            bin/codexswitch-foundry-token \
             bin/opencode-go-token \
             bin/codexswitch_common.py
 
@@ -87,7 +86,7 @@ jobs:
 
       - name: Compile Python entry points
         run: |
-          python -m py_compile bin/codexswitch bin/codexswitch_backend.py bin/codexswitch-tui bin/codex-openai-proxy bin/codex-provider-proxy bin/codex-opencode-go-proxy bin/codex-azure-proxy bin/codexswitch-azure-token bin/codexswitch-foundry-token bin/opencode-go-token bin/codexswitch_common.py
+          python -m py_compile bin/codexswitch bin/codexswitch_backend.py bin/codexswitch-tui bin/codex-openai-proxy bin/codex-provider-proxy bin/codex-opencode-go-proxy bin/codex-azure-proxy bin/codexswitch-azure-token bin/opencode-go-token bin/codexswitch_common.py
 
       - name: Run Windows test suite
         run: python -m pytest tests/ -v

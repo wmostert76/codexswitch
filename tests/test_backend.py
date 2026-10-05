@@ -157,48 +157,6 @@ def test_azure_endpoint_is_normalized_to_responses_v1():
     ) == "https://example.invalid/openai/v1"
 
 
-def test_foundry_endpoint_accepts_resource_name_and_base_url():
-    expected = "https://team-resource.services.ai.azure.com/openai/v1"
-    assert cs.normalize_foundry_endpoint("team-resource") == expected
-    assert cs.normalize_foundry_endpoint(
-        "https://team-resource.services.ai.azure.com"
-    ) == expected
-    assert cs.normalize_foundry_endpoint(expected + "/") == expected
-
-
-def test_foundry_endpoint_must_be_https():
-    import pytest
-
-    with pytest.raises(SystemExit):
-        cs.normalize_foundry_endpoint("http://team-resource.example.invalid")
-
-
-def test_foundry_credentials_require_key_and_deployments(monkeypatch):
-    import pytest
-
-    saved = []
-    monkeypatch.setattr(
-        cs, "vault_write_secret_json", lambda path, data, home: saved.append(data)
-    )
-    with pytest.raises(SystemExit):
-        cs.save_foundry_credentials("team-resource", "", "my-deployment")
-    with pytest.raises(SystemExit):
-        cs.save_foundry_credentials("team-resource", "fixture-value", " , ")
-    assert saved == []
-
-    cs.save_foundry_credentials(
-        "team-resource", " fixture-value ", "dep-a, dep-b,dep-a"
-    )
-
-    assert saved == [
-        {
-            "endpoint": "https://team-resource.services.ai.azure.com/openai/v1",
-            "api_key": "fixture-value",
-            "models": ["dep-a", "dep-b"],
-        }
-    ]
-
-
 def test_cli_without_args_shows_help_not_tui():
     proc = subprocess.run(
         [sys.executable, str(BIN_DIR / "codexswitch")],
@@ -341,7 +299,6 @@ def test_status_marks_removed_openai_model_invalid(tmp_path, monkeypatch, capsys
     monkeypatch.setattr(cs, "_common_opencode_bin", lambda: None)
     monkeypatch.setattr(cs, "opencode_go_key_present", lambda: False)
     monkeypatch.setattr(cs, "azure_credentials_present", lambda: False)
-    monkeypatch.setattr(cs, "foundry_credentials_present", lambda: False)
     monkeypatch.setattr(cs, "openrouter_key_present", lambda: False)
     monkeypatch.setattr(cs, "codex_usage_summary", lambda _data: [])
     monkeypatch.setattr(cs, "openai_models", lambda: ["supported-model"])
@@ -1118,57 +1075,6 @@ class TestUpdateState:
         assert state["reasoning_effort"] == "low"
         catalog = json.loads(cs.AZURE_CODEX_MODELS.read_text())
         assert catalog["models"][0]["slug"] == cs.AZURE_MODEL
-
-    def test_foundry_is_a_codex_responses_provider(self, tmp_path, monkeypatch):
-        codex_home = tmp_path / ".codex"
-        switch_home = tmp_path / ".config" / "codexswitch"
-        codex_home.mkdir(parents=True)
-        switch_home.mkdir(parents=True)
-        config = codex_home / "config.toml"
-        state_path = switch_home / "config.json"
-        base_url = "https://team-resource.services.ai.azure.com/openai/v1"
-
-        monkeypatch.setattr(cs, "CODEX_HOME", codex_home)
-        monkeypatch.setattr(cs, "CODEX_CONFIG", config)
-        monkeypatch.setattr(cs, "SWITCH_HOME", switch_home)
-        monkeypatch.setattr(cs, "SWITCH_CONFIG", state_path)
-        monkeypatch.setattr(
-            cs, "FOUNDRY_CODEX_MODELS", switch_home / "foundry" / "codex-models.json"
-        )
-        monkeypatch.setattr(
-            cs,
-            "foundry_credentials",
-            lambda: {
-                "endpoint": "https://team-resource.services.ai.azure.com",
-                "api_key": "fixture-value",
-                "models": ["dep-a", "dep-b"],
-            },
-        )
-
-        cs.update_codex_config("foundry", "dep-b")
-
-        text = config.read_text()
-        parsed = tomllib.loads(text)
-        state = json.loads(state_path.read_text())
-        provider = parsed["model_providers"]["foundry"]
-        assert parsed["model"] == "dep-b"
-        assert parsed["model_provider"] == "foundry"
-        assert parsed["model_reasoning_effort"] == "medium"
-        assert provider["base_url"] == base_url
-        assert provider["wire_api"] == "responses"
-        assert provider["auth"]["args"] == [str(cs.FOUNDRY_TOKEN_HELPER)]
-        assert "fixture-value" not in text
-        assert state["reasoning_effort"] == "medium"
-        catalog = json.loads(cs.FOUNDRY_CODEX_MODELS.read_text())
-        assert [model["slug"] for model in catalog["models"]] == ["dep-a", "dep-b"]
-        assert parsed["model_catalog_json"] == str(cs.FOUNDRY_CODEX_MODELS)
-
-    def test_foundry_without_credentials_is_refused(self, monkeypatch):
-        import pytest
-
-        monkeypatch.setattr(cs, "foundry_credentials_present", lambda: False)
-        with pytest.raises(SystemExit):
-            cs.update_codex_config("foundry", "dep-a")
 
     def test_openrouter_launch_environment_reads_key_from_vault(
         self, tmp_path, monkeypatch

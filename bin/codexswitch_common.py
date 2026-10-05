@@ -31,7 +31,7 @@ except ImportError:  # Windows
     pwd = None
 
 
-VERSION = "26.9.01.1039"
+VERSION = "26.10.05.0943"
 CREDITS_OWNER = "by WAM-Software since (c) 1988"
 CREDITS_AI = "AI-assisted implementation: OpenAI Codex"
 ASCII_LOGO = r"""   ___          _            __          _ _       _

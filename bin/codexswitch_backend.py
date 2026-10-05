@@ -69,14 +69,6 @@ AZURE_DEFAULT_REASONING_EFFORT = "low"
 AZURE_DEFAULT_ENDPOINT = ""
 AZURE_DEFAULT_API_VERSION = "v1"
 AZURE_API_KEY_ENV = "AZURE_OPENAI_API_KEY"
-FOUNDRY_REASONING_CHOICES = [
-    ("Low", "low"),
-    ("Medium (default)", "medium"),
-    ("High", "high"),
-    ("Extra high", "xhigh"),
-]
-FOUNDRY_DEFAULT_REASONING_EFFORT = "medium"
-FOUNDRY_CONTEXT_WINDOW = 272000
 DEFAULT_OPENCODE_MODEL = "kimi-k2.6"
 OPENROUTER_FALLBACK_MODELS = ["openrouter/auto", "openrouter/free"]
 OPENROUTER_CODEX_COMPATIBILITY_TESTED_AT = "2026-07-14"
@@ -139,9 +131,6 @@ TOKEN_HELPER = shutil.which("opencode-go-token") or str(PROJECT_ROOT / "bin/open
 AZURE_TOKEN_HELPER = shutil.which("codexswitch-azure-token") or str(
     PROJECT_ROOT / "bin/codexswitch-azure-token"
 )
-FOUNDRY_TOKEN_HELPER = shutil.which("codexswitch-foundry-token") or str(
-    PROJECT_ROOT / "bin/codexswitch-foundry-token"
-)
 PROXY_BIN = shutil.which("codex-provider-proxy") or str(PROJECT_ROOT / "bin/codex-provider-proxy")
 if os.name == "nt":
     TUI_PYTHON = str(PROJECT_ROOT / ".venv/Scripts/python.exe")
@@ -170,8 +159,6 @@ SWITCH_CONFIG = SWITCH_HOME / "config.json"
 OPENAI_ACCOUNTS_DIR = SWITCH_HOME / "openai-accounts"
 AZURE_AUTH = SWITCH_HOME / "azure/auth.json"
 AZURE_CODEX_MODELS = SWITCH_HOME / "azure/codex-models.json"
-FOUNDRY_AUTH = SWITCH_HOME / "foundry/auth.json"
-FOUNDRY_CODEX_MODELS = SWITCH_HOME / "foundry/codex-models.json"
 OPENROUTER_AUTH = SWITCH_HOME / "openrouter/auth.json"
 OPENROUTER_MODELS_CACHE = SWITCH_HOME / "openrouter/models.json"
 OPENROUTER_CODEX_MODELS = SWITCH_HOME / "openrouter/codex-models.json"
@@ -944,7 +931,7 @@ def migrate_secret_file(path: Path) -> bool:
 
 def migrate_vault() -> None:
     migrated = 0
-    for path in [AZURE_AUTH, FOUNDRY_AUTH, OPENROUTER_AUTH, OPENCODE_GO_AUTH]:
+    for path in [AZURE_AUTH, OPENROUTER_AUTH, OPENCODE_GO_AUTH]:
         if migrate_secret_file(path):
             migrated += 1
     if OPENAI_ACCOUNTS_DIR.exists():
@@ -1018,13 +1005,13 @@ def save_opencode_go_key(key: str) -> None:
     print("OpenCode Go API-key opgeslagen")
 
 
-def normalize_azure_endpoint(endpoint: str, label: str = "Azure") -> str:
+def normalize_azure_endpoint(endpoint: str) -> str:
     """Return the Azure OpenAI Responses v1 base URL."""
     parsed = urlsplit(endpoint.strip().rstrip("/"))
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
-        die(f"{label} endpoint moet een geldige http(s)-URL zijn")
+        die("Azure endpoint moet een geldige http(s)-URL zijn")
     if parsed.query or parsed.fragment:
-        die(f"{label} endpoint mag geen query of fragment bevatten")
+        die("Azure endpoint mag geen query of fragment bevatten")
     path = parsed.path.rstrip("/")
     if path.endswith("/openai/v1/responses"):
         path = path[: -len("/responses")]
@@ -1035,7 +1022,7 @@ def normalize_azure_endpoint(endpoint: str, label: str = "Azure") -> str:
     elif not path:
         path = "/openai/v1"
     else:
-        die(f"{label} endpoint moet eindigen op de resource-host, /openai of /openai/v1")
+        die("Azure endpoint moet eindigen op de resource-host, /openai of /openai/v1")
     return urlunsplit((parsed.scheme, parsed.netloc, path, "", ""))
 
 
@@ -1063,57 +1050,6 @@ def azure_credentials() -> dict:
 def azure_credentials_present() -> bool:
     data = azure_credentials()
     return bool(data.get("endpoint") and data.get("api_key"))
-
-
-def normalize_foundry_endpoint(endpoint_or_resource: str) -> str:
-    """Return the Microsoft Foundry OpenAI v1 base URL used by Codex."""
-    value = endpoint_or_resource.strip().rstrip("/")
-    if not value:
-        die("Foundry resource of endpoint is leeg")
-    if "://" not in value:
-        if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9-]*", value):
-            die("Foundry resource bevat ongeldige tekens")
-        value = f"https://{value}.services.ai.azure.com"
-    elif urlsplit(value).scheme != "https":
-        die("Foundry endpoint moet een geldige https-URL zijn")
-    return normalize_azure_endpoint(value, "Foundry")
-
-
-def save_foundry_credentials(
-    endpoint_or_resource: str, key: str, deployments: str
-) -> None:
-    endpoint = normalize_foundry_endpoint(endpoint_or_resource)
-    normalized_key = key.strip()
-    if not normalized_key:
-        die("Foundry API-key is leeg")
-    models = list(
-        dict.fromkeys(
-            model.strip() for model in deployments.split(",") if model.strip()
-        )
-    )
-    if not models:
-        die("Foundry heeft minimaal één deployment-naam nodig")
-    vault_write_secret_json(
-        FOUNDRY_AUTH,
-        {"endpoint": endpoint, "api_key": normalized_key, "models": models},
-        SWITCH_HOME,
-    )
-    print("Microsoft Foundry configuratie opgeslagen")
-
-
-def foundry_credentials() -> dict:
-    data = vault_read_secret_json(FOUNDRY_AUTH, {}, SWITCH_HOME)
-    return data if isinstance(data, dict) else {}
-
-
-def foundry_credentials_present() -> bool:
-    data = foundry_credentials()
-    return bool(data.get("endpoint") and data.get("api_key"))
-
-
-def foundry_base_url() -> str | None:
-    endpoint = foundry_credentials().get("endpoint")
-    return normalize_foundry_endpoint(str(endpoint)) if endpoint else None
 
 
 def opencode_go_key_present() -> bool:
@@ -1228,8 +1164,6 @@ def migrate_provider_proxy_url(provider: str) -> None:
     }
     if provider == "azure":
         expected = azure_credentials().get("endpoint")
-    elif provider == "foundry":
-        expected = foundry_base_url()
     else:
         expected = expected_urls.get(provider)
     if expected is None or not CODEX_CONFIG.exists():
@@ -1283,7 +1217,7 @@ def ensure_unified_provider_proxy() -> None:
 
 def ensure_provider_proxy(provider: str) -> None:
     """Prepare and start the unified proxy for the selected provider."""
-    if provider in {"azure", "foundry"}:
+    if provider == "azure":
         migrate_provider_proxy_url(provider)
         return
     if provider not in {"opencode-go", "openrouter"}:
@@ -1365,35 +1299,6 @@ def write_azure_codex_model_catalog() -> Path:
     return AZURE_CODEX_MODELS
 
 
-def write_foundry_codex_model_catalog() -> Path:
-    write_json(
-        FOUNDRY_CODEX_MODELS,
-        {
-            "models": [
-                codex_model_entry(
-                    model,
-                    model,
-                    "Microsoft Foundry deployment",
-                    FOUNDRY_DEFAULT_REASONING_EFFORT,
-                    FOUNDRY_CONTEXT_WINDOW,
-                    priority,
-                )
-                for priority, model in enumerate(foundry_models(), start=1)
-            ]
-        },
-    )
-    return FOUNDRY_CODEX_MODELS
-
-
-def foundry_models() -> list[str]:
-    configured = foundry_credentials().get("models", [])
-    if not isinstance(configured, list):
-        return []
-    return list(
-        dict.fromkeys(model for model in configured if isinstance(model, str) and model)
-    )
-
-
 def openai_model_catalog(refresh: bool = False) -> dict[str, dict]:
     global _OPENAI_CATALOG_CACHE
     if _OPENAI_CATALOG_CACHE is not None and not refresh:
@@ -1455,10 +1360,6 @@ def azure_reasoning_choices(model: str) -> list[tuple[str, str]]:
     if model not in AZURE_MODELS:
         return []
     return list(AZURE_REASONING_CHOICES)
-
-
-def foundry_reasoning_choices(model: str) -> list[tuple[str, str]]:
-    return list(FOUNDRY_REASONING_CHOICES)
 
 
 def openrouter_model_catalog(refresh: bool = False) -> dict[str, dict]:
@@ -1774,13 +1675,6 @@ def default_reasoning_effort(model: str) -> str:
 
 
 def validate_provider_model(provider: str, model: str) -> None:
-    if provider == "foundry":
-        if model not in foundry_models():
-            print(
-                f"warning: Foundry deployment '{model}' staat niet in de geconfigureerde deployments",
-                file=sys.stderr,
-            )
-        return
     if provider == "azure":
         if model not in AZURE_MODELS:
             die(f"Azure model '{model}' is niet beschikbaar; kies {AZURE_MODEL}")
@@ -1893,8 +1787,6 @@ def warm_codex_model_catalog() -> bool:
 def update_codex_config(provider: str, model: str, reasoning_effort: str | None = None) -> None:
     if provider == "azure" and not azure_credentials_present():
         die("Azure credentials ontbreken; gebruik: codexswitch auth azure")
-    if provider == "foundry" and not foundry_credentials_present():
-        die("Microsoft Foundry configuratie ontbreekt; gebruik: codexswitch auth foundry")
     if provider == "opencode-go":
         if not opencode_go_key_present():
             die("OpenCode Go API-key ontbreekt; gebruik: codexswitch auth opencode-go")
@@ -1914,8 +1806,6 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
     lines = remove_block(lines, "model_providers.opencode-go")
     lines = remove_block(lines, "model_providers.azure.auth")
     lines = remove_block(lines, "model_providers.azure")
-    lines = remove_block(lines, "model_providers.foundry.auth")
-    lines = remove_block(lines, "model_providers.foundry")
     lines = remove_block(lines, "model_providers.openrouter.auth")
     lines = remove_block(lines, "model_providers.openrouter")
     lines = set_top_level(lines, "model", model)
@@ -1930,15 +1820,10 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
                 f"kies uit {', '.join(label for label, _ in choices)}"
             )
         lines = set_top_level(lines, "model_reasoning_effort", reasoning_effort)
-    elif provider in {"azure", "foundry"}:
-        if provider == "azure":
-            choices = azure_reasoning_choices(model)
-            default_effort = AZURE_DEFAULT_REASONING_EFFORT
-        else:
-            choices = foundry_reasoning_choices(model)
-            default_effort = FOUNDRY_DEFAULT_REASONING_EFFORT
+    elif provider == "azure":
+        choices = azure_reasoning_choices(model)
         allowed = {effort for _, effort in choices}
-        reasoning_effort = reasoning_effort or default_effort
+        reasoning_effort = reasoning_effort or AZURE_DEFAULT_REASONING_EFFORT
         if reasoning_effort not in allowed:
             die(
                 f"denkstand '{reasoning_effort}' bestaat niet voor {model}; "
@@ -1974,10 +1859,6 @@ def update_codex_config(provider: str, model: str, reasoning_effort: str | None 
     if provider == "azure":
         lines = set_top_level(
             lines, "model_catalog_json", str(write_azure_codex_model_catalog())
-        )
-    elif provider == "foundry":
-        lines = set_top_level(
-            lines, "model_catalog_json", str(write_foundry_codex_model_catalog())
         )
     elif provider == "openrouter":
         catalog_path = write_openrouter_codex_model_catalog(model)
@@ -2026,27 +1907,6 @@ refresh_interval_ms = 0
 '''
         lines.append(provider_block)
 
-    if provider == "foundry":
-        base_url = foundry_base_url()
-        if not base_url:
-            die("Foundry endpoint ontbreekt; gebruik: codexswitch auth foundry")
-        if not Path(FOUNDRY_TOKEN_HELPER).exists():
-            die(f"Foundry token helper ontbreekt: {FOUNDRY_TOKEN_HELPER}")
-        provider_block = f'''
-
-[model_providers.foundry]
-name = "Microsoft Foundry"
-base_url = {toml_string(base_url)}
-wire_api = "responses"
-
-[model_providers.foundry.auth]
-command = {toml_string(sys.executable)}
-args = [{toml_string(FOUNDRY_TOKEN_HELPER)}]
-timeout_ms = 5000
-refresh_interval_ms = 0
-'''
-        lines.append(provider_block)
-
     if provider == "openrouter":
         provider_block = f'''
 
@@ -2069,7 +1929,7 @@ wire_api = "responses"
         current_account = openai_auth_email(current_auth)
         if current_account:
             state["openai_account"] = current_account
-    elif provider in {"azure", "foundry", "opencode-go", "openrouter"}:
+    elif provider in {"azure", "opencode-go", "openrouter"}:
         state.pop("openai_account", None)
     write_json(SWITCH_CONFIG, state)
     if provider in {"opencode-go", "openrouter"} and not warm_codex_model_catalog():
@@ -2096,7 +1956,6 @@ def status() -> None:
     print(f"opencode:     {opencode_binary}")
     print(f"opencode-go auth: {'ok' if opencode_go_key_present() else 'ontbreekt'}")
     print(f"azure auth:      {'ok' if azure_credentials_present() else 'ontbreekt'}")
-    print(f"foundry auth:    {'ok' if foundry_credentials_present() else 'ontbreekt'}")
     print(f"openrouter auth: {'ok' if openrouter_key_present() else 'ontbreekt'}")
     print(f"switch state: {SWITCH_CONFIG}")
     suffix = f" / denken={state['reasoning_effort']}" if state.get("reasoning_effort") else ""
@@ -2118,9 +1977,6 @@ def list_models() -> None:
         print(f"  {model}")
     print("\nAzure:")
     for model in azure_models():
-        print(f"  {model}")
-    print("\nMicrosoft Foundry (configured deployments):")
-    for model in foundry_models():
         print(f"  {model}")
     print("\nOpenCode Go:")
     for model in opencode_models():
@@ -2200,7 +2056,7 @@ def choose(title: str, options: list[str], descriptions: dict[str, str] | None =
 
 def auth(provider: str | None = None) -> None:
     provider = provider or choose(
-        "Auth provider", ["openai", "azure", "foundry", "opencode-go", "openrouter"]
+        "Auth provider", ["openai", "azure", "opencode-go", "openrouter"]
     )
     if provider == "openai":
         ensure_home_owner(CODEX_HOME / "auth.json")
@@ -2220,14 +2076,6 @@ def auth(provider: str | None = None) -> None:
         endpoint = input("Azure resource endpoint: ").strip()
         key = getpass.getpass("Azure API-key: ")
         save_azure_credentials(endpoint, key)
-        return
-    if provider == "foundry":
-        endpoint = input("Foundry resource name or base URL: ").strip()
-        key = getpass.getpass("Foundry API-key: ")
-        deployments = input(
-            "Foundry deploymentnamen (Responses API), kommagescheiden: "
-        ).strip()
-        save_foundry_credentials(endpoint, key, deployments)
         return
     if provider == "openrouter":
         key = getpass.getpass("OpenRouter API-key: ")
@@ -2249,7 +2097,7 @@ def usage() -> None:
 Usage:
   codexswitch tui                    start Commander TUI
   codexswitch use PROVIDER MODEL [REASONING]
-  codexswitch auth [openai|azure|foundry|opencode-go|openrouter]
+  codexswitch auth [openai|azure|opencode-go|openrouter]
   codexswitch account add            add OpenAI account with device sign-in
   codexswitch account save [EMAIL]   save current OpenAI login
   codexswitch account use EMAIL      activate saved OpenAI account
@@ -2266,7 +2114,6 @@ Usage:
 Providers:
   openai                             native Codex/OpenAI account flow
   azure                              Azure OpenAI endpoint/API-key with gpt-5.6-sol
-  foundry                            Microsoft Foundry endpoint/API-key with your own deployments
   opencode-go                        OpenCode Go key through CodexSwitch store and local Responses proxy
   openrouter                         OpenRouter API key from the encrypted vault
 
@@ -2276,7 +2123,6 @@ Examples:
   codexswitch auth openrouter
   codexswitch update --check
   codexswitch use azure gpt-5.6-sol low
-  codexswitch use foundry my-deployment medium
   codexswitch use openai gpt-5.5
   codexswitch use opencode-go glm-5.2 high
   codexswitch use openrouter openai/gpt-5.5

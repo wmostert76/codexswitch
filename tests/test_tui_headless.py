@@ -60,10 +60,6 @@ class FakeBackend(dict[str, Any]):
         self.azure_state: dict[str, Any] = {
             "endpoint": "https://example.invalid/openai/v1",
         }
-        self.foundry_state: dict[str, Any] = {
-            "endpoint": "https://example.invalid/openai/v1",
-            "models": ["foundry-gpt-test"],
-        }
         self.openai_catalog: dict[str, dict[str, Any]] = {
             "gpt-main": {
                 "display_name": "GPT Main",
@@ -159,13 +155,6 @@ class FakeBackend(dict[str, Any]):
                 "OPENAI_FALLBACK_MODELS": list(self.openai_catalog),
                 "OPENAI_FALLBACK_CATALOG": dict(self.openai_catalog),
                 "AZURE_MODELS": ["azure-gpt"],
-                "FOUNDRY_REASONING_CHOICES": [
-                    ("Low", "low"),
-                    ("Medium (default)", "medium"),
-                    ("High", "high"),
-                    ("Extra high", "xhigh"),
-                ],
-                "FOUNDRY_DEFAULT_REASONING_EFFORT": "medium",
                 "AZURE_REASONING_CHOICES": [
                     ("Low (default)", "low"),
                     ("Medium", "medium"),
@@ -186,7 +175,6 @@ class FakeBackend(dict[str, Any]):
                 "openai_accounts": lambda: ["tester@example.invalid"],
                 "openai_models": lambda: list(self.openai_catalog),
                 "azure_models": lambda: ["azure-gpt"],
-                "foundry_models": lambda: list(self.foundry_state.get("models", [])),
                 "opencode_models": lambda: list(self.opencode_catalog),
                 "openrouter_models": lambda: list(self.openrouter_catalog),
                 "openai_model_catalog": lambda refresh=False: dict(
@@ -206,8 +194,6 @@ class FakeBackend(dict[str, Any]):
                 "openrouter_key_present": lambda: True,
                 "azure_credentials": lambda: dict(self.azure_state),
                 "azure_credentials_present": lambda: True,
-                "foundry_credentials": lambda: dict(self.foundry_state),
-                "foundry_credentials_present": lambda: True,
                 "codex_config_state": lambda: dict(self.codex_state),
                 "validate_provider_model": self.validate_provider_model,
                 "update_codex_config": self.update_codex_config,
@@ -219,7 +205,6 @@ class FakeBackend(dict[str, Any]):
                     ("save-key", "opencode-go")
                 ),
                 "save_azure_credentials": self.save_azure_credentials,
-                "save_foundry_credentials": self.save_foundry_credentials,
                 "refresh_openai_models": self.refresher("openai"),
                 "refresh_opencode_models": self.refresher("opencode-go"),
                 "refresh_openrouter_models": self.refresher("openrouter"),
@@ -298,17 +283,6 @@ class FakeBackend(dict[str, Any]):
     def save_azure_credentials(self, endpoint: str, key: str) -> None:
         self.calls.append(("save-key", "azure"))
         self.azure_state = {"endpoint": endpoint}
-
-    def save_foundry_credentials(
-        self, endpoint: str, key: str, deployments: str
-    ) -> None:
-        self.calls.append(("save-key", "foundry"))
-        self.foundry_state = {
-            "endpoint": endpoint,
-            "models": [
-                model.strip() for model in deployments.split(",") if model.strip()
-            ],
-        }
 
     def refresher(self, provider: str) -> Callable[[bool], bool]:
         def refresh(strict: bool = False) -> bool:
@@ -1454,58 +1428,6 @@ def test_azure_modal_fits_80x24_and_validates_in_field_order(
     asyncio.run(run())
 
 
-def test_foundry_modal_fits_80x24_and_requires_deployments_and_key(
-    app_factory, fake_backend: FakeBackend
-):
-    app = app_factory(fake_backend)
-
-    async def run() -> None:
-        async with app.run_test(size=(80, 24)) as pilot:
-            await settle(pilot)
-            sources = app.query_one("#sources", OptionList)
-            highlight(sources, "provider:foundry")
-            await settle(pilot)
-            await pilot.press("f7")
-            await settle(pilot)
-
-            dialog = app.screen.query_one("#foundry-dialog")
-            assert dialog.region.right <= 80 and dialog.region.bottom <= 24
-            assert "CLAUDE" not in app.screen.query_one(".modal-title").render().plain.upper()
-            endpoint = app.screen.query_one("#foundry-endpoint-input", Input)
-            deployments = app.screen.query_one("#foundry-models-input", Input)
-            key = app.screen.query_one("#api-key-input", Input)
-            error = app.screen.query_one("#form-error")
-            assert endpoint.has_focus
-            assert deployments.value == "foundry-gpt-test"
-            await pilot.press("enter")
-            assert deployments.has_focus
-            await pilot.press("enter")
-            assert key.has_focus
-
-            deployments.value = " , "
-            await pilot.press("enter")
-            await settle(pilot)
-            assert deployments.has_focus
-            assert "deployment name is required" in error.render().plain
-            assert not any(call[0] == "save-key" for call in fake_backend.calls)
-
-            deployments.value = "dep-a, dep-b"
-            key.focus()
-            await pilot.press("enter")
-            await settle(pilot)
-            assert key.has_focus
-            assert "API key is required" in error.render().plain
-            assert not any(call[0] == "save-key" for call in fake_backend.calls)
-
-            key.value = "fixture-secret"
-            await pilot.press("enter")
-            await wait_until(pilot, lambda: not app.operation_busy)
-            assert ("save-key", "foundry") in fake_backend.calls
-            assert fake_backend.foundry_state["models"] == ["dep-a", "dep-b"]
-
-    asyncio.run(run())
-
-
 def test_help_modal_fits_80x24_scrolls_and_restores_focus(app_factory):
     app = app_factory()
 
@@ -1720,52 +1642,6 @@ def test_azure_apply_updates_codex_provider_model_and_reasoning(
                 "model_reasoning_effort": "low",
             }
             assert ("apply", "azure", "azure-gpt", "low") in fake_backend.calls
-
-    asyncio.run(run())
-
-
-def test_foundry_is_a_codex_provider_with_configured_deployments(
-    app_factory, fake_backend: FakeBackend
-):
-    fake_backend.foundry_state = {
-        "endpoint": "https://example.invalid/openai/v1",
-        "models": ["dep-a", "dep-b"],
-    }
-    app = app_factory(fake_backend, refresh_on_start=True)
-
-    async def run() -> None:
-        async with app.run_test(size=(120, 40)) as pilot:
-            await app.workers.wait_for_complete()
-            await settle(pilot)
-            sources = app.query_one("#sources", OptionList)
-            assert option_by_id(sources, "provider:foundry")
-
-            highlight(sources, "provider:foundry")
-            await settle(pilot)
-            models = app.query_one("#models", OptionList)
-            assert [option.id for option in models.options] == [
-                "model:dep-a",
-                "model:dep-b",
-            ]
-            assert app.draft.provider == "foundry"
-            assert app.draft.model == "dep-a"
-            reasoning = app.query_one("#reasoning", OptionList)
-            assert [option.id for option in reasoning.options] == [
-                "reason:low",
-                "reason:medium",
-                "reason:high",
-                "reason:xhigh",
-            ]
-
-            await pilot.press("f6")
-            await wait_until(pilot, lambda: not app.operation_busy)
-            assert app.active.provider == "foundry"
-            assert fake_backend.codex_state == {
-                "model_provider": "foundry",
-                "model": "dep-a",
-                "model_reasoning_effort": "medium",
-            }
-            assert ("apply", "foundry", "dep-a", "medium") in fake_backend.calls
 
     asyncio.run(run())
 

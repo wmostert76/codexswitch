@@ -9,9 +9,8 @@
                     C O M M A N D E R
 ```
 
-Switch Codex CLI between native OpenAI accounts, Azure OpenAI, Microsoft
-Foundry deployments, OpenCode Go models and OpenRouter models from one terminal
-control center.
+Switch Codex CLI between native OpenAI accounts, Azure OpenAI, OpenCode Go
+models and OpenRouter models from one terminal control center.
 
 ![CodexSwitch Commander](docs/codexswitch-commander.svg)
 
@@ -29,7 +28,6 @@ It is built for these providers:
 | --- | --- |
 | OpenAI | Native Codex auth, saved account switching and rotated token sync |
 | Azure OpenAI | Direct Codex Responses v1 access for `gpt-5.6-sol` |
-| Microsoft Foundry | Direct Codex Responses v1 access to your own Foundry deployments with a vault-backed API key |
 | OpenCode Go | Own API-key store, unified Responses-compatible proxy and model catalog |
 | OpenRouter | Compatibility proxy routing for OpenRouter models through Codex |
 
@@ -38,7 +36,6 @@ It is built for these providers:
 - Commander-style TUI with Providers, Models and Reasoning panes
 - OpenAI multi-account management without losing rotated refresh tokens
 - Azure OpenAI selection for a single configured `gpt-5.6-sol` deployment
-- Microsoft Foundry selection for the deployments you configure
 - OpenRouter and OpenCode Go API-key flows that never write keys to `config.toml`
 - Persistent provider/model defaults with on-demand proxy startup during activation and launch
 - One statically linked Go compatibility proxy for OpenCode Go and OpenRouter
@@ -74,8 +71,7 @@ installs Textual, builds a stripped static `codex-provider-proxy` binary, links
 commands into `/usr/local/bin`, and removes obsolete proxy systemd units. On
 both Linux and Windows, Commander checks proxy health
 when the TUI opens and starts the unified proxy only when a compatibility-backed
-Codex session is launched. Direct OpenAI, Azure and Microsoft Foundry
-sessions do not start it. Once started, it remains active after
+Codex session is launched. Direct OpenAI and Azure sessions do not start it. Once started, it remains active after
 the terminal closes but does not start automatically after a reboot.
 On an existing
 git checkout, re-running `./install.sh` fetches without modifying tags and
@@ -178,7 +174,7 @@ splash appears once per installed version and remains available from Help.
 codexswitch                         # show help
 codexswitch tui                     # start Commander TUI
 codexswitch use PROVIDER MODEL [REASONING]
-codexswitch auth [openai|azure|foundry|opencode-go|openrouter]
+codexswitch auth [openai|azure|opencode-go|openrouter]
 codexswitch account add             # OpenAI device sign-in
 codexswitch account save [EMAIL]
 codexswitch account use user@example.com
@@ -207,9 +203,7 @@ codexswitch tui
 codexswitch account add
 codexswitch auth openrouter
 codexswitch auth azure
-codexswitch auth foundry
 codexswitch use azure gpt-5.6-sol low
-codexswitch use foundry my-deployment medium
 codexswitch use openai gpt-5.5
 codexswitch use opencode-go glm-5.2 high
 codexswitch use opencode-go minimax-m3 thinking
@@ -220,14 +214,10 @@ Codex connects directly to Azure OpenAI Responses v1. A command-backed auth
 helper reads the Azure key from the protected vault, and a local fixed model
 catalog avoids an incompatible Azure `/models` refresh.
 
-Microsoft Foundry works the same way: Codex connects directly to the resource's
-`/openai/v1` Responses endpoint, a command-backed helper reads the API key from
-the vault, and a local catalog lists the deployment names you configured.
-
 OpenCode Go and OpenRouter share one loopback Go process on port `14555`. It
 exposes OpenAI Responses routes, translates them to chat completions, streams
 the events back and reads vault-backed provider credentials through a narrow
-local helper. Native OpenAI, Azure and Foundry bypass it entirely. Dispatch is
+local helper. Native OpenAI and Azure bypass it entirely. Dispatch is
 never inferred from model names. Commander shows one compact health indicator
 and starts the unified proxy when a proxy-backed selection is activated and
 again verifies it immediately before launch. This also keeps a subsequent
@@ -246,7 +236,6 @@ out of the repository.
 | Actieve OpenAI login | `~/.codex/auth.json` | `codex login` blijft eigenaar van de actieve login |
 | Opgeslagen OpenAI accounts | Gedeelde versleutelde vault | CodexSwitch haalt accounts bij ieder gebruik opnieuw uit Object Storage |
 | Azure OpenAI credentials | Gedeelde versleutelde vault | Endpoint en API-key blijven uit `config.toml` en lokale caches |
-| Microsoft Foundry credentials | Gedeelde versleutelde vault | Endpoint, API-key en deployments blijven uit `config.toml` en lokale caches |
 | OpenCode Go API key | Gedeelde versleutelde vault | De token helper doet een verse remote vault-read |
 | OpenRouter API key | Gedeelde versleutelde vault | De credential helper doet voor de Go-proxy een verse remote vault-read |
 
@@ -304,20 +293,16 @@ OpenAI account add uses Codex device authentication:
 codexswitch account add
 ```
 
-Azure, Foundry, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
+Azure, OpenRouter and OpenCode Go auth read API keys without terminal echo, or
 through a paste/renew popup in the TUI. Azure asks only for the resource URL
-and API key and normalizes the URL to `/openai/v1`. Foundry accepts a resource
-name or base URL, an API key and the comma-separated names of the deployments
-that support the Responses API, and normalizes the URL to `/openai/v1`. Azure
-and Foundry use installed token helpers for direct Codex starts, while
-proxy-backed routes read their keys from the protected vault. Provider, model
-and reasoning remain selected, while Commander ensures the required proxy is
-running immediately before Codex starts. No API key is stored in
-`~/.codex/config.toml`.
+and API key and normalizes the URL to `/openai/v1`. Azure and OpenCode Go use
+installed token helpers for direct Codex starts, while proxy-backed routes read
+their keys from the protected vault. Provider, model and reasoning remain
+selected, while Commander ensures the required proxy is running immediately
+before Codex starts. No API key is stored in `~/.codex/config.toml`.
 
 ```bash
 codexswitch auth azure
-codexswitch auth foundry
 codexswitch auth openrouter
 codexswitch auth opencode-go
 ```

@@ -197,7 +197,7 @@ fi
 
 sudo install -d -m 755 /usr/local/bin
 sudo install -m 755 "$PROXY_BUILD" /usr/local/bin/codex-provider-proxy
-for command in codexswitch codexswitch-azure-token codexswitch-foundry-token codexswitch-provider-credential opencode-go-token; do
+for command in codexswitch codexswitch-azure-token codexswitch-provider-credential opencode-go-token; do
   sudo ln -sfn "$PROJECT_ROOT/bin/$command" "/usr/local/bin/$command"
 done
 
